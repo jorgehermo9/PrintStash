@@ -8,12 +8,11 @@ than create a second model.
 
 from __future__ import annotations
 
-import asyncio
 import io
+import json
 import math
 import struct
 import zipfile
-from datetime import timedelta
 
 import numpy as np
 import pytest
@@ -22,9 +21,10 @@ from PIL import Image
 from sqlmodel import select
 
 from app.core.config import _overlay, settings
-from app.core.time import utcnow
-from app.db.models import BackgroundJob, InboxItem, InboxItemState, User
-from app.runtime.jobs import registry
+from app.db.models import ArtifactDerivative
+from app.schemas.orca import OrcaNativeContext
+from tests.e2e._jobs import settle
+from tests.factories.geometry import three_mf
 from tests.fixtures.three_mf_projects import build_3d_builder_component_project
 from tests.paths import FIXTURES_DIR
 
@@ -62,14 +62,28 @@ async def _upload(api, headers, *, model_name: str) -> dict:
 
 
 async def _await_job(api, headers, job_id: str) -> dict:
-    for _ in range(50):
-        r = await api.get(f"/api/v1/ingest/jobs/{job_id}", headers=headers)
-        assert r.status_code == 200, r.text
-        job = r.json()
-        if job["state"] in ("completed", "failed", "duplicate"):
-            return job
-        await asyncio.sleep(0.05)
-    raise AssertionError(f"job {job_id} did not finish: {job}")
+    settle()
+    r = await api.get(f"/api/v1/jobs/{job_id}", headers=headers)
+    assert r.status_code == 200, r.text
+    return r.json()
+
+
+async def _thumbnail_derivative(api, headers, file_id: int) -> dict:
+    """The thumbnail's derivative row as the public API reports it."""
+    listed = await api.get(f"/api/v1/files/{file_id}/derivatives", headers=headers)
+    assert listed.status_code == 200, listed.text
+    return next(row for row in listed.json() if row["kind"] == "thumbnail")
+
+
+def _thumbnail_output(session, file_id: int) -> dict:
+    """How the published thumbnail was made: its strategy and completeness."""
+    row = session.exec(
+        select(ArtifactDerivative).where(
+            ArtifactDerivative.file_id == file_id,
+            ArtifactDerivative.kind == "thumbnail",
+        )
+    ).one()
+    return json.loads(row.output_json)
 
 
 def _microfaceted_stl(columns: int = 420, rows: int = 420) -> bytes:
@@ -125,6 +139,72 @@ def _microfaceted_stl(columns: int = 420, rows: int = 420) -> bytes:
                 )
             )
     return output.getvalue()
+
+
+class TestOrcaLineage:
+    @pytest.mark.critical
+    @pytest.mark.asyncio
+    async def test_a_slice_becomes_a_revision_of_its_native_source(
+        self, api, tmp_path
+    ) -> None:
+        headers = await _setup_and_login(api, tmp_path)
+        source = await api.post(
+            "/api/v1/ingest/model",
+            files={
+                "file": (
+                    "3dbenchy.stl",
+                    _microfaceted_stl(columns=2, rows=2),
+                    "application/sla",
+                )
+            },
+            data={"model_name": "3DBenchy"},
+            headers=headers,
+        )
+        assert source.status_code == 202, source.text
+        source_job = await _await_job(api, headers, source.json()["job_id"])
+        context = {
+            "version": 1,
+            "classification": "single_object",
+            "source": {
+                "filename": "3dbenchy.stl",
+                "object_count": 1,
+                "instance_count": 1,
+                "object_labels": [
+                    {
+                        "name": "3dbenchy.stl",
+                        "object_id": "0",
+                        "copy_index": 0,
+                    }
+                ],
+            },
+            "slicer": {"name": "OrcaSlicer", "version": "2.3.2"},
+            "printer": {},
+            "filaments": [],
+            "process": {},
+            "print_stats": {},
+            "field_sources": {"source.filename": "gcode_object_label"},
+        }
+
+        sliced = await api.post(
+            "/api/v1/ingest/orca",
+            files={"file": (FIXTURE.name, FIXTURE.read_bytes(), "text/plain")},
+            data={"native_context": json.dumps(context)},
+            headers=headers,
+        )
+        assert sliced.status_code == 202, sliced.text
+        slice_job = await _await_job(api, headers, sliced.json()["job_id"])
+        detail = await api.get(
+            f"/api/v1/models/{source_job['model_id']}", headers=headers
+        )
+        revision = next(
+            row for row in detail.json()["files"] if row["id"] == slice_job["file_id"]
+        )
+
+        assert slice_job["model_id"] == source_job["model_id"]
+        assert revision["revision_status"] == "needs_test"
+        assert revision["metadata"][
+            "native_context"
+        ] == OrcaNativeContext.model_validate(context).model_dump(mode="json")
 
 
 def _largest_component_fraction(mask: np.ndarray) -> float:
@@ -211,12 +291,15 @@ class TestMetadata:
         assert uploaded.status_code == 202, uploaded.text
         job = await _await_job(api, headers, uploaded.json()["job_id"])
         assert job["state"] == "completed", job
-        assert job["thumbnail_status"] == "skipped"
-        assert job["thumbnail_reason"] == "unsupported_preview"
         file_id = job["file_id"]
-        downloaded = await api.get(
-            f"/api/v1/files/{file_id}/download", headers=headers
+        # No preview renderer exists for drawings, so no derivative is owed:
+        # nothing shows as pending, and nothing ever fails.
+        derivatives = await api.get(
+            f"/api/v1/files/{file_id}/derivatives", headers=headers
         )
+        assert derivatives.status_code == 200, derivatives.text
+        assert derivatives.json() == []
+        downloaded = await api.get(f"/api/v1/files/{file_id}/download", headers=headers)
         assert downloaded.status_code == 200, downloaded.text
         assert downloaded.content == original
 
@@ -228,9 +311,11 @@ class TestMetadata:
         )
         assert repeated.status_code == 202, repeated.text
         duplicate_job = await _await_job(api, headers, repeated.json()["job_id"])
-        assert duplicate_job["state"] in ("duplicate", "completed"), duplicate_job
+        assert duplicate_job["state"] == "completed", duplicate_job
         models = (await api.get("/api/v1/models", headers=headers)).json()
-        assert len([model for model in models if model["name"].startswith("Drawing")]) == 1
+        assert (
+            len([model for model in models if model["name"].startswith("Drawing")]) == 1
+        )
 
     @pytest.mark.critical
     @pytest.mark.asyncio
@@ -281,25 +366,6 @@ class TestMetadata:
         monkeypatch.setitem(_overlay, "mesh_max_render_triangles", 1_000)
         stl = _microfaceted_stl()
         headers = await _setup_and_login(api, tmp_path)
-        owner = e2e_db.exec(select(User).where(User.username == "owner")).one()
-        expired_job = BackgroundJob(
-            id="issue-67-expired-inbox-job",
-            owner_user_id=owner.id,
-            state="completed",
-            status_json='{"state":"completed"}',
-            finished_at=utcnow() - timedelta(hours=2),
-        )
-        e2e_db.add(expired_job)
-        e2e_db.flush()
-        e2e_db.add(
-            InboxItem(
-                owner_user_id=owner.id,
-                state=InboxItemState.COMPLETED,
-                background_job_id=expired_job.id,
-            )
-        )
-        e2e_db.commit()
-        monkeypatch.setattr(registry, "_last_persisted_prune_at", float("-inf"))
 
         uploaded = await api.post(
             "/api/v1/ingest/model",
@@ -311,8 +377,13 @@ class TestMetadata:
         job = await _await_job(api, headers, uploaded.json()["job_id"])
 
         assert job["state"] == "completed", job
-        assert job["thumbnail_status"] == "fallback_generated", job
         file_id = job["file_id"]
+        assert (await _thumbnail_derivative(api, headers, file_id))["state"] == "ready"
+        # Over the render cap, the thumbnail is a bounded fallback, not a full render.
+        assert _thumbnail_output(e2e_db, file_id)["strategy"] in {
+            "streaming",
+            "fallback",
+        }
         thumbnail = await api.get(f"/api/v1/files/{file_id}/thumbnail", headers=headers)
         assert thumbnail.status_code == 200, thumbnail.text
         assert thumbnail.headers["content-type"] == "image/webp"
@@ -345,7 +416,9 @@ class TestMetadata:
         job = await _await_job(api, headers, uploaded.json()["job_id"])
 
         assert job["state"] == "completed", job
-        assert job["thumbnail_status"] == "generated", job
+        derivative = await _thumbnail_derivative(api, headers, job["file_id"])
+        assert derivative["state"] == "ready", derivative
+        assert _thumbnail_output(e2e_db, job["file_id"])["strategy"] == "embedded"
         thumbnail = await api.get(
             f"/api/v1/files/{job['file_id']}/thumbnail", headers=headers
         )
@@ -359,6 +432,48 @@ class TestMetadata:
         assert tuple(pixels[0, 0]) == (0, 0, 0, 0)
         assert tuple(pixels[image.height // 2, image.width // 2, :3]) == color
         assert pixels[:, :, 3].mean() > 100
+
+    @pytest.mark.asyncio
+    async def test_a_3mf_that_repeats_one_part_beyond_the_budget_keeps_its_preview(
+        self, api, tmp_path, e2e_db, monkeypatch
+    ):
+        """#259: a small project that expands past the budget cannot take the API down.
+
+        400 placements of a 4-face part are ~25 KiB of XML, which the size
+        estimate prices far under the 1,000-face budget. The derivative runs in
+        a disposable worker, so whatever the loader does with it, the upload
+        completes, the slicer's own preview is published, and the API goes on
+        answering.
+        """
+        monkeypatch.setitem(_overlay, "mesh_max_render_triangles", 1000)
+        monkeypatch.setitem(_overlay, "mesh_memory_budget_fraction", 0)
+        color = (220, 40, 120)
+        preview = io.BytesIO()
+        Image.new("RGB", (32, 24), color).save(preview, format="PNG")
+        placements = tuple((1, f"1 0 0 0 1 0 0 0 1 {i * 5} 0 0") for i in range(400))
+        archive = three_mf(
+            build=placements, extras={"Metadata/thumbnail.png": preview.getvalue()}
+        )
+        headers = await _setup_and_login(api, tmp_path)
+
+        uploaded = await api.post(
+            "/api/v1/ingest/model",
+            files={"file": ("plate.3mf", archive, "model/3mf")},
+            data={"model_name": "Repeated Part"},
+            headers=headers,
+        )
+        assert uploaded.status_code == 202, uploaded.text
+        job = await _await_job(api, headers, uploaded.json()["job_id"])
+
+        assert job["state"] == "completed", job
+        derivative = await _thumbnail_derivative(api, headers, job["file_id"])
+        assert derivative["state"] == "ready", derivative
+        assert _thumbnail_output(e2e_db, job["file_id"])["strategy"] == "embedded"
+        thumbnail = await api.get(
+            f"/api/v1/files/{job['file_id']}/thumbnail", headers=headers
+        )
+        assert thumbnail.status_code == 200, thumbnail.text
+        assert (await api.get("/api/v1/health")).status_code == 200
 
     @pytest.mark.asyncio
     async def test_a_3mf_whose_parts_are_placed_by_transform_previews_correctly(
@@ -402,4 +517,163 @@ class TestMetadata:
             mesh.bounds,
             np.asarray([[110.0, 220.0, 330.0], [112.0, 223.0, 334.0]]),
             atol=1e-5,
+        )
+
+
+class TestHardlinklessStaging:
+    @pytest.mark.asyncio
+    async def test_uploads_with_visible_staging_degradation(
+        self, api, tmp_path, monkeypatch
+    ):
+        import errno
+        import os
+
+        from tests.factories import content
+
+        def unsupported(*args, **kwargs):
+            raise OSError(errno.EPERM, "no hard links")
+
+        monkeypatch.setattr(os, "link", unsupported)
+        headers = await _setup_and_login(api, tmp_path)
+        health = await api.get("/api/v1/health/details", headers=headers)
+        storage = health.json()["components"]["storage"]
+        assert storage["diagnostics"]["staging"]["hardlink"] is False
+        assert storage["diagnostics"]["staging"]["exclusive_create"] is True
+        assert any(
+            "staging" in warning and "copy" in warning
+            for warning in storage["warnings"]
+        )
+        payload = content.ascii_stl()
+        uploaded = await api.post(
+            "/api/v1/ingest/model",
+            headers=headers,
+            files={"file": ("unraid.stl", payload, "model/stl")},
+        )
+        assert uploaded.status_code == 202, uploaded.text
+        job = await _await_job(api, headers, uploaded.json()["job_id"])
+        assert job["state"] == "completed", job
+        downloaded = await api.get(
+            f"/api/v1/files/{job['file_id']}/download", headers=headers
+        )
+        assert downloaded.status_code == 200, downloaded.text
+        assert downloaded.content == payload
+
+
+class TestMeshFailureRecovery:
+    @pytest.mark.asyncio
+    async def test_unchanged_terminal_failure_survives_reconciler_nudges(
+        self, api, tmp_path, e2e_db, monkeypatch
+    ):
+        from app.db.models import DerivativeKind
+
+        monkeypatch.setitem(_overlay, "mesh_max_render_triangles", 100)
+        monkeypatch.setitem(_overlay, "mesh_memory_budget_fraction", 0)
+        data = three_mf(build=tuple((1, None) for _ in range(40)))
+        headers = await _setup_and_login(api, tmp_path)
+        uploaded = await api.post(
+            "/api/v1/ingest/model",
+            files={"file": ("refused.3mf", data, "model/3mf")},
+            data={"model_name": "Refused geometry"},
+            headers=headers,
+        )
+        job = await _await_job(api, headers, uploaded.json()["job_id"])
+        file_id = job["file_id"]
+        before = e2e_db.exec(
+            select(ArtifactDerivative).where(
+                ArtifactDerivative.file_id == file_id,
+                ArtifactDerivative.kind == DerivativeKind.METADATA,
+            )
+        ).one()
+        updated, attempts = before.updated_at, before.attempts
+        assert before.state == "failed"
+        for _ in range(3):
+            response = await api.post(
+                "/api/v1/admin/work/derivatives/metadata/regenerate",
+                headers=headers,
+                json={"mode": "missing"},
+            )
+            assert response.status_code == 202
+            settle()
+        e2e_db.expire_all()
+        after = e2e_db.get(ArtifactDerivative, before.id)
+        assert after.updated_at == updated
+        assert after.attempts == attempts
+
+    @pytest.mark.asyncio
+    async def test_original_download_survives_geometry_failure(self, api, tmp_path):
+        import hashlib
+
+        data = b"invalid 3mf package"
+        headers = await _setup_and_login(api, tmp_path)
+        uploaded = await api.post(
+            "/api/v1/ingest/model",
+            files={"file": ("broken.3mf", data, "model/3mf")},
+            data={"model_name": "Broken package"},
+            headers=headers,
+        )
+        job = await _await_job(api, headers, uploaded.json()["job_id"])
+        derivatives = (
+            await api.get(
+                f"/api/v1/files/{job['file_id']}/derivatives", headers=headers
+            )
+        ).json()
+        assert (
+            next(row for row in derivatives if row["kind"] == "metadata")["state"]
+            == "failed"
+        )
+        download = await api.get(
+            f"/api/v1/files/{job['file_id']}/download", headers=headers
+        )
+        assert (
+            hashlib.sha256(download.content).digest() == hashlib.sha256(data).digest()
+        )
+
+    @pytest.mark.asyncio
+    async def test_signed_slicer_download_survives_geometry_failure(
+        self, api, tmp_path
+    ):
+        data = b"invalid 3mf for slicer"
+        headers = await _setup_and_login(api, tmp_path)
+        uploaded = await api.post(
+            "/api/v1/ingest/model",
+            files={"file": ("broken.3mf", data, "model/3mf")},
+            data={"model_name": "Slicer handoff"},
+            headers=headers,
+        )
+        job = await _await_job(api, headers, uploaded.json()["job_id"])
+        url = (
+            await api.get(f"/api/v1/files/{job['file_id']}/slicer-url", headers=headers)
+        ).json()["url"]
+        download = await api.get(url)
+        assert download.status_code == 200
+        assert download.content == data
+
+    @pytest.mark.asyncio
+    async def test_healthy_artifact_finishes_after_a_bad_file(self, api, tmp_path):
+        from tests.factories.content import binary_stl
+
+        headers = await _setup_and_login(api, tmp_path)
+        uploaded = await api.post(
+            "/api/v1/ingest/model",
+            files={"file": ("broken.3mf", b"invalid package", "model/3mf")},
+            data={"model_name": "Broken first"},
+            headers=headers,
+        )
+        await _await_job(api, headers, uploaded.json()["job_id"])
+        healthy = await api.post(
+            "/api/v1/ingest/model",
+            files={"file": ("healthy.stl", binary_stl(), "model/stl")},
+            data={"model_name": "Healthy next"},
+            headers=headers,
+        )
+        job = await _await_job(api, headers, healthy.json()["job_id"])
+        assert job["state"] == "completed"
+        derivatives = (
+            await api.get(
+                f"/api/v1/files/{job['file_id']}/derivatives", headers=headers
+            )
+        ).json()
+        assert (
+            next(row for row in derivatives if row["kind"] == "metadata")["state"]
+            == "ready"
         )

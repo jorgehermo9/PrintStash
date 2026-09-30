@@ -1,6 +1,7 @@
 import { emitUnauthorized, getStoredToken } from "@/lib/auth";
 import { ApiError } from "@/lib/errors";
 import { queryClient, invalidateQueriesForPath } from "@/lib/query-client";
+import type { DerivativeState } from "@/types";
 
 const API_BASE = import.meta.env.VITE_API_URL || "";
 const WS_BASE = import.meta.env.VITE_WS_URL || "";
@@ -64,6 +65,36 @@ export async function getAuthenticatedText(path: string, signal?: AbortSignal): 
   const res = await fetchArtifact(path, signal);
   if (!res.ok) throw await parseError(res);
   return res.text();
+}
+
+/**
+ * A resource served from a derivative: its text once derived, or the
+ * derivative's state while it is not (the server answers 202, never a body
+ * that could be mistaken for the resource).
+ */
+export type DerivedText = { ready: true; text: string } | { ready: false; state: DerivativeState };
+
+const DERIVATIVE_STATES: readonly DerivativeState[] = [
+  "pending",
+  "queued",
+  "running",
+  "ready",
+  "skipped",
+  "failed",
+  "cancelled",
+];
+
+export async function getDerivedText(path: string, signal?: AbortSignal): Promise<DerivedText> {
+  const res = await fetchArtifact(path, signal);
+  if (!res.ok) throw await parseError(res);
+  if (res.status === 202) {
+    // The 202 body is `{"state": "<derivative state>"}`, written by the server.
+    const body: { state?: unknown } = await res.json();
+    const state = DERIVATIVE_STATES.find((known) => known === body.state);
+    if (state === undefined) throw new Error("derivative_state_invalid");
+    return { ready: false, state };
+  }
+  return { ready: true, text: await res.text() };
 }
 
 const SAFE_DOWNLOAD_FALLBACK = "download";
@@ -323,15 +354,70 @@ export async function sendJson<T>(
   return value;
 }
 
-export async function sendForm<T>(path: string, formData: FormData): Promise<T> {
+export async function sendForm<T>(
+  path: string,
+  formData: FormData,
+  signal?: AbortSignal,
+): Promise<T> {
   const res = await fetch(getUrl(path), {
     method: "POST",
     headers: authHeaders(),
     body: formData,
+    signal,
   });
   const value = await handleResponse<T>(res);
   invalidateApiCache(path);
   return value;
+}
+
+/** Multipart transfer with browser upload progress, used for large ZIP archives. */
+export function sendFormWithProgress<T>(
+  path: string,
+  formData: FormData,
+  signal: AbortSignal,
+  onProgress: (loaded: number, total: number) => void,
+): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    if (signal.aborted) {
+      reject(new DOMException("Upload cancelled", "AbortError"));
+      return;
+    }
+    const request = new XMLHttpRequest();
+    let settled = false;
+    const finish = () => {
+      settled = true;
+      signal.removeEventListener("abort", abort);
+    };
+    const abort = () => request.abort();
+    request.open("POST", getUrl(path));
+    for (const [name, value] of Object.entries(authHeaders()))
+      request.setRequestHeader(name, value);
+    request.upload.onprogress = (event) => {
+      if (event.lengthComputable && event.total > 0 && !settled)
+        onProgress(event.loaded, event.total);
+    };
+    request.onload = () => {
+      if (settled) return;
+      finish();
+      const response = new Response(request.responseText, { status: request.status });
+      void handleResponse<T>(response).then((value) => {
+        invalidateApiCache(path);
+        resolve(value);
+      }, reject);
+    };
+    request.onerror = () => {
+      if (settled) return;
+      finish();
+      reject(new TypeError("Failed to fetch"));
+    };
+    request.onabort = () => {
+      if (settled) return;
+      finish();
+      reject(new DOMException("Upload cancelled", "AbortError"));
+    };
+    signal.addEventListener("abort", abort, { once: true });
+    request.send(formData);
+  });
 }
 
 export async function sendAction(path: string, method: "POST" | "DELETE"): Promise<void> {

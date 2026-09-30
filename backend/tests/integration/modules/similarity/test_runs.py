@@ -7,7 +7,6 @@ import pytest
 from sqlmodel import Session, select
 
 from app.core.errors import OperationError
-from app.core.time import utcnow
 from app.db.models import CollectionRole, FileType, SimilarityRun
 from app.modules.similarity import configuration, runs
 
@@ -39,36 +38,42 @@ class TestRuns:
 
     def test_resumes_committed_checkpoint(self, db_session, administrator):
         started = runs.start(db_session, administrator)
-        run, token = runs.claim(db_session)
+        run = runs.take(db_session, started.id, "job:1")
         assert runs.checkpoint(
-            db_session, run, token, progress={"file_id": 42}, counters={"ready": 3}
+            db_session, run, "job:1", progress={"file_id": 42}, counters={"ready": 3}
         )
         with Session(db_session.get_bind()) as restarted:
-            resumed, successor = runs.claim(restarted)
-            assert resumed.id == started.id
-            assert successor != token
+            resumed = runs.take(restarted, started.id, "job:2")
             assert json.loads(resumed.checkpoint_json) == {"file_id": 42}
             assert json.loads(resumed.counters_json) == {"ready": 3}
 
-    def test_reclaims_expired_worker(self, db_session, administrator):
-        runs.start(db_session, administrator)
-        run, old = runs.claim(db_session)
-        assert runs.claim(db_session) is None
-        run.lease_expires_at = utcnow() - timedelta(seconds=1)
-        db_session.add(run)
-        db_session.commit()
+    def test_a_superseded_attempt_can_no_longer_write(self, db_session, administrator):
+        # An attempt the engine replaced (its process looked dead) may still be
+        # alive; the next attempt takes the fence, and the old one's writes fail.
+        started = runs.start(db_session, administrator)
+        stale = runs.take(db_session, started.id, "job:1")
         with Session(db_session.get_bind()) as second:
-            resumed, token = runs.claim(second)
-            assert token != old
-            assert not runs.checkpoint(db_session, run, old, state="completed")
-            assert runs.checkpoint(second, resumed, token, state="completed")
-        db_session.refresh(run)
-        assert run.state == "completed"
-        assert run.active_scope_key is None
+            current = runs.take(second, started.id, "job:2")
+            assert not runs.checkpoint(db_session, stale, "job:1", state="completed")
+            assert runs.checkpoint(second, current, "job:2", state="completed")
+        db_session.refresh(stale)
+        assert (stale.state, stale.active_scope_key, stale.writer) == (
+            "completed",
+            None,
+            None,
+        )
+
+    def test_a_finished_run_cannot_be_taken(self, db_session, administrator):
+        started = runs.start(db_session, administrator)
+        run = runs.take(db_session, started.id, "job:1")
+        runs.checkpoint(db_session, run, "job:1", state="completed")
+
+        assert runs.take(db_session, started.id, "job:2") is None
 
     def test_cancel_wins_over_inflight_completion(self, db_session, administrator):
         run = runs.start(db_session, administrator)
-        claimed, token = runs.claim(db_session)
+        token = "job:1"
+        claimed = runs.take(db_session, run.id, token)
         with Session(db_session.get_bind()) as second:
             runs.cancel(second, administrator, run.id)
         assert runs.checkpoint(
@@ -138,8 +143,8 @@ class TestRuns:
         configuration.update_settings(db_session, administrator, {"schedule_hours": 24})
         first = runs.schedule_due(db_session)
         assert first.trigger == "schedule"
-        run, token = runs.claim(db_session)
-        runs.checkpoint(db_session, run, token, state="completed")
+        run = runs.take(db_session, first.id, "job:1")
+        runs.checkpoint(db_session, run, "job:1", state="completed")
         with Session(db_session.get_bind()) as restarted:
             assert runs.schedule_due(restarted) is None
         assert len(db_session.exec(select(SimilarityRun)).all()) == 1

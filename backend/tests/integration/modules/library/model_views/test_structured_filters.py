@@ -483,6 +483,43 @@ class TestFacets:
             {"value": "no", "count": 1},
         ]
 
+    def test_an_underived_model_adds_no_metadata_facet(
+        self, db_session: Session
+    ) -> None:
+        # Its metadata has not been derived yet: it has no material, rather
+        # than an empty one counted as a value.
+        user = build_user(db_session, "facet-pending", superuser=True)
+        build_file(db_session, build_model(db_session, "Pending"), filename="p.gcode")
+
+        result = models_facets.facets(db_session, user, ModelFilters())
+
+        assert result.material_type == []
+        assert result.slicer_name == []
+
+    def test_a_material_filter_never_matches_an_underived_model(
+        self, db_session: Session
+    ) -> None:
+        user = build_user(db_session, "filter-pending", superuser=True)
+        pending = build_model(db_session, "Pending")
+        build_file(db_session, pending, filename="p.gcode", file_type=FileType.GCODE)
+        known = build_model(db_session, "Known")
+        build_file(
+            db_session,
+            known,
+            filename="k.gcode",
+            file_type=FileType.GCODE,
+            metadata={"material_type": "PLA"},
+        )
+
+        result = models_facets.facets(
+            db_session, user, ModelFilters(material_type=["PLA"])
+        )
+
+        # Only the known model is inside the filter the counts describe.
+        assert [item.model_dump() for item in result.file_type] == [
+            {"value": "gcode", "count": 1}
+        ]
+
 
 class TestPrintStatistics:
     def test_print_statistics_invalid_period_defaults_to_30d(

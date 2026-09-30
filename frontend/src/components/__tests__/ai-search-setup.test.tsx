@@ -12,7 +12,7 @@ import {
   searchSettings,
   searchStatus,
 } from "@/test-support/search";
-import { anIngestJob } from "@/test-support/factories";
+import { aJob } from "@/test-support/factories";
 const enabled = searchSettings({ enabled: true, local_models_enabled: true });
 function setup(options: RenderAppOptions = {}) {
   return renderApp(<AiSearchSettings />, {
@@ -21,7 +21,7 @@ function setup(options: RenderAppOptions = {}) {
       "GET /api/v1/config/ai-search": json(searchConfiguration()),
       "GET /api/v1/inference/models": json([anInferenceModel()]),
       "GET /api/v1/config/ai-search/generations": json([]),
-      "GET /api/v1/ingest/jobs": json([]),
+      "GET /api/v1/jobs": json([]),
       "GET /api/v1/search/status": json(searchStatus({ enabled: true, semantic_ready: true })),
       ...options.routes,
     },
@@ -34,6 +34,7 @@ describe("AiSearchSetup", () => {
     expect(screen.getByRole("heading", { name: "Where should AI Search run?" })).toBeVisible();
     expect(screen.getByRole("button", { name: "Use this machine" })).toBeVisible();
     expect(screen.getByRole("button", { name: "Connect another server" })).toBeVisible();
+    expect(screen.getByText(/Local AI uses this machine’s CPU/)).toBeVisible();
     expect(screen.queryByRole("combobox")).not.toBeInTheDocument();
     expect(app.requestsWithMethod("PUT")).toHaveLength(0);
     expect(app.requestsWithMethod("POST")).toHaveLength(0);
@@ -65,8 +66,8 @@ describe("AiSearchSetup", () => {
     const button = await screen.findByRole("button", { name: "Allow download and continue" });
     expect(app.requestsWithMethod("POST")).toHaveLength(0);
     app.route({
-      "GET /api/v1/ingest/jobs": json([
-        anIngestJob({ job_id: "download-1", kind: "model_download", state: "running" }),
+      "GET /api/v1/jobs": json([
+        aJob({ job_id: "download-1", kind: "inference.model_download", state: "running" }),
       ]),
     });
     await userEvent.click(button);
@@ -207,7 +208,82 @@ describe("AiSearchSetup", () => {
       await screen.findByRole("progressbar", { name: "Library preparation progress" }),
     ).toHaveAttribute("value", "4");
     expect(screen.getByText("4 of 10 searchable entries prepared")).toBeVisible();
+    expect(screen.getByText("Indexing passages")).toBeVisible();
     expect(screen.queryByRole("button", { name: "Prepare my library" })).not.toBeInTheDocument();
+  });
+  it("shows reconciliation without a misleading vector count", async () => {
+    setup({
+      routes: {
+        "GET /api/v1/config/ai-search/generations": json([
+          aSearchGeneration({
+            state: "building",
+            phase: "reconcile",
+            eligible: 124,
+            indexed: 0,
+          }),
+        ]),
+      },
+    });
+    expect(await screen.findByText("Checking library content")).toBeVisible();
+    expect(screen.queryByRole("progressbar", { name: "Library preparation progress" })).toBeNull();
+    expect(screen.queryByText("0 of 124 searchable entries prepared")).toBeNull();
+  });
+  it("shows a measured estimate during indexing", async () => {
+    setup({
+      routes: {
+        "GET /api/v1/config/ai-search/generations": json([
+          aSearchGeneration({
+            state: "building",
+            phase: "backfill",
+            eligible: 124,
+            indexed: 4,
+            eta_seconds: 90,
+          }),
+        ]),
+      },
+    });
+    expect(await screen.findByText(/Estimated time remaining:/)).toBeVisible();
+  });
+  it("explains a deferred embedding retry", async () => {
+    setup({
+      routes: {
+        "GET /api/v1/config/ai-search/generations": json([
+          aSearchGeneration({
+            state: "building",
+            phase: "backfill",
+            error_code: "inference_network_unavailable",
+          }),
+        ]),
+      },
+    });
+    expect(await screen.findByText(/PrintStash will retry it automatically/)).toBeVisible();
+    expect(screen.queryByRole("button", { name: "Retry preparation" })).toBeNull();
+  });
+  it("offers a retry for failed verification", async () => {
+    const failed = aSearchGeneration({
+      state: "building",
+      phase: "verify_failed",
+      error_code: "embedding_dimension_mismatch",
+    });
+    const app = setup({
+      routes: {
+        "GET /api/v1/config/ai-search/generations": json([failed]),
+        "POST /api/v1/config/ai-search/generations/1/retry": json({
+          ...failed,
+          phase: "backfill",
+          error_code: null,
+        }),
+      },
+    });
+    expect(
+      await screen.findByRole("heading", { name: "Preparation needs attention" }),
+    ).toBeVisible();
+    expect(screen.getByRole("alert")).toHaveTextContent("embedding_dimension_mismatch");
+    expect(
+      screen.queryByText(/Keyword search keeps working while preparation finishes/),
+    ).toBeNull();
+    await userEvent.click(screen.getByRole("button", { name: "Retry preparation" }));
+    expect(app.requestsWithMethod("POST")[0].url).toContain("/generations/1/retry");
   });
   it("offers search when ready", async () => {
     setup({
@@ -323,8 +399,8 @@ describe("AiSearchSetup", () => {
     const app = setup({
       routes: {
         "GET /api/v1/config/ai-search": json(searchConfiguration({ settings: enabled })),
-        "GET /api/v1/ingest/jobs": json([
-          anIngestJob({ job_id: "download-1", kind: "model_download", state: "running" }),
+        "GET /api/v1/jobs": json([
+          aJob({ job_id: "download-1", kind: "inference.model_download", state: "running" }),
         ]),
         "POST /api/v1/inference/models/downloads/download-1/cancel": json({}, 200),
       },

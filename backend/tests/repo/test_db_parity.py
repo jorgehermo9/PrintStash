@@ -59,7 +59,9 @@ class TestTestDatabase:
 
         _truncate_all(engine)
 
-        assert not any(table.startswith(name) for table in inspect(engine).get_table_names())
+        assert not any(
+            table.startswith(name) for table in inspect(engine).get_table_names()
+        )
 
     @pytest.mark.parametrize("pragma", sorted(PRODUCTION_PRAGMAS))
     def test_matches_the_pragma_production_runs(

@@ -1,6 +1,10 @@
 "use client";
 
+import { StagedInputRecovery } from "@/components/staged-input-recovery";
+
 import { ApiError, getErrorMessage } from "@/lib/errors";
+import { formatBytes, formatDuration } from "@/lib/format";
+import { cancelArchiveTransfer, isArchiveTransferActive } from "@/lib/archive-upload";
 import { uiText } from "@/lib/locale";
 import { useUiLocale } from "@/lib/i18n";
 import {
@@ -12,11 +16,19 @@ import {
 } from "@/lib/artifact-upload";
 
 import { CheckCircle2, ChevronDown, Loader2, XCircle } from "lucide-react";
+import { Link } from "react-router-dom";
+import { useAuth } from "@/lib/auth-context";
 
 import type { TaskItem } from "@/lib/task-center";
-import { linkTaskToJob, taskTitle, taskDetail, updateTask } from "@/lib/task-center";
+import {
+  linkTaskToJob,
+  needsArchiveReview,
+  taskTitle,
+  taskDetail,
+  updateTask,
+} from "@/lib/task-center";
 import { knownUiText } from "@/lib/locale";
-import { Link } from "@/lib/link";
+import { requestArchiveReview } from "@/lib/archive-review-events";
 
 export function TaskList({
   tasks,
@@ -40,7 +52,10 @@ export function TaskList({
         <span className="font-mono text-2xs uppercase tracking-wider text-muted-foreground">
           {uiText("Tasks")}
         </span>
-        {tasks.some((task) => task.status === "completed" || task.status === "failed") && (
+        {tasks.some(
+          (task) =>
+            (task.status === "completed" || task.status === "failed") && !needsArchiveReview(task),
+        ) && (
           <button
             type="button"
             onClick={onClear}
@@ -71,6 +86,7 @@ export function TaskList({
 
 function TaskRow({ task }: { task: TaskItem }) {
   useUiLocale();
+  const { user } = useAuth();
   const active = (task.status === "pending" || task.status === "running") && !task.uploadPaused;
   return (
     <div className="px-4 py-3">
@@ -88,23 +104,81 @@ function TaskRow({ task }: { task: TaskItem }) {
           <div className="flex items-center justify-between gap-3">
             <p className="truncate text-sm font-medium text-foreground">{taskTitle(task)}</p>
             <span className="font-mono text-3xs uppercase tracking-wider text-muted-foreground">
-              {task.uploadPaused ? uiText("Paused") : knownUiText(task.status)}
+              {task.uploadPaused
+                ? uiText("Paused")
+                : needsArchiveReview(task)
+                  ? uiText("Ready")
+                  : knownUiText(task.status)}
             </span>
           </div>
-          {task.detail && (
+          {(task.detail || task.stage) && (
             <p className="mt-0.5 line-clamp-2 text-xs text-muted-foreground">{taskDetail(task)}</p>
           )}
-          {active && task.total == null && (
-            <p className="mt-1 text-xs text-muted-foreground">
-              {uiText("Discovering total… Safe to close this view.")}
-            </p>
+          {task.archiveUploading && task.archiveSizeBytes !== undefined && (
+            <div className="mt-1 space-y-0.5 text-xs text-muted-foreground">
+              <p>
+                {task.archiveTransferredBytes === undefined
+                  ? uiText("Uploading {size}. Keep this browser tab open.", {
+                      size: formatBytes(task.archiveSizeBytes),
+                    })
+                  : task.archiveTransferredBytes >= task.archiveSizeBytes
+                    ? uiText("Sent {total} from this browser (100%)", {
+                        total: formatBytes(task.archiveSizeBytes),
+                      })
+                    : uiText("Uploaded {sent} of {total} ({percent}%)", {
+                        sent: formatBytes(task.archiveTransferredBytes),
+                        total: formatBytes(task.archiveSizeBytes),
+                        percent: String(
+                          task.archiveSizeBytes > 0
+                            ? Math.min(
+                                100,
+                                Math.round(
+                                  (task.archiveTransferredBytes / task.archiveSizeBytes) * 100,
+                                ),
+                              )
+                            : 0,
+                        ),
+                      })}
+              </p>
+              {task.archiveSpeedBytesPerSecond !== undefined &&
+                task.archiveEtaSeconds !== undefined && (
+                  <p>
+                    {uiText("{speed}/s · about {time} remaining", {
+                      speed: formatBytes(task.archiveSpeedBytesPerSecond),
+                      time: formatDuration(Math.ceil(task.archiveEtaSeconds)),
+                    })}
+                  </p>
+                )}
+              <p>{uiText("Keep this browser tab open during upload.")}</p>
+            </div>
           )}
-          <div className="mt-2 h-1.5 overflow-hidden rounded bg-muted">
-            <div
-              className={`h-full w-full origin-left transition-transform duration-slow ease-linear ${task.status === "failed" ? "bg-destructive" : "bg-primary"}`}
-              style={{ transform: `scaleX(${Math.min(100, task.progress) / 100})` }}
-            />
-          </div>
+          {active &&
+            task.total == null &&
+            !task.archiveUploading &&
+            task.similarityRunId === undefined &&
+            task.jobKind !== "backups.create" &&
+            task.jobKind !== "backups.automatic" && (
+              <p className="mt-1 text-xs text-muted-foreground">
+                {uiText("Discovering total… Safe to close this view.")}
+              </p>
+            )}
+          {(task.similarityRunId === undefined || task.status === "completed") &&
+            task.jobKind !== "backups.create" &&
+            task.jobKind !== "backups.automatic" && (
+              <div
+                role="progressbar"
+                aria-label={uiText("Progress")}
+                aria-valuemin={0}
+                aria-valuemax={100}
+                aria-valuenow={task.progress}
+                className="mt-2 h-1.5 overflow-hidden rounded bg-muted"
+              >
+                <div
+                  className={`h-full w-full origin-left transition-transform duration-slow ease-linear ${task.status === "failed" ? "bg-destructive" : "bg-primary"}`}
+                  style={{ transform: `scaleX(${Math.min(100, task.progress) / 100})` }}
+                />
+              </div>
+            )}
           {!!task.failedItems?.length && (
             <details className="mt-2 text-xs text-muted-foreground">
               <summary className="flex cursor-pointer list-none items-center gap-1 font-medium text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
@@ -121,6 +195,13 @@ function TaskRow({ task }: { task: TaskItem }) {
               </ul>
             </details>
           )}
+          {task.jobId && task.staging && (
+            <StagedInputRecovery
+              jobId={task.jobId}
+              staging={task.staging}
+              onDiscard={() => updateTask(task.id, { staging: null, retryable: false })}
+            />
+          )}
           {task.retryable && !active && !task.uploadSessionId && (
             <button
               type="button"
@@ -131,14 +212,44 @@ function TaskRow({ task }: { task: TaskItem }) {
             </button>
           )}
           {task.uploadSessionId && task.status !== "completed" && <UploadControls task={task} />}
-          {task.thumbnailStatus === "failed" && !active && (
-            <Link
-              href="/settings?section=maintenance"
-              className="mt-2 inline-flex rounded border border-border px-2 py-1 text-xs font-medium text-foreground transition-colors hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          {isArchiveTransferActive(task.id) && (
+            <button
+              type="button"
+              onClick={() => cancelArchiveTransfer(task.id)}
+              className="mt-2 rounded border border-border px-2 py-1 text-xs font-medium text-foreground transition-colors hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
             >
-              {uiText("Repair thumbnail")}
+              {uiText("Cancel upload")}
+            </button>
+          )}
+          {needsArchiveReview(task) && (
+            <button
+              type="button"
+              onClick={() => {
+                if (task.jobId) requestArchiveReview(task.jobId);
+              }}
+              className="mt-2 rounded border border-border px-2 py-1 text-xs font-medium text-primary transition-colors hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            >
+              {uiText("Choose ZIP files")}
+            </button>
+          )}
+          {task.similarityRunId !== undefined && (
+            <Link
+              to="/library/similar"
+              className="mt-2 inline-block text-xs font-medium text-primary underline-offset-2 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            >
+              {uiText("similarity.viewAnalysis")}
             </Link>
           )}
+          {task.jobKind === "ingestion.library_import" &&
+            task.status === "completed" &&
+            user?.is_superuser && (
+              <Link
+                to="/settings?section=work"
+                className="mt-2 inline-block text-xs font-medium text-primary underline-offset-2 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              >
+                {uiText("View preview activity")}
+              </Link>
+            )}
         </div>
       </div>
     </div>

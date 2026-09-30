@@ -31,14 +31,17 @@ import {
   getJson,
   getAuthenticatedBlob,
   getAuthenticatedText,
+  getDerivedText,
   getUrl,
   getWsUrl,
   invalidateApiCache,
   parseContentDispositionFilename,
   sanitizeDownloadFilename,
   sendAction,
+  sendFormWithProgress,
   sendJson,
 } from "@/lib/api/request";
+import { FetchBackedXhr } from "@/test-support/fetch-backed-xhr";
 
 /**
  * request.ts keeps a small in-memory GET cache (30s TTL) with in-flight
@@ -86,6 +89,83 @@ beforeEach(() => {
 afterEach(() => {
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
+});
+
+describe("sendFormWithProgress", () => {
+  beforeEach(() => {
+    FetchBackedXhr.requests = [];
+    vi.stubGlobal("XMLHttpRequest", FetchBackedXhr);
+  });
+
+  it("reports transferred bytes while the POST is awaiting its response", async () => {
+    let finishRequest: ((response: Response) => void) | undefined;
+    fetchMock.mockImplementation(
+      () =>
+        new Promise<Response>((resolve) => {
+          finishRequest = resolve;
+        }),
+    );
+    const progress = vi.fn<(loaded: number, total: number) => void>();
+    const form = new FormData();
+    form.append("file", new File(["archive"], "parts.zip"));
+    const pending = sendFormWithProgress<{ job_id: string }>(
+      "/api/v1/ingest/archive/inspect",
+      form,
+      new AbortController().signal,
+      progress,
+    );
+
+    const request = FetchBackedXhr.requests[0];
+    expect(request.method).toBe("POST");
+    expect(request.url).toBe("/api/v1/ingest/archive/inspect");
+    expect(request.body).toBe(form);
+    request.emitProgress(4, 8);
+    expect(progress).toHaveBeenCalledWith(4, 8);
+
+    finishRequest?.(jsonResponse({ job_id: "archive-1" }, 202));
+    await expect(pending).resolves.toEqual({ job_id: "archive-1" });
+  });
+
+  it("preserves the server's coded upload rejection", async () => {
+    respondWith({ detail: "upload_too_large" }, 413);
+
+    await expect(
+      sendFormWithProgress(
+        "/api/v1/ingest/archive/inspect",
+        new FormData(),
+        new AbortController().signal,
+        () => {},
+      ),
+    ).rejects.toMatchObject({ status: 413, code: "upload_too_large" });
+  });
+
+  it("aborts the pending browser transfer", async () => {
+    fetchMock.mockImplementation(() => new Promise<Response>(() => {}));
+    const controller = new AbortController();
+    const pending = sendFormWithProgress(
+      "/api/v1/ingest/archive/inspect",
+      new FormData(),
+      controller.signal,
+      () => {},
+    );
+
+    controller.abort();
+
+    await expect(pending).rejects.toMatchObject({ name: "AbortError" });
+  });
+
+  it("reports a broken connection as a network failure", async () => {
+    fetchMock.mockRejectedValue(new TypeError("Failed to fetch"));
+
+    await expect(
+      sendFormWithProgress(
+        "/api/v1/ingest/archive/inspect",
+        new FormData(),
+        new AbortController().signal,
+        () => {},
+      ),
+    ).rejects.toThrow("Failed to fetch");
+  });
 });
 
 describe("getUrl", () => {
@@ -310,6 +390,61 @@ describe("getAuthenticatedBlob", () => {
     });
 
     expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("getDerivedText", () => {
+  it("returns the text of a derived resource", async () => {
+    fetchMock.mockResolvedValueOnce(new Response("G1 X10"));
+
+    await expect(getDerivedText("/api/v1/files/7/toolpath")).resolves.toEqual({
+      ready: true,
+      text: "G1 X10",
+    });
+  });
+
+  it("reports the derivative's state while it is not ready", async () => {
+    fetchMock.mockResolvedValueOnce(
+      new Response(JSON.stringify({ state: "running" }), {
+        status: 202,
+        headers: { "content-type": "application/json" },
+      }),
+    );
+
+    await expect(getDerivedText("/api/v1/files/7/toolpath")).resolves.toEqual({
+      ready: false,
+      state: "running",
+    });
+  });
+
+  it.each([
+    { label: "no state", body: {} },
+    { label: "a state this build does not know", body: { state: "hologram" } },
+  ])("rejects a pending answer with $label", async ({ body }) => {
+    fetchMock.mockResolvedValueOnce(
+      new Response(JSON.stringify(body), {
+        status: 202,
+        headers: { "content-type": "application/json" },
+      }),
+    );
+
+    await expect(getDerivedText("/api/v1/files/7/toolpath")).rejects.toThrow(
+      "derivative_state_invalid",
+    );
+  });
+
+  it("rejects a failed derivative with its reason", async () => {
+    fetchMock.mockResolvedValueOnce(
+      new Response(JSON.stringify({ detail: "toolpath_invalid_bgcode" }), {
+        status: 422,
+        headers: { "content-type": "application/json" },
+      }),
+    );
+
+    await expect(getDerivedText("/api/v1/files/7/toolpath")).rejects.toMatchObject({
+      status: 422,
+      code: "toolpath_invalid_bgcode",
+    });
   });
 });
 

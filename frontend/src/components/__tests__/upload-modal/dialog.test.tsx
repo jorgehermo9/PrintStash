@@ -2,10 +2,9 @@
  * Four ways to get something into the library, behind one dialog.
  *
  * Each mode posts a different request and, more importantly, *stops in a
- * different place*. Files and Bulk queue work and close; From URL and From ZIP
- * come back with a manifest the user has to choose from first. Conflating those
- * two shapes is how an import either runs without the user's selection or waits
- * for a selection that was never asked for.
+ * different place*. Files, Bulk, and From ZIP queue work and close; the ZIP
+ * selection is available from Tasks when preparation completes. From URL
+ * opens Pending Imports for review.
  *
  * The submit button is a gate, not a decoration. It stays disabled until the
  * chosen mode actually has its input, and it is disabled outright for a
@@ -25,15 +24,25 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { UploadModal } from "@/components/upload-modal";
 import { queryKeys } from "@/lib/query-client";
-import { aCollection, aTag } from "@/test-support/factories";
+import { collectionTreeRoutes } from "@/test-support/collection-tree";
+import type { CollectionRead } from "@/types";
+import { aCollection, aCollectionNode, aTag } from "@/test-support/factories";
 import { json, memberSession, renderApp, type RenderAppOptions } from "@/test-support/render";
 
 const QUEUED = { job_id: "job-1", state: "pending", message: "queued" };
 
 function renderUpload(
-  options: RenderAppOptions & { onClose?: () => void; onUploaded?: () => Promise<void> } = {},
+  options: RenderAppOptions & {
+    onClose?: () => void;
+    onUploaded?: () => Promise<void>;
+    /** The library the destination picker searches. */
+    collections?: CollectionRead[];
+    defaultCollection?: string | null;
+  } = {},
 ) {
   const {
+    collections = [aCollection()],
+    defaultCollection = null,
     seed = [],
     routes = {},
     onClose = vi.fn<() => void>(),
@@ -41,19 +50,24 @@ function renderUpload(
     ...rest
   } = options;
   const result = renderApp(
-    <UploadModal open onClose={onClose} onUploaded={onUploaded} defaultCollection={null} />,
+    <UploadModal
+      open
+      onClose={onClose}
+      onUploaded={onUploaded}
+      defaultCollection={defaultCollection}
+    />,
     {
-      seed: [[queryKeys.collections, [aCollection()]], [queryKeys.tags, [aTag()]], ...seed],
+      seed: [[queryKeys.tags, [aTag()]], ...seed],
       routes: {
         "GET /api/v1/libraries": json([]),
-        "GET /api/v1/collections": json([aCollection()]),
+        ...collectionTreeRoutes(collections),
         "GET /api/v1/tags": json([aTag()]),
         "POST /api/v1/ingest/model": json(QUEUED),
         "POST /api/v1/ingest/orca": json(QUEUED),
         "POST /api/v1/inbox": json({ id: 3, state: "review" }),
         "POST /api/v1/ingest/archive/inspect": json({
-          archive_id: "arch-1",
-          entries: [{ name: "cube.stl", size_bytes: 10, kind: "mesh" }],
+          job_id: "archive-job-1",
+          state: "queued",
         }),
         ...routes,
       },
@@ -94,10 +108,7 @@ describe("UploadModal", () => {
         parent_id: 1,
       }),
     ];
-    renderUpload({
-      seed: [[queryKeys.collections, collections]],
-      routes: { "GET /api/v1/collections": json(collections) },
-    });
+    renderUpload({ collections });
 
     await user.click(screen.getByRole("button", { name: "None" }));
     await user.click(screen.getByRole("option", { name: /Testing\/My Parts/ }));
@@ -179,7 +190,7 @@ describe("UploadModal", () => {
 
       await user.click(mode("From ZIP"));
 
-      expect(screen.getByRole("button", { name: "Inspect archive" })).toBeDisabled();
+      expect(screen.getByRole("button", { name: "Prepare ZIP" })).toBeDisabled();
     });
 
     it("accepts a URL once one is typed", async () => {
@@ -202,7 +213,7 @@ describe("UploadModal", () => {
       const user = userEvent.setup();
       renderUpload({
         auth: memberSession(),
-        seed: [[queryKeys.collections, [aCollection({ effective_role: "view" })]]],
+        collections: [aCollection({ effective_role: "view" })],
       });
       await screen.findByText(".stl .3mf .obj .step .dxf");
       await user.click(mode("From URL"));
@@ -415,6 +426,28 @@ describe("UploadModal", () => {
   });
 
   describe("filing the upload", () => {
+    it("waits for a saved destination to resolve before submitting", async () => {
+      const user = userEvent.setup();
+      let resolveLookup!: (response: Response) => void;
+      const pendingLookup = new Promise<Response>((resolve) => {
+        resolveLookup = resolve;
+      });
+      renderUpload({
+        defaultCollection: "parts",
+        routes: { "GET /api/v1/collections/lookup": () => pendingLookup },
+      });
+
+      await user.click(mode("From URL"));
+      await user.type(
+        screen.getByPlaceholderText(/Model page, collection/),
+        "https://example.test/model/1",
+      );
+      expect(screen.getByRole("button", { name: "Review URL" })).toBeDisabled();
+
+      resolveLookup(json({ collection: aCollectionNode(), ancestors: [] }));
+      await waitFor(() => expect(screen.getByRole("button", { name: "Review URL" })).toBeEnabled());
+    });
+
     it("offers the collections the user may write to", async () => {
       const user = userEvent.setup();
       renderUpload();
@@ -429,7 +462,7 @@ describe("UploadModal", () => {
       // have gone up.
       const user = userEvent.setup();
       renderUpload({
-        seed: [[queryKeys.collections, [aCollection({ effective_role: "view" })]]],
+        collections: [aCollection({ effective_role: "view" })],
       });
 
       await user.click(await screen.findByRole("button", { name: "None" }));

@@ -4,8 +4,9 @@ import { Check, HardDrive, Server, ArrowRight } from "lucide-react";
 import { Link } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import { InferenceEndpointForm } from "@/components/inference-endpoint-form";
-import { listIngestJobs } from "@/lib/api/models";
+import { listJobs } from "@/lib/api/jobs";
 import {
+  MODEL_DOWNLOAD_KIND,
   actOnSearchGeneration,
   cancelInferenceDownload,
   downloadInferenceModel,
@@ -16,8 +17,9 @@ import {
   prepareSearchGeneration,
   saveSearchSettings,
 } from "@/lib/api/search";
-import { formatBytes } from "@/lib/format";
+import { formatBytes, formatDuration } from "@/lib/format";
 import { useI18n } from "@/lib/i18n";
+import { isMessageKey } from "@/lib/locale";
 import type { GenerationProposal, SearchSettingsRead } from "@/types/search";
 
 /** The first-run path prepares text search; specialist search types stay in advanced controls. */
@@ -47,13 +49,17 @@ export function AiSearchSetup({
     queryKey: ["ai-search", "generations"],
     queryFn: listSearchGenerations,
     refetchInterval: (query) =>
-      query.state.data?.some((g) => g.state === "building") ? 3000 : false,
+      query.state.data?.some(
+        (g) => g.state === "building" && g.phase !== "ready" && g.phase !== "verify_failed",
+      )
+        ? 3000
+        : false,
   });
   const downloads = useQuery({
     queryKey: ["ai-search", "downloads"],
-    queryFn: async () => (await listIngestJobs()).filter((job) => job.kind === "model_download"),
+    queryFn: async () => (await listJobs()).filter((job) => job.kind === MODEL_DOWNLOAD_KIND),
     refetchInterval: (query) =>
-      query.state.data?.some((job) => job.state === "running" || job.state === "pending")
+      query.state.data?.some((job) => job.state === "running" || job.state === "queued")
         ? 1500
         : false,
   });
@@ -96,13 +102,15 @@ export function AiSearchSetup({
     (generation) => generation.profile === "semantic_text" && generation.state === "failed",
   );
   const downloading = downloads.data?.find(
-    (job) => job.state === "running" || job.state === "pending",
+    (job) => job.state === "running" || job.state === "queued",
   );
   const failedDownload = downloads.data?.find((job) => job.state === "failed");
   const enabled =
     settings.settings.enabled && (path !== "local" || settings.settings.local_models_enabled);
   const change = useMutation({
-    mutationFn: async (action: "enable" | "download" | "prepare" | "cancel" | "activate") => {
+    mutationFn: async (
+      action: "enable" | "download" | "prepare" | "cancel" | "activate" | "retry",
+    ) => {
       setMessage(null);
       if (action === "enable") {
         const result = await saveSearchSettings({
@@ -147,6 +155,9 @@ export function AiSearchSetup({
       } else if (action === "activate" && building) {
         await actOnSearchGeneration(building, "activate");
         await generations.refetch();
+      } else if (action === "retry" && building) {
+        await actOnSearchGeneration(building, "retry");
+        await generations.refetch();
       }
     },
     onError: () =>
@@ -179,6 +190,12 @@ export function AiSearchSetup({
   const ready =
     settings.settings.enabled && active && availability.data?.semantic_ready && !changing;
   const step = ready ? 3 : enabled && path ? 2 : 1;
+  const phaseLabel = (() => {
+    if (!building) return null;
+    const key = `aiSearch.phase.${building.phase}`;
+    if (!isMessageKey(key)) throw new Error("search_generation_phase_invalid");
+    return t(key);
+  })();
   return (
     <div>
       <ol
@@ -251,32 +268,61 @@ export function AiSearchSetup({
         ) : building ? (
           <>
             <h3 className="text-xl font-semibold">
-              {t(building.phase === "ready" ? "Your search is prepared" : "Preparing your library")}
+              {t(
+                building.phase === "ready"
+                  ? "Your search is prepared"
+                  : building.phase === "verify_failed"
+                    ? "Preparation needs attention"
+                    : "Preparing your library",
+              )}
             </h3>
             <p className="max-w-prose text-sm text-muted-foreground">
               {t(
-                "You can leave this page. Keyword search keeps working while preparation finishes.",
+                building.phase === "verify_failed"
+                  ? "The index stopped after an error. Check the model or server, then retry preparation."
+                  : building.phase === "ready"
+                    ? "The index is ready to activate."
+                    : "You can leave this page. Keyword search keeps working while preparation finishes.",
               )}
             </p>
-            <progress
-              className="h-2 w-full accent-primary"
-              aria-label={t("Library preparation progress")}
-              max={Math.max(1, building.eligible)}
-              value={building.indexed}
-            />
-            <p role="status" className="text-sm tabular-nums">
-              {t("{done} of {total} searchable entries prepared", {
-                done: building.indexed,
-                total: building.eligible,
-              })}
+            <p role="status" className="text-sm font-medium">
+              {phaseLabel}
             </p>
+            {building.phase === "backfill" && (
+              <>
+                <progress
+                  className="h-2 w-full accent-primary"
+                  aria-label={t("Library preparation progress")}
+                  max={Math.max(1, building.eligible)}
+                  value={building.indexed}
+                />
+                <p className="text-sm tabular-nums">
+                  {t("{done} of {total} searchable entries prepared", {
+                    done: building.indexed,
+                    total: building.eligible,
+                  })}
+                </p>
+                {building.eta_seconds !== null && (
+                  <p className="text-sm text-muted-foreground">
+                    {t("aiSearch.eta", { time: formatDuration(building.eta_seconds) })}
+                  </p>
+                )}
+              </>
+            )}
             {building.error_code && (
               <p role="alert" className="text-sm text-warning">
-                {t("Some files need attention. Open Advanced AI controls to review them.")}
+                {building.phase === "verify_failed"
+                  ? `${t("aiSearch.generationError")} ${building.error_code}`
+                  : t("An embedding request failed. PrintStash will retry it automatically.")}
               </p>
             )}
             {building.version_token && (
               <div className="flex flex-wrap gap-2">
+                {building.phase === "verify_failed" && (
+                  <Button loading={busy} onClick={() => change.mutate("retry")}>
+                    {t("Retry preparation")}
+                  </Button>
+                )}
                 {building.phase === "ready" && (
                   <Button loading={busy} onClick={() => change.mutate("activate")}>
                     {t("Use prepared search")}
@@ -309,7 +355,7 @@ export function AiSearchSetup({
                     id: "local",
                     title: t("On this machine"),
                     help: t(
-                      "Your library text stays here. Uses this machine’s memory and storage.",
+                      "Your library text stays here. Local AI uses this machine’s CPU, memory and storage; GPU acceleration is not available.",
                     ),
                     icon: HardDrive,
                   },

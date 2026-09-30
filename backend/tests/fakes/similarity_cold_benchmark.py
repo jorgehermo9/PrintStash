@@ -70,7 +70,9 @@ def main() -> None:
         processor = SimilarityProcessor(get_session_factory(), get_backend())
         tick = time.perf_counter()
         for unit in range(args.batch):
-            assert processor.work_one(), "worker unexpectedly has no runnable unit"
+            assert processor.work_one(report["run_id"], f"benchmark:{os.getpid()}"), (
+                "worker unexpectedly has no runnable unit"
+            )
             with Session(engine) as session:
                 run = session.get(SimilarityRun, report["run_id"])
                 assert run is not None

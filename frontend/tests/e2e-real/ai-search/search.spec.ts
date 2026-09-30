@@ -346,7 +346,19 @@ test.describe("AI Search", () => {
             const status: SearchStatus = await (
               await page.request.get(`${API}/api/v1/search/status`)
             ).json();
-            return status.legs.includes("point_cloud") && !status.backlog;
+            if (!status.legs.includes("point_cloud") || status.backlog) return false;
+            // An active index can still be warming its query model. Wait for
+            // search evidence before the browser's one-shot query below.
+            const results: SearchResponse = await (
+              await page.request.get(`${API}/api/v1/search`, {
+                params: { q: "a cube", mode: "hybrid" },
+              })
+            ).json();
+            return (
+              results.items
+                .find((item) => item.subject_type === "model" && item.subject_id === modelId)
+                ?.evidence.some((evidence) => evidence.leg === "point_cloud") ?? false
+            );
           },
           { timeout: 90000 },
         )

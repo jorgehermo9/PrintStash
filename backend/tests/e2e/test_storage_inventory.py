@@ -79,9 +79,7 @@ class TestStorageInventoryCleanup:
             object_kind="backup_archive",
         )
 
-        response = await api.get(
-            "/api/v1/storage/inventory", headers=superuser_headers
-        )
+        response = await api.get("/api/v1/storage/inventory", headers=superuser_headers)
 
         assert response.status_code == 200
         current = response.json()["inventory"]
@@ -89,8 +87,7 @@ class TestStorageInventoryCleanup:
             {bucket["category"] for bucket in current["buckets"]}
         )
         assert {
-            (bucket["category"], bucket["lifecycle"])
-            for bucket in current["buckets"]
+            (bucket["category"], bucket["lifecycle"]) for bucket in current["buckets"]
         }.issuperset(
             {
                 ("stl", "trash"),
@@ -148,9 +145,7 @@ class TestStorageInventoryCleanup:
 
         monkeypatch.setattr(CapacityResource, "measure", measure_after_cleanup)
         monkeypatch.setitem(_overlay, "storage_min_free_bytes", baseline_free)
-        upload = {
-            "file": ("capacity.stl", ascii_stl(), "application/sla")
-        }
+        upload = {"file": ("capacity.stl", ascii_stl(), "application/sla")}
         denied = await api.post(
             "/api/v1/ingest/model",
             files=upload,

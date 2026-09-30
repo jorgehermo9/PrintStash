@@ -99,3 +99,60 @@ class ModelWarmup:
             # Queries remain lexical; a later demand can retry the local cache.
             pass
         return True
+
+
+class WarmupSupervisor:
+    """Keeps this process's query models warm; stops with the process.
+
+    Not background work: a warm model is memory in *this* process's worker
+    pool, so a Job running wherever the engine placed it would warm the wrong
+    process. It honours restore admission like a mutation, and yields on stop.
+    """
+
+    def __init__(self, sessions, *, idle_seconds: float = 1.0):
+        self.warmup = ModelWarmup(sessions)
+        self.idle_seconds = idle_seconds
+        self._thread: threading.Thread | None = None
+
+    def start(self) -> None:
+        import contextvars
+
+        self._thread = threading.Thread(
+            target=contextvars.copy_context().run,
+            args=(self._run,),
+            name="model-warmup",
+            daemon=True,
+        )
+        self._thread.start()
+
+    def stop(self) -> None:
+        self.warmup.stop()
+        if self._thread is not None:
+            self._thread.join(timeout=10)
+            self._thread = None
+
+    def _unit(self) -> bool:
+        from app.runtime.maintenance import (
+            begin_mutating_operation,
+            end_mutating_operation,
+        )
+
+        if not begin_mutating_operation():
+            return False
+        try:
+            return self.warmup.work_one()
+        finally:
+            end_mutating_operation()
+
+    def _run(self) -> None:
+        from app.core.logging import get_logger
+
+        logger = get_logger(__name__)
+        while not self.warmup.stopped.is_set():
+            worked = False
+            try:
+                worked = self._unit()
+            except Exception:  # noqa: BLE001 - warm-up is best effort
+                logger.warning("Local model warm-up deferred")
+            if not worked:
+                self.warmup.stopped.wait(self.idle_seconds)

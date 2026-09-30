@@ -1,12 +1,13 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlmodel import Session
 
 from app.core.security import require_superuser
-from app.db.models import User, VaultAuditMode, VaultAuditRun
+from app.db.models import JobKind, User, VaultAuditMode, VaultAuditRun
 from app.db.session import get_session
 from app.modules.administration import vault_audit, vault_audit_policy
+from app.modules.work import nudge
 from app.schemas.audit_policy import AuditPolicyRead, AuditPolicyUpdate, policy_read
 from app.schemas.maintenance import (
     VaultAuditCreate,
@@ -22,13 +23,13 @@ router = APIRouter(prefix="/maintenance", tags=["maintenance"])
 )
 def start_audit(
     payload: VaultAuditCreate,
-    background_tasks: BackgroundTasks,
     current_user: User = Depends(require_superuser),
     session: Session = Depends(get_session),
 ) -> VaultAuditRunRead:
     row, created = vault_audit.create_run(session, current_user.id, payload.mode)
     if created:
-        background_tasks.add_task(vault_audit.execute_run, row.id)
+        # The PENDING run is the intent; the audit source finds it.
+        nudge(JobKind.ADMINISTRATION_AUDIT)
     return vault_audit.read_run(session, row)
 
 
@@ -124,11 +125,12 @@ def save_audit_policy(
     user: User = Depends(require_superuser),
     session: Session = Depends(get_session),
 ) -> AuditPolicyRead:
-    return policy_read(
-        vault_audit_policy.update_policy(
-            session, mode, payload.model_dump(exclude_unset=True), user.id
-        )
+    policy = vault_audit_policy.update_policy(
+        session, mode, payload.model_dump(exclude_unset=True), user.id
     )
+    # A new schedule moves the next slot; the pass re-arms its delayed nudge.
+    nudge(JobKind.ADMINISTRATION_AUDIT)
+    return policy_read(policy)
 
 
 @router.post("/audit-policies/{mode}/skip", response_model=AuditPolicyRead)
@@ -137,4 +139,6 @@ def skip_audit(
     _user: User = Depends(require_superuser),
     session: Session = Depends(get_session),
 ) -> AuditPolicyRead:
-    return policy_read(vault_audit_policy.skip_once(session, mode, actor_id=_user.id))
+    policy = vault_audit_policy.skip_once(session, mode, actor_id=_user.id)
+    nudge(JobKind.ADMINISTRATION_AUDIT)
+    return policy_read(policy)

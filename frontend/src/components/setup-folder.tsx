@@ -57,7 +57,7 @@ export function SetupFolder({
       const job = await scanExternalLibrary(current.id);
       trackImportJob(job.job_id, uiMessage("Scan {value1}", { value1: current.name }));
       const result = await waitForImportJob(job.job_id);
-      if (result.state === "failed") throw new Error(result.error || "scan_failed");
+      if (result.state !== "completed") throw new Error(result.error || "scan_failed");
       const complete = result.completion !== "partial";
       const count = await onIndexed(complete);
       if (!complete) setError(t("setup.scanPartial"));

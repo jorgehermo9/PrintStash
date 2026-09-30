@@ -2,16 +2,18 @@
 
 A single process-local ``CollectorRegistry`` holds every PrintStash metric so
 the ``/metrics`` endpoint can render them in one pass. The app runs
-single-process (in-process job registry + ``app.state`` printer hub), so the
-default per-process registry semantics are correct as deployed. Running multiple
-uvicorn workers would require prometheus multiprocess mode, which is out of
-scope here.
+API process per vault, so the default per-process registry semantics are
+correct for request and printer metrics. A split deployment's worker processes
+expose their own lane and step metrics; job counts are read from the database
+and are therefore the same from every process.
 
 Instruments:
 - ``http_request_duration`` — request latency histogram, labelled by method,
   matched route template, and status. The route *template* (not the raw path)
   keeps label cardinality bounded.
-- ``ingestion_jobs`` — terminal ingestion job counter, labelled by bounded kind/result.
+- ``jobs`` — terminal background Job counter, labelled by definition/result.
+- ``lane_depth`` / ``step_duration`` / ``reconcile_*`` — engine lanes, step
+  latency and reconciler passes.
 - ``printer_status`` — gauge of live printers by provider/status, set at scrape
   time so it always reflects the current fleet.
 - ``app_info`` — static version info.
@@ -33,29 +35,64 @@ http_request_duration = Histogram(
     registry=registry,
 )
 
-ingestion_jobs = Counter(
-    "printstash_ingestion_jobs_total",
-    "Ingestion jobs that reached a terminal state, by outcome.",
+jobs_terminal = Counter(
+    "printstash_jobs_total",
+    "Background Jobs that reached a terminal state, by definition and outcome.",
     labelnames=("kind", "result"),
     registry=registry,
 )
 
-ingestion_job_duration = Histogram(
-    "printstash_ingestion_job_duration_seconds",
-    "Wall-clock duration of terminal ingestion jobs.",
+job_duration = Histogram(
+    "printstash_job_duration_seconds",
+    "Wall-clock duration of terminal background Jobs.",
     labelnames=("kind", "result"),
     registry=registry,
 )
 
-ingestion_stuck_jobs = Gauge(
-    "printstash_ingestion_stuck_jobs",
-    "Persisted pending/running ingestion jobs whose heartbeat is stale.",
+stuck_jobs = Gauge(
+    "printstash_stuck_jobs",
+    "Active Jobs whose row has not changed for three reconcile intervals.",
     registry=registry,
 )
 
-background_job_depth = Gauge(
-    "printstash_background_job_depth",
-    "Persisted background jobs by state.",
+lane_depth = Gauge(
+    "printstash_lane_depth",
+    "Executions per lane, by engine state (queued or running).",
+    labelnames=("lane", "state"),
+    registry=registry,
+)
+
+step_duration = Histogram(
+    "printstash_job_step_duration_seconds",
+    "Duration of one job step attempt, by definition, step and outcome.",
+    labelnames=("kind", "step", "result"),
+    registry=registry,
+)
+
+job_resubmits = Counter(
+    "printstash_job_resubmits_total",
+    "Interrupted executions the reconciler resubmitted, by definition.",
+    labelnames=("kind",),
+    registry=registry,
+)
+
+reconcile_pass_duration = Histogram(
+    "printstash_reconcile_pass_duration_seconds",
+    "Duration of one reconciler pass over one source.",
+    labelnames=("source",),
+    registry=registry,
+)
+
+reconcile_outcomes = Counter(
+    "printstash_reconcile_outcomes_total",
+    "Reconciler decisions, by source and outcome (submitted, deferred, ...).",
+    labelnames=("source", "outcome"),
+    registry=registry,
+)
+
+job_depth = Gauge(
+    "printstash_job_depth",
+    "Persisted Jobs by state.",
     labelnames=("state",),
     registry=registry,
 )
@@ -252,21 +289,59 @@ def observe_request(
         pass
 
 
-def record_ingestion_terminal(kind: str, result: str, duration_seconds: float) -> None:
-    """Record one terminal job using only bounded, non-sensitive labels."""
+def record_job_terminal(kind: str, result: str, duration_seconds: float) -> None:
+    """Record one terminal Job using only bounded, non-sensitive labels."""
     try:
-        ingestion_jobs.labels(kind=kind, result=result).inc()
-        ingestion_job_duration.labels(kind=kind, result=result).observe(
+        jobs_terminal.labels(kind=kind, result=result).inc()
+        job_duration.labels(kind=kind, result=result).observe(
             max(0.0, duration_seconds)
         )
     except Exception:  # noqa: BLE001 — metrics must never break a job
         pass
 
 
-def set_ingestion_stuck_jobs(count: int) -> None:
+def set_stuck_jobs(count: int) -> None:
     try:
-        ingestion_stuck_jobs.set(max(0, count))
+        stuck_jobs.set(max(0, count))
     except Exception:  # noqa: BLE001 — metrics must never break a request
+        pass
+
+
+def set_lane_depth(lane: str, *, queued: int, running: int) -> None:
+    try:
+        lane_depth.labels(lane=lane, state="queued").set(max(0, queued))
+        lane_depth.labels(lane=lane, state="running").set(max(0, running))
+    except Exception:  # noqa: BLE001 — metrics must never break a request
+        pass
+
+
+def record_step(kind: str, step: str, result: str, duration_seconds: float) -> None:
+    try:
+        step_duration.labels(kind=kind, step=step, result=result).observe(
+            max(0.0, duration_seconds)
+        )
+    except Exception:  # noqa: BLE001 — metrics must never break a job
+        pass
+
+
+def record_resubmit(kind: str) -> None:
+    try:
+        job_resubmits.labels(kind=kind).inc()
+    except Exception:  # noqa: BLE001 — metrics must never break a job
+        pass
+
+
+def record_reconcile_pass(
+    source: str, duration_seconds: float, outcomes: dict[str, int]
+) -> None:
+    try:
+        reconcile_pass_duration.labels(source=source).observe(
+            max(0.0, duration_seconds)
+        )
+        for outcome, count in outcomes.items():
+            if count:
+                reconcile_outcomes.labels(source=source, outcome=outcome).inc(count)
+    except Exception:  # noqa: BLE001 — metrics must never break a pass
         pass
 
 

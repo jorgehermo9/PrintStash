@@ -4,7 +4,6 @@ from pathlib import Path
 
 from fastapi import (
     APIRouter,
-    BackgroundTasks,
     Depends,
     File,
     Form,
@@ -21,10 +20,11 @@ from sqlmodel import Session
 from app.core.browser_device_auth import require_user_or_browser_import_user
 from app.core.config import settings
 from app.core.security import require_auth, require_user
-from app.db.models import InboxItemState, InboxSourceKind, User
-from app.db.session import SessionFactory, get_session, get_session_factory
+from app.db.models import InboxItemState, InboxSourceKind, JobKind, User
+from app.db.session import get_session
 from app.modules.ingestion import importer, inbox, staging_leases
 from app.modules.storage import storage
+from app.modules.work import nudge
 from app.schemas.inbox import (
     CaptureUploadSlotRead,
     CaptureUploadSlotsCreate,
@@ -46,7 +46,6 @@ router = APIRouter(prefix="/inbox", tags=["pending imports"])
 )
 async def capture(
     payload: InboxItemCreate,
-    background_tasks: BackgroundTasks,
     current_user: User = Depends(require_user_or_browser_import_user),
     session: Session = Depends(get_session),
 ) -> InboxItemRead:
@@ -57,9 +56,15 @@ async def capture(
     except importer.ImportError_ as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     assert row.id is not None
-    if payload.capture_source is None:
-        background_tasks.add_task(inbox.resolve, row.id)
+    if row.state == InboxItemState.CAPTURED:
+        nudge(JobKind.INGESTION_INBOX_RESOLVE)
     return inbox.read(row, session)
+
+
+def _start_import(session: Session, row, selected_ids: list[str]) -> None:
+    if inbox.begin_import(session, row, selected_ids) is not None:
+        nudge(JobKind.INGESTION_INBOX_IMPORT)
+    session.refresh(row)
 
 
 @router.post(
@@ -231,10 +236,8 @@ def list_items(
 )
 def batch_items(
     payload: InboxBatchRequest,
-    background_tasks: BackgroundTasks,
     current_user: User = Depends(require_user),
     session: Session = Depends(get_session),
-    session_factory: SessionFactory = Depends(get_session_factory),
 ) -> list[InboxItemRead]:
     output: list[InboxItemRead] = []
     for item_id in dict.fromkeys(payload.item_ids):
@@ -258,11 +261,11 @@ def batch_items(
             row = inbox.retry(session, row)
             assert row.id is not None
             if row.state == InboxItemState.CAPTURED:
-                background_tasks.add_task(inbox.resolve, row.id)
+                nudge(JobKind.INGESTION_INBOX_RESOLVE)
         elif payload.action == "import":
             if row.state != InboxItemState.REVIEW:
                 continue
-            background_tasks.add_task(inbox.run_import, row.id, [], session_factory)
+            _start_import(session, row, [])
         else:
             inbox.dismiss(session, row)
         session.refresh(row)
@@ -299,7 +302,6 @@ def update_item(
 )
 def resolve_item(
     item_id: int,
-    background_tasks: BackgroundTasks,
     current_user: User = Depends(require_user),
     session: Session = Depends(get_session),
 ) -> InboxItemRead:
@@ -307,7 +309,15 @@ def resolve_item(
     if row.state not in {InboxItemState.CAPTURED, InboxItemState.FAILED}:
         raise HTTPException(status_code=409, detail="pending_import_not_resolvable")
     assert row.id is not None
-    background_tasks.add_task(inbox.resolve, row.id)
+    if row.state == InboxItemState.FAILED:
+        # Re-resolving is intent: the item becomes CAPTURED, which is exactly
+        # what the resolve source looks for.
+        row.state = InboxItemState.CAPTURED
+        row.error_code = None
+        session.add(row)
+        session.commit()
+        session.refresh(row)
+    nudge(JobKind.INGESTION_INBOX_RESOLVE)
     return inbox.read(row, session)
 
 
@@ -319,19 +329,14 @@ def resolve_item(
 def import_item(
     item_id: int,
     payload: InboxImportRequest,
-    background_tasks: BackgroundTasks,
     current_user: User = Depends(require_user),
     session: Session = Depends(get_session),
-    session_factory: SessionFactory = Depends(get_session_factory),
 ) -> InboxItemRead:
     row = inbox.require_visible(session, current_user, item_id)
     if row.state != InboxItemState.REVIEW:
         raise HTTPException(status_code=409, detail="pending_import_not_ready")
     assert row.id is not None
-    inbox.validate_import_selection(row, payload.selected_ids)
-    background_tasks.add_task(
-        inbox.run_import, row.id, payload.selected_ids, session_factory
-    )
+    _start_import(session, row, payload.selected_ids)
     return inbox.read(row, session)
 
 
@@ -342,24 +347,15 @@ def import_item(
 )
 def retry_item(
     item_id: int,
-    background_tasks: BackgroundTasks,
     current_user: User = Depends(require_user),
     session: Session = Depends(get_session),
-    session_factory: SessionFactory = Depends(get_session_factory),
 ) -> InboxItemRead:
     row = inbox.retry(session, inbox.require_visible(session, current_user, item_id))
     assert row.id is not None
     if row.state == InboxItemState.CAPTURED:
-        background_tasks.add_task(inbox.resolve, row.id)
+        nudge(JobKind.INGESTION_INBOX_RESOLVE)
     elif row.state == InboxItemState.REVIEW:
-        selected = inbox.selected_ids(row.manifest_json)
-        inbox.validate_import_selection(row, selected)
-        background_tasks.add_task(
-            inbox.run_import,
-            row.id,
-            selected,
-            session_factory,
-        )
+        _start_import(session, row, inbox.selected_ids(row.manifest_json))
     return inbox.read(row, session)
 
 

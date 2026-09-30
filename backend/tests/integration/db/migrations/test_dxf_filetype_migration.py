@@ -3,7 +3,7 @@
 from uuid import uuid4
 
 import pytest
-from sqlalchemy import create_engine, inspect
+from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.engine import make_url
 from sqlmodel import Session, select
 
@@ -81,11 +81,22 @@ def _exercise_upgrade(url: str, *, postgres: bool) -> None:
                 "existing.stl",
                 "drawing.dxf",
             }
-            drawing = session.exec(
+            drawing_id = session.exec(
                 select(File).where(File.original_filename == "drawing.dxf")
-            ).one()
-            session.delete(drawing)
-            session.commit()
+            ).one().id
+        assert drawing_id is not None
+        # This database intentionally stops at the historical DXF revision.
+        # Delete revision-local rows without asking the current Metadata mapper
+        # to select columns introduced by later migrations.
+        with engine.begin() as connection:
+            connection.execute(
+                text("DELETE FROM metadata WHERE file_id = :file_id"),
+                {"file_id": drawing_id},
+            )
+            connection.execute(
+                text("DELETE FROM files WHERE id = :file_id"),
+                {"file_id": drawing_id},
+            )
 
         command.downgrade(config, PREDECESSOR)
         with Session(engine) as session:

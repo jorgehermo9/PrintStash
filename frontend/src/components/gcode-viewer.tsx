@@ -8,7 +8,7 @@ import { Canvas, useThree } from "@react-three/fiber";
 import { OrbitControls, PerspectiveCamera } from "@react-three/drei";
 import * as THREE from "three";
 import { AlertTriangle, Layers, Loader2 } from "lucide-react";
-import { getAuthenticatedText } from "@/lib/api/request";
+import { getDerivedText } from "@/lib/api/request";
 import { useOptionalI18n, type MessageKey } from "@/lib/i18n";
 import { previewPixelRatio, usePreviewPreferences } from "@/lib/preview-preferences";
 import type { ToolpathData } from "@/lib/gcode";
@@ -197,7 +197,12 @@ interface LoadedToolpath {
   url: string;
   data: ToolpathData | null;
   errorKind: "limit" | "resource" | "busy" | "invalid" | "load" | null;
+  /** The toolpath is a derivative still being produced; check again shortly. */
+  preparing?: boolean;
 }
+
+/** How often a toolpath still being derived is checked again. */
+const PREPARING_POLL_MS = 3_000;
 
 export interface GcodeViewerProps {
   url: string;
@@ -205,6 +210,7 @@ export interface GcodeViewerProps {
   screenshotName?: string;
   canvasRenderer?: ComponentType<CanvasRendererProps>;
   toolpathParser?: typeof parseGcodeInWorker;
+  toolpathFetcher?: typeof getDerivedText;
 }
 
 export function GcodeViewer({
@@ -212,6 +218,7 @@ export function GcodeViewer({
   printerBedMm = null,
   canvasRenderer,
   toolpathParser = parseGcodeInWorker,
+  toolpathFetcher = getDerivedText,
 }: GcodeViewerProps) {
   const i18n = useOptionalI18n();
   const previewPreferences = usePreviewPreferences();
@@ -236,9 +243,19 @@ export function GcodeViewer({
     let live = true;
 
     const controller = new AbortController();
-    getAuthenticatedText(url, controller.signal)
-      .then((text) => toolpathParser(text, controller.signal))
-      .then((parsed) => {
+    let recheck: ReturnType<typeof setTimeout> | null = null;
+    toolpathFetcher(url, controller.signal)
+      .then(async (derived) => {
+        if (!derived.ready) {
+          if (!live) return;
+          // A binary toolpath is converted in the background; the old response
+          // was the conversion itself, now it is a derivative that may not
+          // exist yet.
+          setLoaded({ url, data: null, errorKind: null, preparing: true });
+          recheck = setTimeout(() => setRetry((value) => value + 1), PREPARING_POLL_MS);
+          return;
+        }
+        const parsed = await toolpathParser(derived.text, controller.signal);
         if (!live) return;
         setLoaded({ url, data: parsed, errorKind: null });
         setCurrentLayer(parsed.totalLayers - 1);
@@ -265,9 +282,10 @@ export function GcodeViewer({
 
     return () => {
       live = false;
+      if (recheck !== null) clearTimeout(recheck);
       controller.abort();
     };
-  }, [url, toolpathParser, retry]);
+  }, [url, toolpathParser, toolpathFetcher, retry]);
 
   const loadingCopy = viewerCopy(i18n, "viewer.loadingToolpath");
   const renderFailedCopy = viewerCopy(i18n, "viewer.renderFailed");
@@ -282,11 +300,16 @@ export function GcodeViewer({
   const noDataCopy = viewerCopy(i18n, "viewer.noToolpathData");
   const noToolpathCopy = viewerCopy(i18n, "viewer.noToolpathFound");
 
-  if (loading) {
+  if (loading || current?.preparing) {
     return (
-      <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 text-muted-foreground">
+      <div
+        role="status"
+        className="absolute inset-0 flex flex-col items-center justify-center gap-2 text-muted-foreground"
+      >
         <Loader2 className="h-8 w-8 animate-spin" />
-        <span className="font-mono text-xs">{loadingCopy}</span>
+        <span className="font-mono text-xs">
+          {current?.preparing ? viewerCopy(i18n, "viewer.preparingToolpath") : loadingCopy}
+        </span>
       </div>
     );
   }

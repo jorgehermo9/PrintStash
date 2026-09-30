@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { listBackupRuns, retryBackupDestination } from "@/lib/api/backup";
 import { useI18n } from "@/lib/i18n";
+import { waitForImportJob } from "@/lib/task-center";
 import { toast } from "@/lib/toast";
 
 export function BackupRunHistory({
@@ -30,7 +31,10 @@ export function BackupRunHistory({
   async function retry(id: string) {
     setRetrying(id);
     try {
-      await retryBackupDestination(id);
+      const accepted = await retryBackupDestination(id);
+      const job = await waitForImportJob(accepted.job_id, t("settings.backupRetryTask"));
+      if (job.state !== "completed")
+        throw new Error(job.error ?? "backup_retry_publication_failed");
       toast.success(t("settings.backupRetryDone"));
       onPublished();
     } catch (error) {
@@ -114,17 +118,25 @@ export function BackupRunHistory({
                         ? `${t("settings.backupLastVerified")}: ${new Date(destination.verified_at).toLocaleString(currentLocale())}`
                         : t("settings.backupNeverVerified")}
                     </p>
-                    {destination.error_code && (
+                    {run.outcome === "failed" && run.archive_sha256 === null ? (
+                      <p className="max-w-prose text-sm text-destructive">
+                        {t("settings.backupRetryNewRequired")}
+                      </p>
+                    ) : destination.error_code ? (
                       <p className="max-w-prose text-sm text-destructive">
                         {reason(destination.error_code)}
                       </p>
-                    )}
+                    ) : null}
                   </div>
                   {destination.outcome === "failed" && (
                     <Button
                       variant="outline"
                       size="sm"
-                      disabled={retrying !== null || run.outcome === "running"}
+                      disabled={
+                        retrying !== null ||
+                        run.outcome === "running" ||
+                        run.archive_sha256 === null
+                      }
                       onClick={() => void retry(destination.id)}
                     >
                       {retrying === destination.id

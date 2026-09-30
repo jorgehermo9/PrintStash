@@ -8,9 +8,12 @@ would reject.
 
 Design notes:
 - The app runs in-process via ``httpx.ASGITransport`` (the real app, real routers,
-  real services). Background polling loops are *not* started; tests invoke the
-  real service entrypoints (``notifications.dispatch_due()``, hub methods, scan
-  functions) directly, which is both faithful and deterministic.
+  real services). Background work runs on the root conftest's ``InlineJobEngine``:
+  a test calls ``tests.e2e._jobs.settle()`` to drain every Job the flow queued
+  (and every Job those nudged), running the shipped definitions deterministically. The
+  engine port itself is held to the same contract on DBOS in
+  ``tests/contract/modules/work/test_contracts.py``, and ``test_job_engine.py``
+  drives real DBOS.
 - The DB is the in-memory engine from the parent ``conftest`` (shared in-process
   via ``StaticPool``); ``data_dir`` and friends are redirected to a tmp dir
   through the ``_overlay`` (every ``Settings`` field is overlay-resolvable).
@@ -114,7 +117,6 @@ def e2e_db(tmp_path: Path) -> Iterator[Session]:
     try:
         yield session
     finally:
-
         # A failed restore may leave the process gate set while its durable
         # journal remains under this test's private backup directory. Clear
         # only test-owned evidence after all clients have stopped, so the next
@@ -167,20 +169,20 @@ async def api(e2e_db: Session) -> "httpx.AsyncClient":
         get_provider_client,
     )
     from app.runtime.realtime import InProcessBus
-    from app.runtime.work_wakeup import LocalWorkWakeup
 
     # E2E must initialize its own process-local runtime state instead of
     # depending on an earlier unit test's app fixture having populated it.
     registry = build_provider_registry()
     app.state.printer_provider_registry = registry
+    bus = InProcessBus()
+    app.state.event_bus = bus
     app.state.printer_hub = PrinterHub(
-        InProcessBus(),
+        bus,
         session_factory=get_session_factory(),
         provider_builder=lambda printer: get_provider_client(
             printer, registry=registry
         ),
     )
-    app.state.work_wakeup = LocalWorkWakeup()
 
     await close_http_client()
     transport = httpx.ASGITransport(app=app)

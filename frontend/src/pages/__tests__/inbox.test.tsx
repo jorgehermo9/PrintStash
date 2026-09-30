@@ -48,7 +48,7 @@ const pendingImport: InboxItem = {
   manifest: { kind: "direct" },
   target_collection_id: null,
   requested_tags: [],
-  background_job_id: null,
+  job_id: null,
   resulting_model_id: null,
   results: [],
   error_code: null,

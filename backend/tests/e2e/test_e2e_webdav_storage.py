@@ -2,13 +2,13 @@
 
 from __future__ import annotations
 
-import asyncio
 from pathlib import Path
 
 import pytest
 from sqlmodel import select
 
 from app.db.models import File, OwnedStorageObject, StorageObjectState
+from tests.e2e._jobs import settle
 
 pytestmark = pytest.mark.e2e
 
@@ -18,14 +18,10 @@ FIXTURE = (
 
 
 async def _await_job(api, headers: dict[str, str], job_id: str) -> dict:
-    for _ in range(100):
-        response = await api.get(f"/api/v1/ingest/jobs/{job_id}", headers=headers)
-        assert response.status_code == 200, response.text
-        job = response.json()
-        if job["state"] in {"completed", "failed", "duplicate"}:
-            return job
-        await asyncio.sleep(0.05)
-    raise AssertionError(f"job {job_id} did not finish")
+    settle()
+    response = await api.get(f"/api/v1/jobs/{job_id}", headers=headers)
+    assert response.status_code == 200, response.text
+    return response.json()
 
 
 @pytest.mark.asyncio

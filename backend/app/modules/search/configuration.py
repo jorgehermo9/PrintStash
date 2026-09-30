@@ -3,7 +3,7 @@
 from sqlmodel import Session
 
 from app.core.errors import ErrorKind, OperationError
-from app.db.models import InferenceEndpoint
+from app.db.models import InferenceEndpoint, JobKind
 from app.modules.administration import audit
 from app.modules.administration.config_repository import get_or_create
 from app.modules.inference.configuration import list_endpoints
@@ -68,4 +68,15 @@ def update(
         resource_type="ai_search",
         diff=value.model_dump(),
     )
+    # Enabling a feature makes its work owed now, not at the next tick.
+    from app.modules.work.submission import nudge_after_commit
+
+    for definition in (
+        JobKind.SEARCH_PROJECT,
+        JobKind.SEARCH_INDEX,
+        JobKind.SEARCH_REPAIR,
+        JobKind.SEARCH_CAPTION_QUEUE,
+        JobKind.SEARCH_EXPAND,
+    ):
+        nudge_after_commit(session, definition)
     return read(session)

@@ -3,7 +3,7 @@
 import pytest
 from sqlmodel import select
 
-from app.db.models import GeometryFingerprint, SimilarityRun
+from app.db.models import GeometryFingerprint, JobKind, SimilarityRun
 from app.db.session import get_session_factory
 from app.modules.media.fingerprints import FingerprintResult, extract
 from app.modules.media.mesh_resources import prepare_loaded_mesh
@@ -65,6 +65,54 @@ class TestIngestDerivative:
         assert all(
             row.state == "ready" for row in db_session.exec(select(GeometryFingerprint))
         )
+
+    def test_a_derivative_fingerprint_starts_a_system_run_for_its_model(
+        self, db_session, make_file, make_model, make_user, monkeypatch
+    ):
+        # The mesh derivative has no requesting user. Regression: its
+        # fingerprints were published without ever starting the analysis that
+        # an upload used to start, so no candidates appeared after ingest.
+        import app.modules.work as work
+
+        admin = make_user(superuser=True)
+        make_user()
+        configuration.update_settings(db_session, admin, {"enabled": True})
+        model = make_model()
+        file = make_file(model)
+        nudged: list[str] = []
+        monkeypatch.setattr(work, "nudge", lambda name, **_: nudged.append(name))
+
+        state = ingestion.after_commit(
+            get_session_factory(),
+            file.id,
+            None,
+            extract(prepare_loaded_mesh(tetrahedron(), file_type="stl")),
+        )
+
+        assert state == "ready"
+        run = db_session.exec(select(SimilarityRun)).one()
+        assert (run.actor_id, run.trigger, run.scope) == (admin.id, "ingest", "models")
+        assert run.scope_ids_json == f"[{model.id}]"
+        assert nudged == [JobKind.SIMILARITY_ANALYZE]
+
+    def test_no_active_administrator_means_no_system_run(
+        self, db_session, make_file, make_model, make_user
+    ):
+        admin = make_user(superuser=True)
+        configuration.update_settings(db_session, admin, {"enabled": True})
+        admin.is_active = False
+        db_session.add(admin)
+        db_session.commit()
+        file = make_file(make_model())
+
+        ingestion.after_commit(
+            get_session_factory(),
+            file.id,
+            None,
+            extract(prepare_loaded_mesh(tetrahedron(), file_type="stl")),
+        )
+
+        assert db_session.exec(select(SimilarityRun)).all() == []
 
     def test_respects_ingest_fingerprint_switch(self, db_session, make_user):
         actor = make_user(superuser=True)

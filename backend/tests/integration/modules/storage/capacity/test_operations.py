@@ -6,7 +6,6 @@ from app.core.config import _overlay
 from app.core.errors import OperationError
 from app.db.models import FileType
 from app.modules.ingestion.library_transfer import create_archive, import_archive
-from app.modules.media.thumbnail_repair import regenerate_model_thumbnail_result
 
 
 class TestOperationAdmission:
@@ -29,14 +28,20 @@ class TestOperationAdmission:
         finally:
             archive.unlink()
 
-    def test_denies_media_repair_before_materialization(
+    def test_denies_mesh_rendering_before_materialization(
         self, db_session, make_model, make_file, monkeypatch
     ):
-        model = make_model()
-        make_file(model, file_type=FileType.STL)
+        from app.modules.derivatives import producers
+
+        artifact = make_file(make_model(), file_type=FileType.STL)
         monkeypatch.setitem(_overlay, "storage_min_free_bytes", 10**18)
+        monkeypatch.setattr(
+            producers,
+            "resolve",
+            lambda _file: pytest.fail("artifact materialized without capacity"),
+        )
         with pytest.raises(OperationError, match="storage_capacity_exceeded"):
-            regenerate_model_thumbnail_result(db_session, model.id)
+            producers._derive_mesh(artifact.id)
 
     def test_denies_backup_before_archive_allocation(self, backup_env, monkeypatch):
         from app.modules.backups.backup.creation import create_backup

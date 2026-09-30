@@ -20,19 +20,27 @@ from sqlmodel import Session
 
 from app.core.time import utcnow
 from app.db.models import (
+    ArtifactDerivative,
     ArtifactUploadPart,
     ArtifactUploadSession,
     ArtifactUploadState,
-    BackgroundJob,
     BackupDestinationResult,
     BackupRetryAttempt,
     BackupRun,
+    DerivativeKind,
+    DerivativeState,
     Document,
     DocumentKind,
     ExternalLibrary,
     ExternalLibraryCheckpoint,
     ExternalLibraryObservation,
     FilamentProfile,
+    File,
+    IngestRequest,
+    IngestRequestKind,
+    Job,
+    JobKind,
+    JobState,
     LibrarySourceKind,
     Model,
     NotificationChannel,
@@ -55,6 +63,8 @@ from app.db.models import (
     VaultAuditRun,
     VaultAuditRunState,
     VaultAuditSeverity,
+    WorkExecutor,
+    WorkFence,
 )
 from app.modules.storage.storage_identity import StorageTargetIdentity
 from tests.factories._support import nth, reject_aliases, save, unique_hash
@@ -226,19 +236,170 @@ def build_document(
     return save(session, Document(name=name, kind=kind, **overrides))
 
 
-def build_background_job(
+def build_job(
     session: Session,
     *,
-    kind: str = "generic",
-    state: str = "pending",
+    kind: str = JobKind.WORK_HOUSEKEEPING,
+    state: JobState = JobState.QUEUED,
     owner: User | None = None,
+    subject: str | None = None,
+    finished: bool | None = None,
     **overrides: Any,
-) -> BackgroundJob:
-    """A durable job row. `id` is a string the app generates, not an integer."""
-    overrides.setdefault("id", f"job-{nth('background_job')}")
-    if owner is not None:
-        overrides.setdefault("owner_user_id", owner.id)
-    return save(session, BackgroundJob(kind=kind, state=state, **overrides))
+) -> Job:
+    """A Job row: one definition's work on one subject.
+
+    ``kind`` must name a registered definition, or the reconciler treats the
+    row as an orphan and fails it. ``subject`` defaults to a unique key: two
+    active Jobs of one kind on one subject violate the active-subject index,
+    which is the claim the reconciler relies on. ``finished`` defaults to what
+    ``state`` implies, so a terminal Job has the ``finished_at`` retention reads.
+    """
+    reject_aliases(
+        overrides,
+        {"subject_key": "subject", "owner_user_id": "owner", "finished_at": "finished"},
+    )
+    overrides.setdefault("id", f"job-{nth('job')}")
+    terminal = state in {JobState.COMPLETED, JobState.FAILED, JobState.CANCELLED}
+    if finished if finished is not None else terminal:
+        overrides["finished_at"] = overrides.get("updated_at") or utcnow()
+    return save(
+        session,
+        Job(
+            kind=kind,
+            state=state,
+            subject_key=subject or f"test/{nth('job_subject')}",
+            owner_user_id=owner.id if owner is not None else None,
+            **overrides,
+        ),
+    )
+
+
+def build_ingest_request(
+    session: Session,
+    owner: User,
+    *,
+    kind: IngestRequestKind = IngestRequestKind.URL,
+    state: JobState = JobState.QUEUED,
+    **overrides: Any,
+) -> IngestRequest:
+    """An accepted ingest request with the queued Job that owns it.
+
+    A request is the intent of exactly one ``ingest.*`` Job: its primary key is
+    the Job's id and the Job's subject names it. A request without that Job, or
+    a Job of the wrong definition, is a shape no route produces and one the
+    reconciler would fail as an orphan.
+    """
+    from app.modules.ingestion.requests import DEFINITIONS, subject_key
+
+    reject_aliases(overrides, {"owner_user_id": "owner"})
+    job_id = f"ingest-{nth('ingest_request')}"
+    build_job(
+        session,
+        kind=DEFINITIONS[kind],
+        state=state,
+        owner=owner,
+        subject=subject_key(job_id),
+        id=job_id,
+    )
+    overrides.setdefault("selection_json", "{}")
+    return save(
+        session,
+        IngestRequest(job_id=job_id, kind=kind, owner_user_id=owner.id, **overrides),
+    )
+
+
+def build_derivative(
+    session: Session,
+    file: File,
+    kind: DerivativeKind,
+    *,
+    state: DerivativeState = DerivativeState.READY,
+    recipe_version: int | None = None,
+    exhausted: bool = False,
+    **overrides: Any,
+) -> ArtifactDerivative:
+    """One derivative row of an Artifact, at the kind's current recipe by default.
+
+    ``exhausted=True`` makes a failure terminal: the source reads a failed row
+    as pending again once its backoff expires, unless its attempts reached
+    ``derivative_max_attempts``. A test that means "given up" and writes a
+    failed row with one attempt is asserting against a row the source retries.
+    """
+    from app.core.config import settings
+    from app.modules.derivatives.kinds import recipes_for
+
+    assert file.id is not None
+    reject_aliases(overrides, {"file_id": "file"})
+    if recipe_version is None:
+        recipe_version = recipes_for(file)[kind]
+    if exhausted:
+        overrides.setdefault("attempts", settings.derivative_max_attempts)
+    overrides.setdefault("attempts", 1)
+    if state in (DerivativeState.FAILED, DerivativeState.SKIPPED):
+        # The database refuses a failure or skip that does not say why.
+        overrides.setdefault("failure_reason", f"test_{state.value}")
+    return save(
+        session,
+        ArtifactDerivative(
+            file_id=file.id,
+            kind=kind,
+            recipe_version=recipe_version,
+            state=state,
+            **overrides,
+        ),
+    )
+
+
+def build_work_fence(
+    session: Session,
+    name: str,
+    *,
+    holder: str = "another-executor",
+    expired: bool = False,
+    **overrides: Any,
+) -> WorkFence:
+    """A fence another process holds. ``expired=True`` is one whose holder died."""
+    reject_aliases(overrides, {"expires_at": "expired"})
+    now = utcnow()
+    expires_at = now - timedelta(seconds=1) if expired else now + timedelta(hours=1)
+    return save(
+        session,
+        WorkFence(
+            name=name,
+            holder=holder,
+            reason=overrides.pop("reason", "test"),
+            expires_at=expires_at,
+            **overrides,
+        ),
+    )
+
+
+def build_work_executor(
+    session: Session,
+    executor_id: str | None = None,
+    *,
+    stale: bool = False,
+    **overrides: Any,
+) -> WorkExecutor:
+    """Another process that runs jobs. ``stale=True`` stopped heartbeating."""
+    from app.core.config import settings
+
+    reject_aliases(overrides, {"heartbeat_at": "stale"})
+    beat = utcnow()
+    if stale:
+        beat -= timedelta(seconds=settings.jobs_executor_stale_seconds + 1)
+    overrides.setdefault("role", "worker")
+    overrides.setdefault("hostname", "worker-host")
+    overrides.setdefault("pid", 4242)
+    overrides.setdefault("app_version", settings.app_version)
+    return save(
+        session,
+        WorkExecutor(
+            executor_id=executor_id or f"worker-{nth('executor')}",
+            heartbeat_at=beat,
+            **overrides,
+        ),
+    )
 
 
 def build_artifact_upload(

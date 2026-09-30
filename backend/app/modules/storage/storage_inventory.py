@@ -134,7 +134,9 @@ def _stored_provider_capacity(
     try:
         payload = StorageInventory.model_validate_json(latest.evidence_json)
     except (TypeError, ValueError):
-        return ProviderCapacityEvidence(status="degraded", error="invalid_stored_evidence")
+        return ProviderCapacityEvidence(
+            status="degraded", error="invalid_stored_evidence"
+        )
     evidence = payload.provider_capacity
     if evidence.measured_at is not None and evidence.status == "known":
         age = utcnow() - ensure_utc(evidence.measured_at)
@@ -799,7 +801,9 @@ def cleanup_derived_cache(session: Session, actor: User) -> dict:
         session.exec(
             select(OwnedStorageObject)
             .where(
-                col(OwnedStorageObject.object_kind).in_(["derived_stl_cache", "stl_cache"]),
+                col(OwnedStorageObject.object_kind).in_(
+                    ["derived_stl_cache", "stl_cache"]
+                ),
                 OwnedStorageObject.state == StorageObjectState.COMMITTED,
                 OwnedStorageObject.backend == backend.backend_name,
                 OwnedStorageObject.namespace == cache_namespace,

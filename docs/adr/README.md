@@ -22,6 +22,8 @@ is worth as much as the one that replaced it.
 | [0003](0003-storage-capability-tiers.md) | Storage capability tiers, and OpenDAL as an additive adapter | Accepted and implemented; decision 12 superseded by 0004 |
 | [0004](0004-library-sources-and-gc-safety-boundaries.md) | Read-only remote library sources and witnessed automatic GC | Accepted and implemented |
 | [0005](0005-similar-models-evidence.md) | Similar Models fingerprints retrieve evidence without defining identity | Accepted; first geometry-core increment implemented |
+| [0007](0007-model-families.md) | Preserve Model identity through Family relationships | Accepted and implemented |
+| [0008](0008-job-engine.md) | Run background work level-triggered on a durable engine | Accepted and implemented |
 
 ADR-0001 and ADR-0002 are cited from code comments but were never written down.
 Numbering starts at 0003 so those citations keep pointing at the decisions they

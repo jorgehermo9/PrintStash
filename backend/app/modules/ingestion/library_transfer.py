@@ -12,7 +12,7 @@ import zipfile
 from datetime import datetime
 from enum import Enum
 from pathlib import Path, PurePosixPath
-from typing import Any, Literal
+from typing import Any, Callable, Literal
 
 from printstash_core.imports import CaptureContractError, CaptureManifestV2
 from pydantic import BaseModel, ConfigDict, model_validator
@@ -30,6 +30,7 @@ from app.db.models import (
     FileRevisionStatus,
     FileTagLink,
     FileType,
+    JobKind,
     Metadata,
     Model,
     ModelProvenanceField,
@@ -65,7 +66,9 @@ from app.modules.storage import capacity_estimates, storage
 from app.modules.storage.artifact_content import ArtifactContentError, resolve
 from app.modules.storage.capacity import CapacityManager
 from app.modules.storage.storage_backend.runtime import get_backend
-from app.runtime.jobs import registry
+from app.modules.work.contracts import JobOutcome
+from app.modules.work.jobs import failure_of
+from app.modules.work.jobs import jobs as registry
 from app.schemas.models import PartGroupWrite, PartOptionWrite
 
 FORMAT = "printstash-library-v2"
@@ -560,13 +563,11 @@ def create_archive(session: Session, user: User, *, version: Literal[1, 2] = 2) 
         )
     aggregate_stmt = select(MultipartModel)
     if not user.is_superuser:
-        aggregate_collection_ids = rbac.accessible_collection_ids(session, user)
-        if not aggregate_collection_ids:
-            aggregate_stmt = aggregate_stmt.where(MultipartModel.id == -1)
-        else:
-            aggregate_stmt = aggregate_stmt.where(
-                MultipartModel.collection_id.in_(aggregate_collection_ids)  # type: ignore[union-attr]
+        aggregate_stmt = aggregate_stmt.where(
+            MultipartModel.collection_id.in_(  # type: ignore[union-attr]
+                rbac.accessible_collection_ids_stmt(session, user)
             )
+        )
     aggregates = session.exec(aggregate_stmt.order_by(MultipartModel.id.asc())).all()  # type: ignore[attr-defined]
     aggregate_collection_paths = {
         row.id: row.path
@@ -1750,7 +1751,13 @@ def _portable_aggregate_matches(
     return True
 
 
-def import_archive(session: Session, archive_path: Path, user: User) -> dict[str, int]:
+def import_archive(
+    session: Session,
+    archive_path: Path,
+    user: User,
+    *,
+    progress: Callable[[int, int, int, int, str | None], None] | None = None,
+) -> dict[str, int]:
     assert user.id is not None
     with zipfile.ZipFile(archive_path) as archive:
         infos = archive.infolist()
@@ -1807,6 +1814,11 @@ def import_archive(session: Session, archive_path: Path, user: User) -> dict[str
         provenance_contexts = _portable_provenance_contexts(sidecar, manifest)
 
         created_models = created_files = skipped_files = provenance_conflicts = 0
+        total_files = sum(
+            len(model.get("artifacts", [])) for model in manifest["models"]
+        )
+        if progress is not None:
+            progress(0, total_files, 0, 0, None)
         source_models: dict[int, Model] = {}
         source_files: dict[int, File] = {}
         with (
@@ -1932,6 +1944,14 @@ def import_archive(session: Session, archive_path: Path, user: User) -> dict[str
                                     FileTagLink(file_id=existing.id, tag_id=tag.id)
                                 )
                         session.commit()
+                        if progress is not None:
+                            progress(
+                                created_files + skipped_files,
+                                total_files,
+                                created_files,
+                                skipped_files,
+                                artifact_data["original_filename"],
+                            )
                         continue
                     staged = (
                         Path(tempdir)
@@ -1950,8 +1970,6 @@ def import_archive(session: Session, archive_path: Path, user: User) -> dict[str
                         file_type=FileType(artifact_data["file_type"]),
                         blob_hash=artifact_data["sha256"],
                         meta=artifact_data.get("metadata", {}),
-                        thumb_bytes=None,
-                        overwrite_thumbnail=False,
                         revision_label=artifact_data.get("revision_label"),
                         revision_status=FileRevisionStatus(
                             artifact_data["revision_status"]
@@ -1977,6 +1995,15 @@ def import_archive(session: Session, archive_path: Path, user: User) -> dict[str
                         )
                         provenance_conflicts += len(merge.conflicting_override_fields)
                     created_files += 1
+                    if progress is not None:
+                        session.commit()
+                        progress(
+                            created_files + skipped_files,
+                            total_files,
+                            created_files,
+                            skipped_files,
+                            artifact_data["original_filename"],
+                        )
                 if model_data.get("starred"):
                     exists = session.exec(
                         select(ModelStar).where(
@@ -2323,22 +2350,44 @@ def run_import_job(
     *, job_id: str, archive_path: Path, user_id: int, session_factory
 ) -> None:
     """Durable job boundary for portable imports; partial progress remains visible."""
-    registry.update(job_id, state="running", stage="ingesting")
+    registry.update(job_id, stage="ingesting")
+
+    def report(
+        processed: int,
+        total: int,
+        succeeded: int,
+        skipped: int,
+        current_item: str | None,
+    ) -> None:
+        registry.update(
+            job_id,
+            processed=processed,
+            total=total,
+            succeeded=succeeded,
+            skipped=skipped,
+            current_item=current_item,
+        )
+
     try:
         with session_factory.scoped_session() as session:
             user = session.get(User, user_id)
             if user is None:
                 raise ValueError("user_not_found")
-            result = import_archive(session, archive_path, user)
+            result = import_archive(
+                session,
+                archive_path,
+                user,
+                progress=report,
+            )
             lease = session.exec(
-                select(StagingLease).where(StagingLease.background_job_id == job_id)
+                select(StagingLease).where(StagingLease.job_id == job_id)
             ).first()
             if lease is not None:
                 session.delete(lease)
                 session.commit()
         registry.finish(
             job_id,
-            state="completed",
+            JobOutcome.COMPLETED,
             completion="complete",
             result=result,
             processed=result["created_files"] + result["skipped_files"],
@@ -2348,4 +2397,64 @@ def run_import_job(
         )
         archive_path.unlink(missing_ok=True)
     except Exception as exc:  # noqa: BLE001 - durable job boundary
-        registry.finish(job_id, state="failed", error=str(exc), retryable=True)
+        registry.finish(
+            job_id, JobOutcome.FAILED, error=failure_of(exc), retryable=True
+        )
+
+
+def _import_step(ctx) -> None:
+    from app.db.session import get_session_factory
+    from app.modules.ingestion import staging_leases
+
+    job_id = ctx.job_id
+    with get_session_factory().scoped_session() as session:
+        leases = staging_leases.job_leases(session, job_id)
+        job = registry.row(session, job_id)
+        owner = job.owner_user_id if job is not None else None
+    if not leases or owner is None or not Path(leases[0].path).exists():
+        registry.finish(job_id, JobOutcome.FAILED, error="staging_expired")
+        return
+    run_import_job(
+        job_id=job_id,
+        archive_path=Path(leases[0].path),
+        user_id=owner,
+        session_factory=get_session_factory(),
+    )
+
+
+def _cancel_import(session, subject_key: str) -> None:
+    from app.modules.ingestion import staging_leases
+
+    job_id = subject_key.split("/", 1)[1]
+    for lease in staging_leases.job_leases(session, job_id):
+        Path(lease.path).unlink(missing_ok=True)
+        session.delete(lease)
+
+
+def _retry_import(session, subject_key: str) -> bool:
+    from app.modules.ingestion import staging_leases
+
+    job_id = subject_key.split("/", 1)[1]
+    leases = staging_leases.job_leases(session, job_id)
+    if not leases or not all(Path(lease.path).exists() for lease in leases):
+        return False
+    staging_leases.renew_job_lease(session, job_id=job_id)
+    return True
+
+
+def definitions():
+    from app.db.models import LaneName
+    from app.modules.work.contracts import JobDefinition, Step
+
+    return [
+        JobDefinition(
+            name=JobKind.INGESTION_LIBRARY_IMPORT,
+            lane=LaneName.INGEST,
+            steps=(
+                Step(f"{JobKind.INGESTION_LIBRARY_IMPORT.value}.run", _import_step),
+            ),
+            cancel=_cancel_import,
+            retry=_retry_import,
+            label="Library imports",
+        )
+    ]

@@ -3,11 +3,11 @@
 from __future__ import annotations
 
 import tarfile
+import uuid
 from pathlib import Path
 
 from fastapi import (
     APIRouter,
-    BackgroundTasks,
     Depends,
     File,
     HTTPException,
@@ -15,14 +15,14 @@ from fastapi import (
     UploadFile,
     status,
 )
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse
 from sqlmodel import Session
+from starlette.background import BackgroundTask
 
 import app.modules.backups.backup.adoption as backup_adoption
 import app.modules.backups.backup.caches as backup_caches
 import app.modules.backups.backup.catalogue as backup_catalogue
 import app.modules.backups.backup.contracts as backup_contracts
-import app.modules.backups.backup.creation as backup_creation
 import app.modules.backups.backup.deletion as backup_deletion
 import app.modules.backups.backup.restore as backup_restore
 import app.modules.backups.backup.snapshot as backup_snapshot
@@ -30,12 +30,17 @@ import app.modules.backups.backup.verification as backup_verification
 import app.runtime.maintenance as backup_maintenance
 from app.core.errors import OperationError
 from app.core.logging import get_logger
-from app.core.security import require_superuser
+from app.core.security import require_auth, require_superuser
+from app.db.models import JobKind, User
 from app.db.session import get_session
+from app.modules.backups import jobs as backup_jobs
 from app.modules.backups.backup_capabilities import backup_operations
 from app.modules.backups.backup_catalogue import BackupIdentityConflictError
 from app.modules.backups.queries import source_view
 from app.modules.storage.storage import UploadTooLarge
+from app.modules.work import ActiveJobExists, nudge
+from app.modules.work import service as work_service
+from app.schemas.jobs import JobAccepted
 
 logger = get_logger(__name__)
 
@@ -44,55 +49,35 @@ router = APIRouter(prefix="/backups", tags=["backups"])
 
 @router.post(
     "",
+    response_model=JobAccepted,
     status_code=status.HTTP_202_ACCEPTED,
-    dependencies=[Depends(require_superuser)],
     summary="Create a new vault backup",
     description=(
-        "Creates a full backup (database + all stored files) as a tar.gz "
-        "archive. Runs synchronously — large vaults may take a while. "
-        "Returns the backup metadata."
+        "Queues a full backup (database + all stored files) as a background "
+        "Job and returns it. Poll GET /api/v1/jobs/{job_id}; the backup "
+        "metadata lands in the Job's result, and a refused backup (no "
+        "destination, unsupported database) ends the Job failed with its reason."
     ),
 )
 def create_backup(
-    background_tasks: BackgroundTasks,
-) -> dict:
+    current_user: User = Depends(require_superuser),
+    session: Session = Depends(get_session),
+) -> JobAccepted:
+    job_id = uuid.uuid4().hex
     try:
-        meta = backup_creation.create_backup()
-    except backup_contracts.DatabaseBackupNotSupportedError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail=str(exc),
-        ) from exc
-    except RuntimeError as exc:
-        detail = str(exc)
-        if detail == "backup_destination_required":
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail=detail,
-            ) from exc
-        if detail == "backup_all_destinations_failed":
-            return JSONResponse(
-                status_code=status.HTTP_502_BAD_GATEWAY,
-                content={"detail": detail, "run_id": getattr(exc, "run_id", None)},
-            )
-        raise
-    background_tasks.add_task(backup_deletion.purge_old_backups)
-    return {
-        "run_id": meta.run_id,
-        "outcome": meta.outcome,
-        "destination_results": meta.destination_results,
-        "backup_id": meta.id,
-        "created_at": meta.created_at,
-        "size_bytes": meta.size_bytes,
-        "file_count": meta.file_count,
-        "storage_backend": meta.storage_backend,
-        "app_version": meta.app_version,
-        "location": meta.location,
-        "archive_sha256": meta.archive_sha256,
-        "source_ref": meta.source_ref,
-        "provider_ref": meta.provider_ref,
-        "namespace": meta.namespace,
-    }
+        work_service.request(
+            session,
+            definition=JobKind.BACKUPS_CREATE,
+            subject_key=backup_jobs.MANUAL_SUBJECT,
+            owner_user_id=current_user.id,
+            job_id=job_id,
+        )
+        session.commit()
+    except ActiveJobExists as exc:
+        session.rollback()
+        raise HTTPException(status_code=409, detail="backup_in_progress") from exc
+    nudge(JobKind.BACKUPS_CREATE)
+    return JobAccepted(job_id=job_id, message="backup queued")
 
 
 @router.get(
@@ -114,9 +99,8 @@ def list_backup_runs(
     summary="Inspect one backup execution",
 )
 def get_backup_run(run_id: str) -> dict:
-    from app.modules.backups.backup_runs import reconcile_interrupted_runs, run_detail
+    from app.modules.backups.backup_runs import run_detail
 
-    reconcile_interrupted_runs()
     try:
         return run_detail(run_id)
     except LookupError as exc:
@@ -125,21 +109,38 @@ def get_backup_run(run_id: str) -> dict:
 
 @router.post(
     "/runs/destinations/{result_id}/retry",
-    dependencies=[Depends(require_superuser)],
+    dependencies=[Depends(require_auth)],
+    status_code=202,
     summary="Retry one exact failed backup destination",
+    description=(
+        "Queues a Job that republishes the exact archive to this destination "
+        "from verified surviving bytes. Poll GET /api/v1/jobs/{job_id}; the "
+        "destination as it now stands is the Job's result, and a refused "
+        "retry ends the Job failed with its reason."
+    ),
 )
-def retry_backup_destination(result_id: str) -> dict:
+def retry_backup_destination(
+    result_id: str,
+    current_user: User = Depends(require_superuser),
+    session: Session = Depends(get_session),
+) -> JobAccepted:
     from app.modules.backups.backup_replica_retry import RetryRefused
-    from app.modules.backups.retry_commands import retry_destination
+    from app.modules.backups.retry_commands import request_retry
 
     try:
-        return retry_destination(result_id)
+        assert current_user.id is not None
+        job_id = request_retry(session, result_id, owner_user_id=current_user.id)
+        session.commit()
     except LookupError as exc:
+        session.rollback()
         raise HTTPException(
             status_code=404, detail="backup_destination_result_not_found"
         ) from exc
     except RetryRefused as exc:
+        session.rollback()
         raise HTTPException(status_code=409, detail=str(exc)) from exc
+    nudge(JobKind.BACKUPS_RETRY_DESTINATION)
+    return JobAccepted(job_id=job_id, message="backup retry queued")
 
 
 @router.post(
@@ -401,7 +402,6 @@ def verify_backup(backup_id: str, source_ref: str | None = None) -> dict:
     summary="Download a backup archive",
 )
 def download_backup(
-    background_tasks: BackgroundTasks,
     backup_id: str,
     source_ref: str | None = None,
 ) -> FileResponse:
@@ -430,11 +430,12 @@ def download_backup(
     except Exception as exc:
         logger.exception("backup %s download failed", backup_id)
         raise HTTPException(status_code=500, detail=str(exc)) from exc
-    background_tasks.add_task(backup_caches.cleanup_backup_cache, archive_path)
+    # Response cleanup, not background work: it runs once the file is sent.
     return FileResponse(
         archive_path,
         media_type="application/gzip",
         filename=archive_filename,
+        background=BackgroundTask(backup_caches.cleanup_backup_cache, archive_path),
     )
 
 
@@ -479,7 +480,11 @@ def delete_backup(backup_id: str, source_ref: str | None = None) -> dict:
         "files. It is strongly recommended to create a fresh backup first."
     ),
 )
-def restore_backup(backup_id: str, source_ref: str | None = None, session: Session = Depends(get_session)) -> dict:
+def restore_backup(
+    backup_id: str,
+    source_ref: str | None = None,
+    session: Session = Depends(get_session),
+) -> dict:
     # Authorization has completed. Release its read transaction before the
     # restore coordinator locks/replaces PostgreSQL tables; keeping that same
     # request's users-table lock until response teardown would deadlock restore.
@@ -511,4 +516,9 @@ def restore_backup(backup_id: str, source_ref: str | None = None, session: Sessi
     except Exception as exc:
         logger.exception("restore %s failed", backup_id)
         raise HTTPException(status_code=500, detail=str(exc)) from exc
+    # The restored database is the new source of truth for every Job; the
+    # engine's executions belong to the database that was replaced.
+    from app.bootstrap.work import after_restore
+
+    after_restore()
     return result

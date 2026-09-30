@@ -34,7 +34,9 @@ class TestCapacityPolicy:
 
     @pytest.mark.parametrize("available,outcome", [(None, "warn"), (0, "deny")])
     def test_distinguishes_unknown_capacity_from_zero(self, available, outcome):
-        assert CapacityPolicy().evaluate(1, available_bytes=available).outcome == outcome
+        assert (
+            CapacityPolicy().evaluate(1, available_bytes=available).outcome == outcome
+        )
 
     def test_warns_when_percentage_headroom_cannot_be_measured(self):
         decision = CapacityPolicy(10, 5).evaluate(1, available_bytes=100)

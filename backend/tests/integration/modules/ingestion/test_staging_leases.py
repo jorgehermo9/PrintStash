@@ -48,9 +48,9 @@ from sqlmodel import Session, select
 import app.modules.ingestion.staging_cleanup as staging_cleanup
 from alembic import command
 from app.core.time import utcnow
-from app.db.models import BackgroundJob, InboxItem, StagingLease, User
+from app.db.models import InboxItem, JobKind, StagingLease, User
 from app.modules.ingestion import staging_leases
-from tests.factories import build_user
+from tests.factories import build_job, build_user
 from tests.paths import ALEMBIC_DIR, ALEMBIC_INI
 
 
@@ -61,14 +61,27 @@ def _inbox(session: Session, user: User) -> InboxItem:
     return row
 
 
-def _job(session: Session, user: User) -> BackgroundJob:
-    row = BackgroundJob(id="lease-job", owner_user_id=user.id)
-    session.add(row)
-    session.flush()
-    return row
-
-
 class TestEntryHelpers:
+    def test_cleans_owned_file_without_hardlinks(self, tmp_path, monkeypatch):
+        path = tmp_path / "owned"
+        path.write_bytes(b"owned staging bytes")
+        info = path.stat()
+
+        def unsupported(*args, **kwargs):
+            raise OSError(errno.EPERM, "no hard links")
+
+        monkeypatch.setattr(os, "link", unsupported)
+        assert staging_leases._quarantine_owned_file(
+            path,
+            receipt_id="receipt-1",
+            device=info.st_dev,
+            inode=info.st_ino,
+            ctime_ns=info.st_ctime_ns,
+            size_bytes=info.st_size,
+        )
+        assert not path.exists()
+        assert not (tmp_path / ".printstash-staging-quarantine").exists()
+
     @pytest.mark.parametrize("receipt_id", ["", "unsafe/receipt"])
     def test_unsafe_receipt_id_has_no_quarantine_destination(
         self, tmp_path: Path, receipt_id: str
@@ -127,13 +140,13 @@ class TestTransfer:
         lease = db_session.exec(
             select(StagingLease).where(StagingLease.inbox_item_id == inbox.id)
         ).one()
-        assert lease.background_job_id is None
-        job = _job(db_session, user)
+        assert lease.job_id is None
+        job = build_job(db_session, kind=JobKind.INGESTION_INBOX_IMPORT, owner=user)
         transferred = staging_leases.transfer_inbox_to_job(
             db_session, inbox_item_id=inbox.id, job_id=job.id
         )
         assert transferred.inbox_item_id is None
-        assert transferred.background_job_id == job.id
+        assert transferred.job_id == job.id
         db_session.commit()
         with pytest.raises(IntegrityError):
             db_session.add(
@@ -371,12 +384,20 @@ class TestUnlink:
         # lease charged until an operator/retry can prove the original is gone.
         assert db_session.get(StagingLease, lease.id) is not None
 
+    @pytest.mark.parametrize("hardlinks", [True, False], ids=["hardlinks", "unraid"])
     def test_dismiss_preserves_both_objects_when_path_changes_during_quarantine(
         self,
         db_session: Session,
         tmp_path: Path,
         monkeypatch: pytest.MonkeyPatch,
+        hardlinks: bool,
     ) -> None:
+        if not hardlinks:
+
+            def unsupported(*args, **kwargs):
+                raise OSError(errno.EPERM, "no hard links")
+
+            monkeypatch.setattr(os, "link", unsupported)
         user = build_user(db_session, "lease-quarantine-race")
         inbox = _inbox(db_session, user)
         staged = tmp_path / "race.3mf"

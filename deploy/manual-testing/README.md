@@ -247,7 +247,7 @@ LIBRARY_ID="$(jq -r .id <<<"$LIBRARY")"
 JOB_ID="$(curl -fsS -X POST "$API/api/v1/libraries/$LIBRARY_ID/scan" \
   -H "Authorization: Bearer $ADMIN_TOKEN" | jq -r .job_id)"
 for attempt in $(seq 1 30); do
-  JOB_JSON="$(curl -fsS "$API/api/v1/ingest/jobs/$JOB_ID" -H "Authorization: Bearer $ADMIN_TOKEN")"
+  JOB_JSON="$(curl -fsS "$API/api/v1/jobs/$JOB_ID" -H "Authorization: Bearer $ADMIN_TOKEN")"
   JOB_STATE="$(jq -r .state <<<"$JOB_JSON")"
   case "$JOB_STATE" in completed|failed|cancelled) break;; esac
   sleep 1
@@ -267,7 +267,7 @@ cp deploy/manual-testing/external-library/fixture-a/manual.gcode \
 COLLISION_JOB_ID="$(curl -fsS -X POST "$API/api/v1/libraries/$LIBRARY_ID/scan" \
   -H "Authorization: Bearer $ADMIN_TOKEN" | jq -r .job_id)"
 for attempt in $(seq 1 30); do
-  COLLISION_JOB_JSON="$(curl -fsS "$API/api/v1/ingest/jobs/$COLLISION_JOB_ID" \
+  COLLISION_JOB_JSON="$(curl -fsS "$API/api/v1/jobs/$COLLISION_JOB_ID" \
     -H "Authorization: Bearer $ADMIN_TOKEN")"
   COLLISION_STATE="$(jq -r .state <<<"$COLLISION_JOB_JSON")"
   case "$COLLISION_STATE" in completed|failed|cancelled) break;; esac

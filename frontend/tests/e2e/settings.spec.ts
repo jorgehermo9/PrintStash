@@ -23,6 +23,57 @@ import { useMockApi } from "./_setup";
 useMockApi();
 
 test.describe("settings route", () => {
+  test("scheduled backup progress appears in Tasks", async ({ page }) => {
+    const now = "2026-01-01T00:00:00Z";
+    await page.route("**/api/v1/jobs**", async (route) => {
+      if (new URL(route.request().url()).pathname !== "/api/v1/jobs") {
+        await route.continue();
+        return;
+      }
+      await route.fulfill({
+        json: [
+          {
+            job_id: "scheduled-backup-1",
+            kind: "backups.automatic",
+            state: "running",
+            priority: "backfill",
+            attempts: 1,
+            resubmits: 0,
+            model_id: null,
+            file_id: null,
+            error: null,
+            retryable: false,
+            created_at: now,
+            updated_at: now,
+            started_at: now,
+            finished_at: null,
+            committed_at: null,
+            step: 1,
+            total_steps: 1,
+            label: "Automatic backups",
+            progress: null,
+            result: null,
+            stage: "archiving",
+            current_item: null,
+            processed: 4,
+            total: 10,
+            succeeded: 0,
+            deduplicated: 0,
+            skipped: 0,
+            failed: 0,
+            completion: null,
+            failed_items: [],
+          },
+        ],
+      });
+    });
+    await page.goto("/settings?section=backup");
+
+    await page.getByRole("button", { name: "Notifications" }).click();
+
+    await expect(page.getByText("Archiving 4 of 10 files · continues in background")).toBeVisible();
+  });
+
   test("settings sections are deep-linkable and preserve navigation state", async ({ page }) => {
     await page.goto("/settings?section=trash");
     await expect(page.getByRole("heading", { name: "Trash retention" })).toBeVisible();
@@ -71,7 +122,7 @@ test.describe("settings route", () => {
             size_bytes: 4096,
             file_count: 12,
             storage_backend: "local",
-            app_version: "0.13.0",
+            app_version: "0.14.0",
             location: "local",
             source_ref: "9".repeat(64),
             namespace: "backup/data/backups",
@@ -182,7 +233,7 @@ test.describe("settings route", () => {
     await Promise.all([
       page.waitForResponse(
         (response) =>
-          response.url().includes("/api/v1/files/thumbnails/rebuild?force=true") &&
+          response.url().includes("/api/v1/admin/work/derivatives/thumbnail/regenerate") &&
           response.request().method() === "POST",
       ),
       page.getByRole("button", { name: "Recreate all images" }).click(),
@@ -198,5 +249,83 @@ test.describe("settings route", () => {
       "href",
       "https://github.com/xiao-villamor/PrintStash/releases/tag/v0.10.1",
     );
+  });
+
+  test("background work cancels a queue only after confirmation", async ({ page }) => {
+    await page.goto("/settings?section=work");
+
+    await expect(page.getByRole("heading", { name: "What's happening now" })).toBeVisible();
+    await expect(
+      page.getByText("Preview or metadata failures across the library: 1", { exact: false }),
+    ).toBeVisible();
+    await page.getByText("Advanced controls").click();
+    await page.getByRole("tab", { name: "Worker settings" }).click();
+    await expect(page.getByLabel("Concurrency for derive.native")).toHaveValue("2");
+    await expect(page.getByText("mock-host")).toBeVisible();
+    await page.getByRole("tab", { name: "All work types" }).click();
+
+    await page.getByRole("button", { name: "Cancel queued" }).click();
+    const dialog = page.getByRole("dialog");
+    await expect(dialog).toContainText("Mesh previews and geometry");
+    await Promise.all([
+      page.waitForRequest(
+        (request) =>
+          request.url().endsWith("/api/v1/admin/work/cancel-queued") &&
+          request.method() === "POST" &&
+          request.postData() === JSON.stringify({ definition: "derivatives.mesh" }),
+      ),
+      dialog.getByRole("button", { name: "Cancel queued" }).click(),
+    ]);
+    await expect(page.getByText("4 queued Jobs cancelled")).toBeVisible();
+  });
+
+  test("background work leads a new user to a model's preview status", async ({ page }) => {
+    await page.goto("/settings?section=work", { waitUntil: "networkidle" });
+
+    await expect(page.getByRole("heading", { name: "What's happening now" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "In progress" })).toBeVisible();
+    await expect(page.getByText("Preview of skadis kitchen roll screw")).toBeVisible();
+    await expect(
+      page.getByRole("progressbar", { name: "Preview of skadis kitchen roll screw" }),
+    ).toHaveAttribute("aria-valuenow", "45");
+    await expect(page.getByText(/Open the model and look in Files/)).toBeVisible();
+    await expect(page.getByLabel("Concurrency for derive.native")).toHaveCount(0);
+    await expect(page.getByRole("tab", { name: "All work types" })).toHaveCount(0);
+
+    await page.getByRole("link", { name: "Browse models" }).click();
+    await expect(page).toHaveURL(/\/$/);
+  });
+
+  test("background work stops a selected preview job", async ({ page }) => {
+    await page.goto("/settings?section=work");
+    const preview = page
+      .getByRole("listitem")
+      .filter({ hasText: "Preview of skadis kitchen roll screw" });
+    await expect(preview.getByText("45%", { exact: false })).toBeVisible();
+
+    await preview.getByRole("button", { name: "Cancel job" }).click();
+    await expect(page.getByRole("dialog")).toContainText(
+      "Cancel Preview of skadis kitchen roll screw?",
+    );
+    await Promise.all([
+      page.waitForRequest(
+        (request) =>
+          request.method() === "POST" &&
+          request.url().endsWith("/api/v1/jobs/mock-preview-1/cancel"),
+      ),
+      page.getByRole("dialog").getByRole("button", { name: "Cancel job" }).click(),
+    ]);
+    await expect(preview).toHaveCount(0);
+  });
+
+  test("a mobile work deep link shows its selected settings tab", async ({ page }) => {
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.goto("/settings?section=work", { waitUntil: "networkidle" });
+
+    const selected = page.getByRole("tab", { name: "Background work" });
+    await expect(selected).toHaveAttribute("aria-selected", "true");
+    await expect(selected).toBeInViewport();
+    await expect(page.getByRole("heading", { name: "What's happening now" })).toBeVisible();
+    await expect(page).toHaveURL(/\/settings\?section=work$/);
   });
 });

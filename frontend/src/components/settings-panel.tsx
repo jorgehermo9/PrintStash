@@ -6,11 +6,13 @@ import { knownUiText } from "@/lib/locale";
 import { formatNumber } from "@/lib/format";
 import { currentLocale } from "@/lib/locale";
 import { uiText } from "@/lib/locale";
+import { ApiError } from "@/lib/errors";
 import { useUiLocale } from "@/lib/i18n";
-import { collectionDisplayPath } from "@/lib/collection-display";
+import { useQuery } from "@tanstack/react-query";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { BackupRunHistory } from "@/components/backup-run-history";
+import { CollectionPicker } from "@/components/collection-picker";
 import {
   Bell,
   Boxes,
@@ -29,6 +31,7 @@ import {
   FolderTree,
   HardDrive,
   HeartPulse,
+  Activity,
   Info,
   Images,
   KeyRound,
@@ -49,6 +52,7 @@ import {
   Upload,
 } from "lucide-react";
 import { ConfirmModal } from "@/components/ui/confirm-modal";
+import { DropdownMenu } from "@/components/ui/dropdown-menu";
 import { PageHeader } from "@/components/ui/page-header";
 import { Badge } from "@/components/ui/badge";
 import { Button, buttonVariants } from "@/components/ui/button";
@@ -74,6 +78,7 @@ import { SpoolmanConnectCard } from "@/components/spoolman-connect-card";
 import { OidcSettingsCard } from "@/components/oidc-settings-card";
 import { AiSearchSettings } from "@/components/ai-search-settings";
 import { MaintenancePanel } from "@/components/maintenance-panel";
+import { BackgroundWorkPanel } from "@/components/background-work-panel";
 import { BrandMark } from "@/components/brand-mark";
 import {
   createApiKey,
@@ -94,7 +99,8 @@ import {
   downloadModelExport,
   downloadLibraryArchive,
   importLibraryArchive,
-  rebuildModelThumbnails,
+  regenerateDerivatives,
+  backupFromJob,
   getHealthDetails,
   getActiveGcPlan,
   getLatestRelease,
@@ -104,7 +110,6 @@ import {
   listUnownedLocalBackups,
   listUnownedRemoteBackups,
   listCollectionPermissions,
-  listCollections,
   listPrinterPermissions,
   listPrinters,
   listApiKeys,
@@ -165,12 +170,11 @@ import {
   type PreviewQuality,
   type ScreenshotScale,
 } from "@/lib/preview-preferences";
-import { trackImportJob } from "@/lib/task-center";
+import { waitForImportJob } from "@/lib/task-center";
 import { prepareBrowserExtensionSetup } from "@/lib/browser-extension-setup";
 import type {
   ApiKeyRead,
-  CollectionPermissionRead,
-  CollectionRead,
+  CollectionNodeRead,
   CollectionRole,
   PrinterPermissionRead,
   PrinterRead,
@@ -192,6 +196,7 @@ type SettingsSection =
   | "remote-storage"
   | "imports"
   | "maintenance"
+  | "work"
   | "ai-search"
   | "libraries"
   | "notifications"
@@ -215,6 +220,7 @@ const SETTINGS_SECTIONS: {
   { id: "imports", labelKey: "settings.imports", icon: Download },
   { id: "ai-search", labelKey: "aiSearch.settingsTitle", icon: Search },
   { id: "maintenance", labelKey: "settings.maintenance", icon: HeartPulse },
+  { id: "work", labelKey: "settings.backgroundWork", icon: Activity },
   { id: "libraries", labelKey: "settings.libraries", icon: FolderSync },
   { id: "notifications", labelKey: "settings.notifications", icon: Bell },
   { id: "sso", labelKey: "settings.sso", icon: ShieldCheck },
@@ -454,6 +460,15 @@ export function SettingsPanel() {
   // during render; mirroring it into state needed an effect to re-sync on every
   // deep link, back button, and replace.
   const activeSection = settingsSection(searchParams.get("section"));
+  const mobileTabsRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const tabs = mobileTabsRef.current?.querySelector<HTMLElement>('[role="tablist"]');
+    const selected = tabs?.querySelector<HTMLElement>('[data-active="true"]');
+    if (tabs && selected) {
+      tabs.scrollLeft = selected.offsetLeft - (tabs.clientWidth - selected.clientWidth) / 2;
+    }
+  }, [activeSection, user?.is_superuser]);
   const [health, setHealth] = useState<HealthResponse | null>(null);
   const [releaseStatus, setReleaseStatus] = useState<ReleaseStatus | null>(null);
   const [releaseChecking, setReleaseChecking] = useState(false);
@@ -472,14 +487,22 @@ export function SettingsPanel() {
   const [newUserEmail, setNewUserEmail] = useState("");
   const [newUserPassword, setNewUserPassword] = useState("");
   const [passwordDrafts, setPasswordDrafts] = useState<Record<number, string>>({});
-  const [accessCollections, setAccessCollections] = useState<CollectionRead[]>([]);
-  const [collectionPermissions, setCollectionPermissions] = useState<CollectionPermissionRead[]>(
-    [],
-  );
+  const [accessCollection, setAccessCollection] = useState<CollectionNodeRead | null>(null);
+  const [accessPickerOpen, setAccessPickerOpen] = useState(false);
   const [accessUserId, setAccessUserId] = useState<number | "">("");
-  const [accessCollectionId, setAccessCollectionId] = useState<number | "">("");
   const [accessRole, setAccessRole] = useState<CollectionRole>("view");
-  const [accessBusy, setAccessBusy] = useState<"load" | "save" | string | null>(null);
+  const [accessBusy, setAccessBusy] = useState<"save" | string | null>(null);
+  const accessCollectionId = accessCollection?.id;
+  const collectionPermissionsQuery = useQuery({
+    queryKey: ["collection-permissions", accessCollectionId],
+    queryFn: () => {
+      if (accessCollectionId === undefined)
+        throw new Error("Collection access requires a selection");
+      return listCollectionPermissions(accessCollectionId);
+    },
+    enabled: !!user?.is_superuser && accessCollectionId !== undefined,
+  });
+  const collectionPermissions = collectionPermissionsQuery.data ?? [];
   const [accessPrinters, setAccessPrinters] = useState<PrinterRead[]>([]);
   const [printerPermissions, setPrinterPermissions] = useState<PrinterPermissionRead[]>([]);
   const [printerAccessUserId, setPrinterAccessUserId] = useState<number | "">("");
@@ -555,7 +578,8 @@ export function SettingsPanel() {
   const [restartConfirmOpen, setRestartConfirmOpen] = useState(false);
   const [restartBusy, setRestartBusy] = useState(false);
   const visibleSettingsSections = SETTINGS_SECTIONS.filter(
-    (section) => !["sso", "maintenance", "ai-search"].includes(section.id) || user?.is_superuser,
+    (section) =>
+      !["sso", "maintenance", "work", "ai-search"].includes(section.id) || user?.is_superuser,
   );
 
   function changeSection(section: SettingsSection) {
@@ -569,23 +593,6 @@ export function SettingsPanel() {
   const refreshUsers = useCallback(async () => {
     if (!user?.is_superuser) return;
     setUsers(await listAdminUsers());
-  }, [user]);
-
-  const refreshCollectionAccess = useCallback(async () => {
-    if (!user?.is_superuser) return;
-    setAccessBusy("load");
-    try {
-      const rows = await listCollections();
-      const permissionGroups = await Promise.all(
-        rows.map((collection) => listCollectionPermissions(collection.id)),
-      );
-      setAccessCollections(rows);
-      setCollectionPermissions(permissionGroups.flat());
-    } catch (e) {
-      toast.error(e);
-    } finally {
-      setAccessBusy(null);
-    }
   }, [user]);
 
   const refreshPrinterAccess = useCallback(async () => {
@@ -646,10 +653,9 @@ export function SettingsPanel() {
       // the call but not the `await` inside it, and reads the in-flight flags as cascades.
       // oxlint-disable-next-line react/set-state-in-effect -- results are applied after the fetch resolves
       refreshUsers().catch(() => {});
-      refreshCollectionAccess().catch(() => {});
       refreshPrinterAccess().catch(() => {});
     }
-  }, [user, refreshUsers, refreshCollectionAccess, refreshPrinterAccess]);
+  }, [user, refreshUsers, refreshPrinterAccess]);
 
   const loadTrash = useCallback(async () => {
     if (!user) {
@@ -894,9 +900,9 @@ export function SettingsPanel() {
   async function recreateModelImages() {
     setPreviewBusy("rebuild");
     try {
-      const response = await rebuildModelThumbnails();
-      trackImportJob(response.job_id, "Recreate Model preview images");
-      toast.success(uiText("Model preview recreation queued. Follow it in Tasks."));
+      // Every current preview stays visible until its replacement is ready.
+      await regenerateDerivatives("thumbnail", "all");
+      toast.success(uiText("Model preview recreation queued. Follow it in Background work."));
     } catch (e) {
       toast.error(e);
     } finally {
@@ -907,7 +913,10 @@ export function SettingsPanel() {
   async function handleBackupNow() {
     setBackingUp(true);
     try {
-      const meta = await createBackup();
+      const accepted = await createBackup();
+      const job = await waitForImportJob(accepted.job_id, "Backup");
+      const meta = backupFromJob(job);
+      if (!meta) throw new Error(job.error ?? "backup_failed");
       const mb = formatNumber(meta.size_bytes / 1024 / 1024, {
         maximumFractionDigits: 1,
         minimumFractionDigits: 1,
@@ -1185,13 +1194,13 @@ export function SettingsPanel() {
   }
 
   async function saveCollectionAccess() {
-    if (!accessUserId || !accessCollectionId) return;
+    if (!accessUserId || !accessCollection) return;
     setAccessBusy("save");
     try {
-      await updateCollectionPermission(Number(accessCollectionId), Number(accessUserId), {
+      await updateCollectionPermission(accessCollection.id, Number(accessUserId), {
         role: accessRole,
       });
-      await refreshCollectionAccess();
+      await collectionPermissionsQuery.refetch();
       toast.success(uiText("Collection access saved."));
     } catch (e) {
       toast.error(e);
@@ -1204,9 +1213,7 @@ export function SettingsPanel() {
     setAccessBusy(`${collectionId}:${userId}`);
     try {
       await deleteCollectionPermission(collectionId, userId);
-      setCollectionPermissions((current) =>
-        current.filter((row) => row.collection_id !== collectionId || row.user_id !== userId),
-      );
+      await collectionPermissionsQuery.refetch();
       toast.success(uiText("Collection access removed."));
     } catch (e) {
       toast.error(e);
@@ -1451,7 +1458,18 @@ export function SettingsPanel() {
         }),
       );
     } catch (e) {
-      toast.error(e);
+      if (e instanceof ApiError && e.status === 409 && e.code === "gc_plan_active") {
+        try {
+          const activePlan = await getActiveGcPlan();
+          if (activePlan === null) throw e;
+          setGcPlan(activePlan);
+          setGcDigestConfirmation("");
+        } catch (readError) {
+          toast.error(readError);
+        }
+      } else {
+        toast.error(e);
+      }
     } finally {
       setTrashBusy(null);
     }
@@ -1608,13 +1626,6 @@ export function SettingsPanel() {
   const selectedUserPermissions = accessUserId
     ? collectionPermissions.filter((row) => row.user_id === Number(accessUserId))
     : [];
-  const collectionById = new Map(accessCollections.map((row) => [row.id, row]));
-  const selectedUserGrantedCollectionIds = new Set(
-    selectedUserPermissions.map((row) => row.collection_id),
-  );
-  const grantableCollections = accessCollections.filter(
-    (row) => !selectedUserGrantedCollectionIds.has(row.id),
-  );
   const selectedPrinterPermissions = printerAccessUserId
     ? printerPermissions.filter((row) => row.user_id === Number(printerAccessUserId))
     : [];
@@ -1775,7 +1786,7 @@ export function SettingsPanel() {
 
         <PageHeader title={t("settings.title")} description={t("settings.description")} />
 
-        <div className="border-b border-border pb-3 lg:hidden">
+        <div ref={mobileTabsRef} className="border-b border-border pb-3 lg:hidden">
           <TabBar
             tabs={visibleSettingsSections.map((section) => {
               const Icon = section.icon;
@@ -2210,13 +2221,13 @@ export function SettingsPanel() {
                     action={
                       <button
                         type="button"
-                        onClick={refreshCollectionAccess}
-                        disabled={accessBusy === "load"}
+                        onClick={() => void collectionPermissionsQuery.refetch()}
+                        disabled={!accessCollection || collectionPermissionsQuery.isFetching}
                         className={BTN_ICON}
                         title={uiText("Refresh collection access")}
                       >
                         <RefreshCw
-                          className={`h-4 w-4 ${accessBusy === "load" ? "animate-spin" : ""}`}
+                          className={`h-4 w-4 ${collectionPermissionsQuery.isFetching ? "animate-spin" : ""}`}
                         />
                       </button>
                     }
@@ -2231,10 +2242,8 @@ export function SettingsPanel() {
                             value={accessUserId}
                             onChange={(event) => {
                               setAccessUserId(event.target.value ? Number(event.target.value) : "");
-                              setAccessCollectionId("");
                             }}
                             className={INPUT}
-                            disabled={accessBusy === "load"}
                           >
                             <option value="">{uiText("Select user")}</option>
                             {nonSuperUsers.map((row) => (
@@ -2244,28 +2253,40 @@ export function SettingsPanel() {
                             ))}
                           </select>
                         </label>
-                        <label className="block space-y-1">
+                        <div className="block space-y-1">
                           <span className="block font-mono text-3xs uppercase tracking-wider text-muted-foreground">
                             {uiText("Collection")}
                           </span>
-                          <select
-                            value={accessCollectionId}
-                            onChange={(event) =>
-                              setAccessCollectionId(
-                                event.target.value ? Number(event.target.value) : "",
-                              )
+                          <DropdownMenu
+                            open={accessPickerOpen}
+                            onOpenChange={setAccessPickerOpen}
+                            role="dialog"
+                            align="start"
+                            contentClassName="w-80 max-w-[90vw] p-2"
+                            trigger={
+                              <button
+                                type="button"
+                                data-menu-trigger
+                                onClick={() => setAccessPickerOpen((open) => !open)}
+                                aria-haspopup="dialog"
+                                aria-expanded={accessPickerOpen}
+                                className={`${INPUT} w-full text-left`}
+                              >
+                                {accessCollection?.display_path ?? uiText("Select collection")}
+                              </button>
                             }
-                            className={INPUT}
-                            disabled={!accessUserId || accessBusy === "load"}
                           >
-                            <option value="">{uiText("Select collection")}</option>
-                            {grantableCollections.map((row) => (
-                              <option key={row.id} value={row.id}>
-                                {collectionDisplayPath(grantableCollections, row.path)}
-                              </option>
-                            ))}
-                          </select>
-                        </label>
+                            <CollectionPicker
+                              minRole="view"
+                              selectedPath={accessCollection?.path ?? null}
+                              emptyLabel={uiText("No collections found.")}
+                              onSelect={(collection) => {
+                                setAccessCollection(collection);
+                                setAccessPickerOpen(false);
+                              }}
+                            />
+                          </DropdownMenu>
+                        </div>
                         <label className="block space-y-1">
                           <span className="block font-mono text-3xs uppercase tracking-wider text-muted-foreground">
                             {uiText("Role")}
@@ -2276,7 +2297,7 @@ export function SettingsPanel() {
                               setAccessRole(selectedOption(COLLECTION_ROLES, event.target.value))
                             }
                             className={INPUT}
-                            disabled={!accessUserId || !accessCollectionId || accessBusy === "load"}
+                            disabled={!accessUserId || !accessCollection}
                           >
                             <option value="view">{uiText("View")}</option>
                             <option value="edit">{uiText("Edit")}</option>
@@ -2286,7 +2307,7 @@ export function SettingsPanel() {
                         <button
                           type="button"
                           onClick={saveCollectionAccess}
-                          disabled={!accessUserId || !accessCollectionId || accessBusy === "save"}
+                          disabled={!accessUserId || !accessCollection || accessBusy === "save"}
                           className={`${BTN_PRIMARY} self-end`}
                         >
                           {accessBusy === "save" ? (
@@ -2304,7 +2325,26 @@ export function SettingsPanel() {
                           <span>{uiText("Role")}</span>
                           <span>{uiText("Remove")}</span>
                         </div>
-                        {!accessUserId ? (
+                        {!accessCollection ? (
+                          <p className="px-3 py-4 text-sm text-muted-foreground">
+                            {uiText("Select a collection to review grants.")}
+                          </p>
+                        ) : collectionPermissionsQuery.isError ? (
+                          <div role="alert" className="flex items-center gap-2 px-3 py-4 text-sm">
+                            <span>{uiText("Collection access could not be loaded.")}</span>
+                            <Button
+                              size="xs"
+                              variant="outline"
+                              onClick={() => void collectionPermissionsQuery.refetch()}
+                            >
+                              {uiText("Retry")}
+                            </Button>
+                          </div>
+                        ) : collectionPermissionsQuery.isPending ? (
+                          <p role="status" className="px-3 py-4 text-sm text-muted-foreground">
+                            {uiText("Loading…")}
+                          </p>
+                        ) : !accessUserId ? (
                           <p className="px-3 py-4 text-sm text-muted-foreground">
                             {uiText("Select a user to review collection grants.")}
                           </p>
@@ -2315,7 +2355,6 @@ export function SettingsPanel() {
                           </p>
                         ) : (
                           selectedUserPermissions.map((row) => {
-                            const collection = collectionById.get(row.collection_id);
                             const busyKey = `${row.collection_id}:${row.user_id}`;
                             return (
                               <div
@@ -2324,13 +2363,13 @@ export function SettingsPanel() {
                               >
                                 <div className="min-w-0">
                                   <p className="truncate text-sm text-foreground">
-                                    {collection?.path ??
+                                    {accessCollection?.display_path ??
                                       uiText("Collection #{value1}", {
                                         value1: String(row.collection_id),
                                       })}
                                   </p>
                                   <p className="text-xs text-muted-foreground">
-                                    {collection?.model_count ?? 0}
+                                    {accessCollection?.model_count ?? 0}
                                     {uiText(" models")}
                                   </p>
                                 </div>
@@ -3370,6 +3409,8 @@ export function SettingsPanel() {
             {activeSection === "ai-search" && user?.is_superuser && <AiSearchSettings />}
 
             {activeSection === "maintenance" && user?.is_superuser && <MaintenancePanel />}
+
+            {activeSection === "work" && user?.is_superuser && <BackgroundWorkPanel />}
 
             {activeSection === "libraries" && (
               <div className="space-y-6 animate-panel-in">

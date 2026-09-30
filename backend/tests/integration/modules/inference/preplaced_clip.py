@@ -92,8 +92,9 @@ class TestPreplacedClip:
         )
         generation = store.initialize(get_session_factory(), provider)
         file = make_file(make_model(), filename="red.stl")
-        run = runs.start(db_session, actor)
-        run, token = runs.claim(db_session)
+        started = runs.start(db_session, actor)
+        token = "job:1"
+        run = runs.take(db_session, started.id, token)
         run.state = "running"
         db_session.add(run)
         db_session.commit()
@@ -111,7 +112,7 @@ class TestPreplacedClip:
             input_hash=file.sha256,
             vector=vector,
             run_id=run.id,
-            lease_token=token,
+            writer=token,
         )
         response = search(
             db_session, get_session_factory(), actor, SearchRequest(text="a red object")

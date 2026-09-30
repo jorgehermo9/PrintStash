@@ -13,20 +13,25 @@ scheduling, stays real.
 from __future__ import annotations
 
 import hashlib
+from collections.abc import Callable
 from typing import Any
 
 import pytest
 from sqlalchemy import delete
-from sqlmodel import Session
+from sqlmodel import Session, col, select
 
 from app.db.models import (
     CaptureUploadSlot,
     InboxItem,
     InboxItemState,
+    Job,
+    JobKind,
+    JobState,
     StagingLease,
     StorageDeleteIntent,
     User,
 )
+from app.db.session import get_session_factory
 from app.modules.ingestion import inbox
 from app.schemas.inbox import CaptureUploadSlotsCreate
 
@@ -44,27 +49,54 @@ def _isolate_capture_slot_lifecycle_rows(db_session: Session) -> None:
 
 @pytest.fixture
 def no_egress(monkeypatch: pytest.MonkeyPatch) -> list[int]:
-    """Stop the source URL being resolved, and record what resolve was scheduled for."""
+    """Stop the source URL being resolved, and record what resolve ran for.
+
+    Resolving is the ``ingestion.inbox_resolve`` Job's step, so the list fills when a test
+    drains the engine. The stand-in moves the item on to review exactly as a
+    real resolve does, or the resolve source would keep reporting it.
+    """
     monkeypatch.setattr(inbox.importer, "validate_public_url", lambda _url: None)
-    scheduled: list[int] = []
+    resolved: list[int] = []
 
     async def fake_resolve(item_id: int) -> None:
-        scheduled.append(item_id)
+        resolved.append(item_id)
+        with get_session_factory().scoped_session() as session:
+            row = session.get(InboxItem, item_id)
+            if row is not None and row.state == InboxItemState.CAPTURED:
+                row.state = InboxItemState.REVIEW
+                session.add(row)
+                session.commit()
 
     monkeypatch.setattr(inbox, "resolve", fake_resolve)
-    return scheduled
+    return resolved
 
 
 @pytest.fixture
-def imports_run(monkeypatch: pytest.MonkeyPatch) -> list[tuple[int, list[str]]]:
-    """Record what the router scheduled instead of running a real import."""
-    scheduled: list[tuple[int, list[str]]] = []
+def queued_imports() -> Callable[[], list[tuple[int, list[str]]]]:
+    """What the router queued: each queued import Job's item and its selection.
 
-    async def fake_run_import(item_id: int, selected_ids: list[str], _factory) -> None:
-        scheduled.append((item_id, selected_ids))
+    Nothing drains the engine here, so an accepted import stays queued and the
+    selection it will run is the one recorded on the item.
+    """
 
-    monkeypatch.setattr(inbox, "run_import", fake_run_import)
-    return scheduled
+    def read() -> list[tuple[int, list[str]]]:
+        with get_session_factory().scoped_session() as session:
+            rows = session.exec(
+                select(InboxItem)
+                .join(Job, col(Job.id) == col(InboxItem.job_id))
+                .where(
+                    col(Job.kind) == JobKind.INGESTION_INBOX_IMPORT,
+                    col(Job.state) == JobState.QUEUED,
+                )
+                .order_by(col(InboxItem.id))
+            ).all()
+            return [
+                (row.id, inbox.selected_ids(row.manifest_json))
+                for row in rows
+                if row.id is not None
+            ]
+
+    return read
 
 
 def capture_source(

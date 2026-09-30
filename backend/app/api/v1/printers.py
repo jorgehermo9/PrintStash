@@ -861,7 +861,10 @@ async def send_to_printer(
     session: Session = Depends(get_session),
 ) -> PrintJobRead:
     return await dispatch.send_to_printer(
-        printer_id, payload, current_user, session,
+        printer_id,
+        payload,
+        current_user,
+        session,
         provider_builder=lambda printer: _provider_client(request, printer),
         backend_provider=get_backend,
     )
@@ -1354,7 +1357,9 @@ def create_ws_ticket(
         session, current_user, printer_id, PrinterRole.VIEW
     )
     return {
-        "ticket": ws_tickets.issue(current_user.id, printer_id),
+        "ticket": ws_tickets.issue(
+            current_user.id, ws_tickets.printer_scope(printer_id)
+        ),
         "expires_in": ws_tickets.TTL_SECONDS,
     }
 
@@ -1379,7 +1384,11 @@ async def printer_ws(
     auth_header = websocket.headers.get("authorization")
     if auth_header and auth_header.lower().startswith("bearer "):
         token = auth_header.split(" ", 1)[1].strip()
-    user_id = ws_tickets.consume(ticket, printer_id) if ticket else None
+    user_id = (
+        ws_tickets.consume(ticket, ws_tickets.printer_scope(printer_id))
+        if ticket
+        else None
+    )
     if user_id is None and token:
         payload = verify_access_token(token)
         try:

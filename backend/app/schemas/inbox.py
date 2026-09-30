@@ -186,7 +186,7 @@ class InboxItemRead(BaseModel):
     manifest: InboxManifestRead = Field(default_factory=LegacyInboxManifestRead)
     target_collection_id: int | None = None
     requested_tags: list[str] = Field(default_factory=list)
-    background_job_id: str | None = None
+    job_id: str | None = None
     resulting_model_id: int | None = None
     results: list[InboxItemResultRead] = Field(default_factory=list)
     error_code: str | None = None

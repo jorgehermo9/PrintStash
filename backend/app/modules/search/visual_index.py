@@ -24,20 +24,20 @@ from sqlmodel import Session, select
 
 from app.core.time import utcnow
 from app.db.models import (
+    DerivativeKind,
     EmbeddingSpace,
     File,
     IndexGeneration,
     Model,
     PassageVector,
     SearchIndexFailure,
-    ThumbnailGeneration,
-    ThumbnailGenerationState,
 )
+from app.db.models.media import ArtifactDerivative, DerivativeState
 from app.db.scopes import live
 from app.db.session import SessionFactory
 from app.modules.inference.configuration import embedding_provider
-from app.modules.inference.local import acquire_slot
-from app.modules.media import compute_slots, visual_render
+from app.modules.inference.local import acquire_slot, release_slot
+from app.modules.media import visual_render
 from app.modules.media.geometry_analysis import VisualViews, thumbnail_input
 from app.modules.search import (
     configuration,
@@ -180,7 +180,7 @@ def render(
             cached = cached_thumbnail(session, file, recipe, context)
             if cached is not None:
                 return VisualViews(cached, (cached,))
-        slot = acquire_slot(session, token, context)
+        acquire_slot(context)
         try:
             with ExitStack() as resources:
                 if file.file_type.value == "step":
@@ -215,42 +215,48 @@ def render(
                 check_source()
                 return result
         finally:
-            compute_slots.release(session, slot.id, token)
-            session.commit()
+            release_slot()
 
 
 def cached_thumbnail(session, file, recipe, context):
+    """The Artifact's thumbnail derivative, when it is what ``recipe`` would render.
+
+    Mesh thumbnails always render with the preview profile; the derivative
+    reuses as a visual view only at the current recipe, as a complete full
+    render at 640x480, whose stored bytes still hash to what it recorded.
+    """
+    from app.modules.derivatives import kinds
+
+    current = kinds.recipes_for(file).get(DerivativeKind.THUMBNAIL)
     row = session.exec(
-        select(ThumbnailGeneration)
-        .where(
-            ThumbnailGeneration.file_id == file.id,
-            ThumbnailGeneration.source_sha256 == file.sha256,
-            ThumbnailGeneration.recipe_fingerprint == recipe.thumbnail_recipe,
-            ThumbnailGeneration.state == ThumbnailGenerationState.READY,
-            ThumbnailGeneration.complete.is_(True),
-            ThumbnailGeneration.strategy == "full",
-            ThumbnailGeneration.width == 640,
-            ThumbnailGeneration.height == 480,
+        select(ArtifactDerivative).where(
+            ArtifactDerivative.file_id == file.id,
+            ArtifactDerivative.kind == DerivativeKind.THUMBNAIL,
+            ArtifactDerivative.recipe_version == current,
+            ArtifactDerivative.state == DerivativeState.READY,
         )
-        .limit(1)
     ).first()
+    output = json.loads(row.output_json or "{}") if row is not None else {}
+    size = output.get("size")
     if (
         row is None
         or not row.storage_key
-        or not row.output_size_bytes
-        or row.output_size_bytes > 8 * 1024**2
+        or output.get("strategy") != "full"
+        or output.get("complete") is not True
+        or (output.get("width"), output.get("height")) != (640, 480)
+        or not isinstance(size, int)
+        or not 0 < size <= 8 * 1024**2
     ):
         return None
     try:
         payload = bytearray()
         for chunk in get_backend().stream_chunks(row.storage_key, 64 * 1024):
             context.remaining()
-            if len(payload) + len(chunk) > row.output_size_bytes:
+            if len(payload) + len(chunk) > size:
                 return None
             payload.extend(chunk)
-        if (
-            len(payload) != row.output_size_bytes
-            or hashlib.sha256(payload).hexdigest() != row.output_sha256
+        if len(payload) != size or hashlib.sha256(payload).hexdigest() != output.get(
+            "sha256"
         ):
             return None
         return thumbnail_input(bytes(payload), recipe.image_size)

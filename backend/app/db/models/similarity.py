@@ -111,7 +111,7 @@ class SimilarityRun(SQLModel, table=True):
             "state IN ('queued','running','cancelling','cancelled','completed','failed')",
             name="state_values",
         ),
-        Index("ix_similarity_run_claim", "state", "lease_expires_at"),
+        Index("ix_similarity_run_state", "state"),
     )
 
     id: int | None = Field(default=None, primary_key=True)
@@ -129,15 +129,16 @@ class SimilarityRun(SQLModel, table=True):
     counters_json: str = Field(default="{}", sa_column=Column(Text, nullable=False))
     cutoff: datetime = Field(default_factory=utcnow)
     cancel_requested: bool = Field(default=False)
-    lease_token: str | None = Field(default=None, max_length=64)
-    lease_expires_at: datetime | None = None
+    # The engine execution advancing this run now (``<job>:<attempt>``). The
+    # engine runs one at a time per run; this only fences writes, so a stale
+    # attempt that is still alive cannot publish after it was superseded.
+    writer: str | None = Field(default=None, max_length=128)
     failure_code: str | None = Field(default=None, max_length=64)
     trigger: str = Field(default="manual", max_length=16)
     peak_rss_bytes: int | None = Field(default=None, sa_type=BigInteger)
     created_at: datetime = Field(default_factory=utcnow, index=True)
     started_at: datetime | None = None
     finished_at: datetime | None = None
-    last_activity_at: datetime = Field(default_factory=utcnow)
 
 
 class SimilarityCandidate(SQLModel, table=True):

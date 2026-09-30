@@ -19,14 +19,15 @@
 
 import "@testing-library/jest-dom/vitest";
 import { useState } from "react";
-import { fireEvent, screen, waitFor } from "@testing-library/react";
+import { fireEvent, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { FilterSidebar, type FilterSidebarProps } from "@/components/filter-sidebar";
-import { aCollection, aPrinter, aTag } from "@/test-support/factories";
-import { renderApp } from "@/test-support/render";
-import type { MultipartModelListItem, OutlinerModelRead } from "@/types";
+import { collectionTreeRoutes } from "@/test-support/collection-tree";
+import { aCollection, aCollectionNode, aPrinter, aTag } from "@/test-support/factories";
+import { json, renderApp } from "@/test-support/render";
+import type { CollectionRead, MultipartModelListItem, OutlinerModelRead } from "@/types";
 
 const TREE = [
   aCollection({ id: 1, name: "Parts", path: "parts", parent_id: null }),
@@ -37,7 +38,14 @@ const TREE = [
 function outlinerModel(over: Partial<OutlinerModelRead> = {}): OutlinerModelRead {
   // The tree groups by `collection` *path*, not by id — a model with only an id
   // is invisible to it, which is exactly the drift this fixture pins down.
-  return { id: 1, name: "Benchy", collection: "parts", collection_id: 1, ...over };
+  return {
+    id: 1,
+    name: "Benchy",
+    collection: "parts",
+    collection_id: 1,
+    collection_label: "Parts",
+    ...over,
+  };
 }
 
 function multipartSet(over: Partial<MultipartModelListItem> = {}): MultipartModelListItem {
@@ -48,6 +56,7 @@ function multipartSet(over: Partial<MultipartModelListItem> = {}): MultipartMode
     description: null,
     collection: null,
     collection_id: null,
+    collection_label: null,
     part_count: 2,
     model_count: 1,
     guide_count: 0,
@@ -64,7 +73,14 @@ function multipartSet(over: Partial<MultipartModelListItem> = {}): MultipartMode
   };
 }
 
-function renderSidebar(over: Partial<FilterSidebarProps> = {}) {
+/**
+ * Render the sidebar over a library. The tree is read from the server a level at
+ * a time, so the library is what the tree routes answer from, not a prop.
+ */
+function renderSidebar({
+  collections = TREE,
+  ...over
+}: Partial<FilterSidebarProps> & { collections?: CollectionRead[] } = {}) {
   const handlers = {
     onCollectionChange: vi.fn<FilterSidebarProps["onCollectionChange"]>(),
     onTagsChange: vi.fn<FilterSidebarProps["onTagsChange"]>(),
@@ -84,7 +100,6 @@ function renderSidebar(over: Partial<FilterSidebarProps> = {}) {
       <>
         <output aria-label="Selected collection">{selectedCollection ?? "All Models"}</output>
         <FilterSidebar
-          collections={TREE}
           models={[]}
           tags={[aTag()]}
           printers={[aPrinter({ id: 4, name: "Voron" })]}
@@ -103,7 +118,7 @@ function renderSidebar(over: Partial<FilterSidebarProps> = {}) {
       </>
     );
   }
-  const result = renderApp(<SidebarHarness />);
+  const result = renderApp(<SidebarHarness />, { routes: collectionTreeRoutes(collections) });
   return { ...result, ...handlers };
 }
 
@@ -115,12 +130,24 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
+/** The row a folder's name sits in: its expand, delete and badge controls live there. */
+async function folderRow(name: string): Promise<HTMLElement> {
+  const row = (await screen.findByRole("button", { name })).parentElement;
+  if (row === null) throw new Error(`no row for ${name}`);
+  return row;
+}
+
+/** Open a folder the way a user does, by its chevron. */
+async function openFolder(user: ReturnType<typeof userEvent.setup>, name: string) {
+  await user.click(within(await folderRow(name)).getByRole("button", { name: "Expand" }));
+}
+
 describe("FilterSidebar", () => {
   describe("the folder tree", () => {
-    it("lists the root folders", () => {
+    it("lists the root folders", async () => {
       renderSidebar();
 
-      expect(screen.getByText("Parts")).toBeInTheDocument();
+      expect(await screen.findByText("Parts")).toBeInTheDocument();
       expect(screen.getByText("Toys")).toBeInTheDocument();
     });
 
@@ -134,7 +161,7 @@ describe("FilterSidebar", () => {
       const user = userEvent.setup();
       const { onCollectionChange } = renderSidebar();
 
-      await user.click(screen.getByText("Parts"));
+      await user.click(await screen.findByText("Parts"));
 
       expect(onCollectionChange).toHaveBeenCalledWith("parts");
     });
@@ -143,7 +170,7 @@ describe("FilterSidebar", () => {
       const user = userEvent.setup();
       renderSidebar();
 
-      await user.dblClick(screen.getByRole("button", { name: "Parts" }));
+      await user.dblClick(await screen.findByRole("button", { name: "Parts" }));
 
       expect(screen.getByRole("status", { name: "Selected collection" })).toHaveTextContent(
         "parts",
@@ -154,7 +181,7 @@ describe("FilterSidebar", () => {
       const user = userEvent.setup();
       renderSidebar({ selectedCollection: "parts" });
 
-      await user.click(screen.getByRole("button", { name: "Parts" }));
+      await user.click(await screen.findByRole("button", { name: "Parts" }));
 
       expect(screen.getByRole("status", { name: "Selected collection" })).toHaveTextContent(
         "parts",
@@ -170,10 +197,69 @@ describe("FilterSidebar", () => {
       expect(onCollectionChange).toHaveBeenCalledWith(null);
     });
 
-    it("nests a child folder under its parent", () => {
+    it("nests a child folder under its parent", async () => {
+      const user = userEvent.setup();
       renderSidebar();
 
-      expect(screen.getByText("Brackets")).toBeInTheDocument();
+      await openFolder(user, "Parts");
+
+      expect(await screen.findByText("Brackets")).toBeInTheDocument();
+    });
+
+    it("asks for a folder's children only once it is opened", async () => {
+      // Loading every level up front is what took a 9,000-folder library a
+      // minute to open (#295).
+      const user = userEvent.setup();
+      const { requests } = renderSidebar();
+      await screen.findByText("Parts");
+      const childRequests = () =>
+        requests().filter(
+          (call) =>
+            call.url.startsWith("/api/v1/collections/children") &&
+            new URL(call.url, "http://test").searchParams.get("parent_id") === "1",
+        );
+      expect(childRequests()).toHaveLength(0);
+
+      await openFolder(user, "Parts");
+
+      await waitFor(() => expect(childRequests()).toHaveLength(1));
+    });
+
+    it("offers the next page of a long level", async () => {
+      const user = userEvent.setup();
+      const page = (name: string, id: number, cursor: string | null) =>
+        json({
+          items: [aCollectionNode({ id, name, path: name.toLowerCase(), display_path: name })],
+          next_cursor: cursor,
+        });
+      renderApp(
+        <FilterSidebar
+          models={[]}
+          tags={[]}
+          printers={[]}
+          selectedCollection={null}
+          selectedTags={[]}
+          selectedPrinterId={null}
+          selectedPrinterPresence={null}
+          libraryView="organized"
+          onCollectionChange={vi.fn<FilterSidebarProps["onCollectionChange"]>()}
+          onTagsChange={vi.fn<FilterSidebarProps["onTagsChange"]>()}
+          onPrinterChange={vi.fn<FilterSidebarProps["onPrinterChange"]>()}
+          onPrinterPresenceChange={vi.fn<FilterSidebarProps["onPrinterPresenceChange"]>()}
+          onCreateCollection={vi.fn<FilterSidebarProps["onCreateCollection"]>()}
+          onLibraryViewChange={vi.fn<FilterSidebarProps["onLibraryViewChange"]>()}
+        />,
+        {
+          routes: {
+            "GET /api/v1/collections/children": (url) =>
+              url.includes("cursor=") ? page("Toys", 2, null) : page("Parts", 1, "next"),
+          },
+        },
+      );
+
+      await user.click(await screen.findByRole("button", { name: "Show more folders" }));
+
+      expect(await screen.findByText("Toys")).toBeInTheDocument();
     });
 
     it("shows a root multipart set", () => {
@@ -182,26 +268,32 @@ describe("FilterSidebar", () => {
       expect(screen.getByText("Dragon figure")).toBeInTheDocument();
     });
 
-    it("nests a multipart set in its folder", () => {
+    it("nests a multipart set in its folder", async () => {
+      const user = userEvent.setup();
       renderSidebar({
-        multipartModels: [multipartSet({ collection: "parts", collection_id: 1 })],
+        multipartModels: [
+          multipartSet({ collection: "parts", collection_id: 1, collection_label: "Parts" }),
+        ],
       });
+
+      await openFolder(user, "Parts");
 
       expect(screen.getByText("Dragon figure")).toBeInTheDocument();
     });
 
-    it("counts a multipart set in its folder", () => {
+    it("counts a multipart set in its folder", async () => {
       renderSidebar({
         collections: [aCollection({ model_count: 0 })],
-        multipartModels: [multipartSet({ collection: "parts", collection_id: 1 })],
+        multipartModels: [
+          multipartSet({ collection: "parts", collection_id: 1, collection_label: "Parts" }),
+        ],
       });
 
-      expect(screen.getByRole("button", { name: "Parts" }).parentElement).toHaveTextContent(
-        "Parts1",
-      );
+      expect(await folderRow("Parts")).toHaveTextContent("Parts1");
     });
 
-    it("shows parent totals that include models in nested folders", () => {
+    it("shows parent totals that include models in nested folders", async () => {
+      const user = userEvent.setup();
       renderSidebar({
         collections: [
           aCollection({ id: 1, name: "Parent", path: "parent", parent_id: null, model_count: 4 }),
@@ -214,83 +306,89 @@ describe("FilterSidebar", () => {
             model_count: 2,
           }),
         ],
-        models: [
-          outlinerModel({ id: 1, collection: "parent", collection_id: 1 }),
-          outlinerModel({ id: 2, collection: "parent/child", collection_id: 2 }),
-          outlinerModel({ id: 3, collection: "parent/child/grandchild", collection_id: 3 }),
-          outlinerModel({ id: 4, collection: "parent/child/grandchild", collection_id: 3 }),
-        ],
       });
 
-      expect(screen.getByRole("button", { name: "Parent" }).parentElement).toHaveTextContent(
-        "Parent4",
-      );
-      expect(screen.getByRole("button", { name: "Child" }).parentElement).toHaveTextContent(
-        "Child3",
-      );
+      await openFolder(user, "Parent");
+
+      expect(await folderRow("Parent")).toHaveTextContent("Parent4");
+      expect(await folderRow("Child")).toHaveTextContent("Child3");
     });
 
-    it("uses the collection total when only part of a folder is loaded", () => {
+    it("uses the collection total when only part of a folder is loaded", async () => {
       renderSidebar({
         collections: [aCollection({ id: 1, name: "Archive", path: "archive", model_count: 501 })],
         models: [outlinerModel({ collection: "archive", collection_id: 1 })],
       });
 
-      expect(screen.getByRole("button", { name: "Archive" }).parentElement).toHaveTextContent(
-        "Archive501",
-      );
+      expect(await folderRow("Archive")).toHaveTextContent("Archive501");
     });
 
-    it("includes multipart sets stored under child folders in the parent total", () => {
+    it("includes multipart sets stored under child folders in the parent total", async () => {
       renderSidebar({
         collections: [
           aCollection({ id: 1, name: "Parent", path: "parent", parent_id: null, model_count: 0 }),
           aCollection({ id: 2, name: "Child", path: "parent/child", parent_id: 1, model_count: 0 }),
         ],
-        multipartModels: [multipartSet({ collection: "parent/child", collection_id: 2 })],
+        multipartModels: [
+          multipartSet({
+            collection: "parent/child",
+            collection_id: 2,
+            collection_label: "Parent/Child",
+          }),
+        ],
       });
 
-      expect(screen.getByRole("button", { name: "Parent" }).parentElement).toHaveTextContent(
-        "Parent1",
-      );
+      expect(await folderRow("Parent")).toHaveTextContent("Parent1");
     });
 
     it("counts only matching models while filtering the outliner", async () => {
       const user = userEvent.setup();
+      const inChild = {
+        collection: "parent/child",
+        collection_id: 2,
+        collection_label: "Parent/Child",
+      };
       renderSidebar({
         collections: [
           aCollection({ id: 1, name: "Parent", path: "parent", parent_id: null, model_count: 3 }),
           aCollection({ id: 2, name: "Child", path: "parent/child", parent_id: 1, model_count: 2 }),
         ],
         models: [
-          outlinerModel({ id: 1, name: "Other", collection: "parent", collection_id: 1 }),
-          outlinerModel({ id: 2, name: "Match", collection: "parent/child", collection_id: 2 }),
-          outlinerModel({ id: 3, name: "Another", collection: "parent/child", collection_id: 2 }),
+          outlinerModel({
+            id: 1,
+            name: "Other",
+            collection: "parent",
+            collection_id: 1,
+            collection_label: "Parent",
+          }),
+          outlinerModel({ id: 2, name: "Match", ...inChild }),
+          outlinerModel({ id: 3, name: "Another", ...inChild }),
         ],
       });
+
       await user.type(screen.getByPlaceholderText("Filter outliner..."), "Match");
 
-      expect(screen.getByRole("button", { name: "Parent" }).parentElement).toHaveTextContent(
-        "Parent1",
-      );
-      expect(screen.getByRole("button", { name: "Child" }).parentElement).toHaveTextContent(
-        "Child1",
-      );
+      expect(await folderRow("Parent")).toHaveTextContent("Parent1");
+      expect(await folderRow("Child")).toHaveTextContent("Child1");
     });
 
-    it("counts only Multipart Models in the Multipart view", () => {
+    it("counts only Multipart Models in the Multipart view", async () => {
       renderSidebar({
         collections: [
           aCollection({ id: 1, name: "Parent", path: "parent", parent_id: null, model_count: 5 }),
           aCollection({ id: 2, name: "Child", path: "parent/child", parent_id: 1, model_count: 5 }),
         ],
-        multipartModels: [multipartSet({ collection: "parent/child", collection_id: 2 })],
+        multipartModels: [
+          multipartSet({
+            collection: "parent/child",
+            collection_id: 2,
+            collection_label: "Parent/Child",
+          }),
+        ],
         libraryView: "multipart",
       });
 
-      expect(screen.getByRole("button", { name: "Parent" }).parentElement).toHaveTextContent(
-        "Parent1",
-      );
+      expect(await folderRow("Parent")).toHaveTextContent("Parent1");
     });
 
     it("folds a branch away on request", async () => {
@@ -298,8 +396,10 @@ describe("FilterSidebar", () => {
       // collapsible without losing the selection inside it.
       const user = userEvent.setup();
       renderSidebar();
+      await openFolder(user, "Parts");
+      await screen.findByText("Brackets");
 
-      await user.click(screen.getAllByRole("button", { name: "Collapse" })[0]);
+      await user.click(within(await folderRow("Parts")).getByRole("button", { name: "Collapse" }));
 
       expect(screen.queryByText("Brackets")).toBeNull();
     });
@@ -317,7 +417,7 @@ describe("FilterSidebar", () => {
 
       await filterBy(user, "brack");
 
-      expect(screen.getByText("Brackets")).toBeInTheDocument();
+      expect(await screen.findByText("Brackets")).toBeInTheDocument();
     });
 
     it("keeps the ancestors of a match so it can be reached", async () => {
@@ -327,7 +427,7 @@ describe("FilterSidebar", () => {
 
       await filterBy(user, "brack");
 
-      expect(screen.getByText("Parts")).toBeInTheDocument();
+      expect(await folderRow("Parts")).toBeInTheDocument();
     });
 
     it("drops a folder that matches nothing", async () => {
@@ -335,6 +435,7 @@ describe("FilterSidebar", () => {
       renderSidebar();
 
       await filterBy(user, "brack");
+      await screen.findByText("Brackets");
 
       expect(screen.queryByText("Toys")).toBeNull();
     });
@@ -345,18 +446,20 @@ describe("FilterSidebar", () => {
 
       await filterBy(user, "benchy");
 
-      expect(screen.getByText("Parts")).toBeInTheDocument();
+      expect(await screen.findByText("Parts")).toBeInTheDocument();
     });
 
     it("finds a multipart set by name", async () => {
       const user = userEvent.setup();
       renderSidebar({
-        multipartModels: [multipartSet({ collection: "parts", collection_id: 1 })],
+        multipartModels: [
+          multipartSet({ collection: "parts", collection_id: 1, collection_label: "Parts" }),
+        ],
       });
 
       await filterBy(user, "dragon");
 
-      expect(screen.getByText("Dragon figure")).toBeInTheDocument();
+      expect(await screen.findByText("Dragon figure")).toBeInTheDocument();
     });
   });
 
@@ -433,7 +536,7 @@ describe("FilterSidebar", () => {
       const user = userEvent.setup();
       const { onDeleteCollection } = renderSidebar();
 
-      await user.click(screen.getAllByTitle("Delete collection")[0]);
+      await user.click((await screen.findAllByTitle("Delete collection"))[0]);
 
       expect(onDeleteCollection).not.toHaveBeenCalled();
     });
@@ -444,7 +547,7 @@ describe("FilterSidebar", () => {
       const user = userEvent.setup();
       renderSidebar();
 
-      await user.click(screen.getAllByTitle("Delete collection")[0]);
+      await user.click((await screen.findAllByTitle("Delete collection"))[0]);
 
       expect(await screen.findByText(/Delete “Parts”\?/)).toBeInTheDocument();
     });
@@ -455,15 +558,29 @@ describe("FilterSidebar", () => {
       const user = userEvent.setup();
       renderSidebar();
 
-      await user.click(screen.getAllByTitle("Delete collection")[0]);
+      await user.click((await screen.findAllByTitle("Delete collection"))[0]);
 
       expect(await screen.findByText(/models → recycle bin/)).toBeInTheDocument();
+    });
+
+    it("counts every folder nested at any depth beneath it", async () => {
+      const user = userEvent.setup();
+      renderSidebar({
+        collections: [
+          ...TREE,
+          aCollection({ id: 4, name: "Small", path: "parts/brackets/small", parent_id: 2 }),
+        ],
+      });
+
+      await user.click((await screen.findAllByTitle("Delete collection"))[0]);
+
+      expect(await screen.findByText("2 subcollections")).toBeInTheDocument();
     });
 
     it("deletes the folder once confirmed", async () => {
       const user = userEvent.setup();
       const { onDeleteCollection } = renderSidebar();
-      await user.click(screen.getAllByTitle("Delete collection")[0]);
+      await user.click((await screen.findAllByTitle("Delete collection"))[0]);
 
       await user.click(await screen.findByRole("button", { name: "Delete" }));
 
@@ -478,7 +595,7 @@ describe("FilterSidebar", () => {
         ],
       });
 
-      await user.click(screen.getByTitle("Delete collection"));
+      await user.click(await screen.findByTitle("Delete collection"));
 
       expect(screen.queryByText(/recycle bin/)).toBeNull();
     });
@@ -486,7 +603,7 @@ describe("FilterSidebar", () => {
     it("backs out of the confirmation", async () => {
       const user = userEvent.setup();
       const { onDeleteCollection } = renderSidebar();
-      await user.click(screen.getAllByTitle("Delete collection")[0]);
+      await user.click((await screen.findAllByTitle("Delete collection"))[0]);
 
       await user.click(await screen.findByRole("button", { name: "Cancel" }));
 
@@ -495,11 +612,22 @@ describe("FilterSidebar", () => {
   });
 
   describe("remembering the open folders", () => {
+    it("starts a first visit at the top level", async () => {
+      // A tree that loads a level at a time cannot open a whole library, and
+      // opening a large one whole is what took a minute (#295).
+      renderSidebar();
+      await screen.findByText("Parts");
+
+      expect(screen.queryByText("Brackets")).toBeNull();
+    });
+
     it("hides a folder's children once it is collapsed", async () => {
       const user = userEvent.setup();
       renderSidebar();
+      await openFolder(user, "Parts");
+      await screen.findByText("Brackets");
 
-      await user.click(screen.getAllByRole("button", { name: "Collapse" })[0]);
+      await user.click(within(await folderRow("Parts")).getByRole("button", { name: "Collapse" }));
 
       await waitFor(() => expect(screen.queryByText("Brackets")).toBeNull());
     });
@@ -508,9 +636,10 @@ describe("FilterSidebar", () => {
       // Re-collapsing the tree on every navigation makes a deep vault unusable.
       const user = userEvent.setup();
       renderSidebar();
-      await user.click(screen.getAllByRole("button", { name: "Collapse" })[0]);
+      await openFolder(user, "Parts");
+      await user.click(within(await folderRow("Parts")).getByRole("button", { name: "Collapse" }));
 
-      await user.click(await screen.findByRole("button", { name: "Expand" }));
+      await openFolder(user, "Parts");
 
       expect(await screen.findByText("Brackets")).toBeInTheDocument();
     });
@@ -519,10 +648,10 @@ describe("FilterSidebar", () => {
       const user = userEvent.setup();
       renderSidebar();
 
-      await user.click(screen.getAllByRole("button", { name: "Collapse" })[0]);
+      await openFolder(user, "Parts");
 
       await waitFor(() =>
-        expect(window.sessionStorage.getItem("ps-filter-expanded")).not.toContain("parts"),
+        expect(window.sessionStorage.getItem("ps-filter-expanded")).toContain("parts"),
       );
     });
 
@@ -531,7 +660,7 @@ describe("FilterSidebar", () => {
       // no idea where they are.
       renderSidebar({ selectedCollection: "parts/brackets" });
 
-      expect(screen.getByText("Brackets")).toBeInTheDocument();
+      expect(await screen.findByText("Brackets")).toBeInTheDocument();
     });
 
     it("remembers that the model group was collapsed", async () => {

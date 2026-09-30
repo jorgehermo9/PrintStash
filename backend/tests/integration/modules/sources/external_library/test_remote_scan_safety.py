@@ -20,6 +20,7 @@ from app.db.models import (
 from app.modules.library import trash
 from app.modules.sources import external_library
 from app.modules.sources.library_source import SourceContent, SourceEntry, SourcePage
+from app.modules.work.contracts import JobOutcome
 from tests.factories import build_file, build_model
 from tests.paths import FIXTURES_DIR
 
@@ -337,8 +338,10 @@ class TestRemoteScanSafety:
         )
         monkeypatch.setattr(
             external_library.registry,
-            "update",
-            lambda job_id, **values: updates.append((job_id, values)),
+            "finish",
+            lambda job_id, outcome, **values: updates.append(
+                (job_id, {"outcome": outcome, **values})
+            ),
         )
 
         result = external_library.scan_remote_library(library.id, job_id="scan-job")
@@ -352,7 +355,7 @@ class TestRemoteScanSafety:
         assert checkpoint.backoff_until is not None
         assert updates[-1] == (
             "scan-job",
-            {"state": "failed", "error": "provider unavailable"},
+            {"outcome": JobOutcome.FAILED, "error": "provider unavailable"},
         )
 
         blocked = external_library.scan_remote_library(library.id)
@@ -419,8 +422,10 @@ class TestRemoteScanSafety:
         monkeypatch.setattr(external_library, "source_for_library", lambda _lib: source)
         monkeypatch.setattr(
             external_library.registry,
-            "update",
-            lambda job_id, **values: updates.append((job_id, values)),
+            "finish",
+            lambda job_id, outcome, **values: updates.append(
+                (job_id, {"outcome": outcome, **values})
+            ),
         )
 
         result = external_library.scan_remote_library(
@@ -429,7 +434,7 @@ class TestRemoteScanSafety:
 
         assert result["complete"] is True
         assert updates[-1][0] == "completed-job"
-        assert updates[-1][1]["state"] == "completed"
+        assert updates[-1][1]["outcome"] is JobOutcome.COMPLETED
 
     def test_incomplete_epoch_never_marks_unseen_catalog_rows_absent(
         self,

@@ -53,6 +53,66 @@ def authority(session):
     return recipe, actor
 
 
+def _owed(session, actor, recipe, now):
+    """The next visible passage whose sparse expansion is missing or stale."""
+    return (
+        select(SearchPassage)
+        .outerjoin(SearchExpansion, SearchExpansion.passage_id == SearchPassage.id)
+        .where(
+            SearchPassage.id.in_(visible_passage_ids(session, actor)),
+            canonical_passage(),
+            or_(
+                SearchExpansion.passage_id.is_(None),
+                SearchExpansion.recipe != recipe,
+                SearchExpansion.input_hash != SearchPassage.content_hash,
+                (SearchExpansion.attempts < 3)
+                & or_(
+                    (SearchExpansion.phase == "running")
+                    & (SearchExpansion.lease_until <= now),
+                    (SearchExpansion.phase == "failed")
+                    & (SearchExpansion.retry_at <= now),
+                ),
+            ),
+        )
+        .order_by(SearchPassage.id)
+        .limit(1)
+    )
+
+
+def next_passage(session) -> bool:
+    """Whether a passage is owed an expansion now (read-only)."""
+    auth = authority(session)
+    if auth is None:
+        return False
+    recipe, actor = auth
+    return session.exec(_owed(session, actor, recipe, utcnow())).first() is not None
+
+
+def next_retry(session, *, now):
+    """When a failed or abandoned expansion next becomes due, if ever."""
+    from sqlalchemy import func
+
+    from app.core.time import ensure_utc
+
+    if authority(session) is None:
+        return None
+    later = [
+        session.exec(
+            select(func.min(column)).where(
+                SearchExpansion.phase == phase,
+                SearchExpansion.attempts < 3,
+                column > now,
+            )
+        ).first()
+        for phase, column in (
+            ("failed", SearchExpansion.retry_at),
+            ("running", SearchExpansion.lease_until),
+        )
+    ]
+    due = [ensure_utc(value) for value in later if value is not None]
+    return min(due) if due else None
+
+
 class ExpansionProcessor:
     def __init__(self, sessions, *, provider_factory=provider):
         self.sessions, self.provider_factory = sessions, provider_factory
@@ -91,30 +151,7 @@ class ExpansionProcessor:
                         error_code="embedding_worker_expired",
                     )
                 )
-            passage = session.exec(
-                select(SearchPassage)
-                .outerjoin(
-                    SearchExpansion, SearchExpansion.passage_id == SearchPassage.id
-                )
-                .where(
-                    SearchPassage.id.in_(visible_passage_ids(session, actor)),
-                    canonical_passage(),
-                    or_(
-                        SearchExpansion.passage_id.is_(None),
-                        SearchExpansion.recipe != recipe,
-                        SearchExpansion.input_hash != SearchPassage.content_hash,
-                        (SearchExpansion.attempts < 3)
-                        & or_(
-                            (SearchExpansion.phase == "running")
-                            & (SearchExpansion.lease_until <= now),
-                            (SearchExpansion.phase == "failed")
-                            & (SearchExpansion.retry_at <= now),
-                        ),
-                    ),
-                )
-                .order_by(SearchPassage.id)
-                .limit(1)
-            ).first()
+            passage = session.exec(_owed(session, actor, recipe, now)).first()
             if passage is None:
                 session.commit()
                 return False

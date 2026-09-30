@@ -80,6 +80,12 @@ class ExternalLibrary(SQLModel, table=True):
     scan_claim_token: Optional[str] = Field(default=None, max_length=64, index=True)
     scan_claim_expires_at: Optional[datetime] = Field(default=None, index=True)
     scan_job_id: Optional[str] = Field(default=None, max_length=64, index=True)
+    # A scan someone asked for (the "scan now" button, the folder watcher).
+    # Intent the scan source reads; the scan clears it when it starts.
+    # ``scan_requested_path`` narrows the request to one folder; two requests
+    # for different folders widen it to a full scan.
+    scan_requested_at: Optional[datetime] = Field(default=None, index=True)
+    scan_requested_path: Optional[str] = Field(default=None, max_length=2048)
 
     created_at: datetime = Field(default_factory=utcnow)
     updated_at: datetime = Field(default_factory=utcnow)

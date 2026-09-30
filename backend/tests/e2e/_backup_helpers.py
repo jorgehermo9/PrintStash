@@ -1,7 +1,6 @@
 """Set up an isolated backup-recovery app through its public API."""
 
 
-
 async def setup_and_login(api, tmp_path) -> dict[str, str]:
     r = await api.post(
         "/api/v1/setup",

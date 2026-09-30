@@ -81,9 +81,7 @@ class TestInventory:
 
     def test_keeps_pending_delete_bytes_in_owned_total(self, db_session):
         backend = get_backend()
-        receipt = backend.create_bytes(
-            b"queued", backend.stl_cache_key("f" * 64)
-        )
+        receipt = backend.create_bytes(b"queued", backend.stl_cache_key("f" * 64))
         build_storage_delete_intent(db_session, backend, receipt, status="pending")
 
         assert inventory(db_session).unique_owned_bytes == 6

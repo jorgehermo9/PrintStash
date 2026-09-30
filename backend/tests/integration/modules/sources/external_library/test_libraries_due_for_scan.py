@@ -62,6 +62,7 @@ class TestLibrariesDueForScan:
             tmp_path / "running",
             name="nas",
             enabled=True,
+            scanning=True,
             last_scan_status=ExternalLibraryScanStatus.RUNNING,
         )
 
@@ -72,3 +73,51 @@ class TestLibrariesDueForScan:
         assert manual.id not in due  # manual only → never auto-due
         assert disabled.id not in due  # disabled → never
         assert running.id not in due  # already scanning → skipped
+
+    def test_rescans_a_library_a_dead_process_left_running(
+        self, tmp_path: Path, db_session: Session
+    ) -> None:
+        enable_feature(db_session)
+        stranded = build_external_library(
+            db_session,
+            tmp_path / "stranded",
+            name="nas",
+            enabled=True,
+            scan_schedule="",
+            last_scan_status=ExternalLibraryScanStatus.RUNNING,
+        )
+
+        # RUNNING with no live claim: whoever was scanning is gone.
+        assert stranded.id in external_library.libraries_due_for_scan(db_session)
+
+    def test_owes_a_requested_scan_to_a_manual_only_library(
+        self, tmp_path: Path, db_session: Session
+    ) -> None:
+        enable_feature(db_session)
+        requested = build_external_library(
+            db_session,
+            tmp_path / "requested",
+            name="nas",
+            enabled=True,
+            scan_schedule="",
+            last_scanned_at=utcnow(),
+            scan_requested_at=utcnow(),
+        )
+
+        assert requested.id in external_library.libraries_due_for_scan(db_session)
+
+    def test_holds_a_request_back_while_a_scan_holds_its_claim(
+        self, tmp_path: Path, db_session: Session
+    ) -> None:
+        enable_feature(db_session)
+        busy = build_external_library(
+            db_session,
+            tmp_path / "busy",
+            name="nas",
+            enabled=True,
+            scanning=True,
+            scan_requested_at=utcnow(),
+        )
+
+        # The running scan's own finish nudges the source; the request waits.
+        assert busy.id not in external_library.libraries_due_for_scan(db_session)

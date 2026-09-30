@@ -33,6 +33,7 @@ from tests.containers import (
     openssh_endpoint,
     s3_endpoint,
 )
+from tests.e2e._jobs import completed_job, settle
 from tests.fixtures.storage_presets import real_preset_configuration
 from tests.paths import FIXTURES_DIR
 
@@ -185,7 +186,7 @@ class TestRemoteLibraryScan:
             headers=superuser_headers,
         )
 
-        assert scan.status_code == 202, scan.text
+        await completed_job(api, scan, superuser_headers)
         e2e_db.expire_all()
         file_row = e2e_db.exec(select(File).where(File.source_key == source_key)).one()
         downloaded = await api.get(
@@ -246,6 +247,7 @@ class TestRemoteLibraryScan:
         assert library.status_code == 201, library.text
         url = f"/api/v1/libraries/{library.json()['id']}/scan"
         assert (await api.post(url, headers=superuser_headers)).status_code == 202
+        settle()
         e2e_db.expire_all()
         row = e2e_db.exec(select(File).where(File.source_key == key)).one()
         original_etag = row.source_etag
@@ -266,6 +268,7 @@ class TestRemoteLibraryScan:
         )
 
         assert (await api.post(url, headers=superuser_headers)).status_code == 202
+        settle()
 
         e2e_db.refresh(row)
         assert row.sha256 == hashlib.sha256(after).hexdigest()
@@ -327,6 +330,7 @@ class TestDurableScanPages:
         library_id = library.json()["id"]
         url = f"/api/v1/libraries/{library_id}/scan"
         assert (await api.post(url, headers=superuser_headers)).status_code == 202
+        settle()
         e2e_db.expire_all()
         checkpoint = e2e_db.exec(
             select(ExternalLibraryCheckpoint).where(
@@ -345,6 +349,7 @@ class TestDurableScanPages:
         )
         epoch = checkpoint.epoch
         assert (await api.post(url, headers=superuser_headers)).status_code == 202
+        settle()
         e2e_db.expire_all()
         assert checkpoint.complete is True
         assert checkpoint.epoch == epoch

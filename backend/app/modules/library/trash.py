@@ -13,12 +13,13 @@ from pathlib import Path
 from typing import Iterable
 
 from sqlalchemy import update
-from sqlmodel import Session, delete, select
+from sqlmodel import Session, col, delete, select
 
 from app.core.config import settings
 from app.core.logging import get_logger
 from app.core.time import utcnow
 from app.db.models import (
+    ArtifactDerivative,
     ArtifactMaterialRequirement,
     Collection,
     CollectionTagLink,
@@ -42,7 +43,6 @@ from app.db.models import (
     PrintJob,
     ShareLink,
     Tag,
-    ThumbnailGeneration,
     User,
     VaultAuditFinding,
     VaultAuditFindingState,
@@ -432,20 +432,20 @@ def hard_delete_file(
             resource_id=file_id,
             allow_unverified=confirm_storage_risk,
         )
-    generation_keys = session.exec(
-        select(ThumbnailGeneration.storage_key).where(
-            ThumbnailGeneration.file_id == file_id,
-            ThumbnailGeneration.storage_key.is_not(None),  # type: ignore[union-attr]
+    derivative_keys = session.exec(
+        select(ArtifactDerivative.storage_key).where(
+            ArtifactDerivative.file_id == file_id,
+            col(ArtifactDerivative.storage_key).is_not(None),
         )
     ).all()
-    for generation_key in set(generation_keys):
-        if not generation_key or generation_key == current_thumbnail:
+    for derivative_key in set(derivative_keys):
+        if not derivative_key or derivative_key == current_thumbnail:
             continue
         enqueue_owned_key(
             session,
             backend,
-            generation_key,
-            resource_kind="thumbnail_generation",
+            derivative_key,
+            resource_kind="artifact_derivative",
             resource_id=file_id,
             allow_unverified=confirm_storage_risk,
         )

@@ -98,6 +98,10 @@ class BackupRun(SQLModel, table=True):
     __tablename__ = "backup_runs"
     id: str = Field(primary_key=True, max_length=64)
     backup_id: str = Field(index=True, max_length=64)
+    # The Job that built it. Whether a run is still in progress is its Job's
+    # state; a run its Job left behind is settled by that Job's next attempt
+    # or by its failure, never by guessing from a "running" outcome.
+    job_id: Optional[str] = Field(default=None, max_length=64, index=True)
     trigger: str = Field(max_length=16)
     outcome: str = Field(default="running", max_length=16, index=True)
     archive_name: str = Field(max_length=255)

@@ -1,10 +1,8 @@
 """Explicit HTTPS acquisition to local ONNX indexing and semantic HTTP search."""
 
 import asyncio
-from contextlib import suppress
 
 import pytest
-from printstash_core.search.passages import SubjectType
 
 from app.core.config import _overlay
 from app.db.session import get_session_factory
@@ -12,8 +10,7 @@ from app.modules.inference import model_cache
 from app.modules.inference.query import close_queries
 from app.modules.inference.worker_pool import pool
 from app.modules.search.model_warmup import ModelWarmup
-from app.runtime.jobs import registry
-from app.runtime.search import process_one, run_search
+from tests.e2e._jobs import settle
 from tests.factories.embeddings import text_embedding_assets
 from tests.fixtures.model_acquisition import model_host as _model_host  # noqa: F401
 
@@ -50,16 +47,14 @@ class TestLocalSearch:
         generation_id = response.json()["id"]
         processor = ModelWarmup(get_session_factory())
         try:
-            for _ in range(40):
-                await asyncio.to_thread(process_one, SubjectType.DOCUMENT)
-                response = await api.get(
-                    "/api/v1/config/ai-search/generations", headers=superuser_headers
-                )
-                generation = next(
-                    row for row in response.json() if row["id"] == generation_id
-                )
-                if generation["state"] == "active":
-                    break
+            # The projection and the generation's build Job run to completion.
+            await asyncio.to_thread(settle)
+            response = await api.get(
+                "/api/v1/config/ai-search/generations", headers=superuser_headers
+            )
+            generation = next(
+                row for row in response.json() if row["id"] == generation_id
+            )
             assert generation["state"] == "active", generation
             close_queries()
             pool.close()
@@ -97,7 +92,6 @@ class TestLocalSearch:
         self, api, superuser_headers, model_host
     ):
         fake, cache = model_host
-        worker = asyncio.create_task(run_search())
         try:
             response = await api.put(
                 "/api/v1/config/ai-search",
@@ -123,12 +117,9 @@ class TestLocalSearch:
             )
             assert response.status_code == 202, response.text
             job_id = response.json()["job_id"]
-            for _ in range(200):
-                job = registry.get(job_id)
-                if job.state in {"completed", "failed"}:
-                    break
-                await asyncio.sleep(0.05)
-            assert job.state == "completed", job
+            await asyncio.to_thread(settle)
+            job = await api.get(f"/api/v1/jobs/{job_id}", headers=superuser_headers)
+            assert job.json()["state"] == "completed", job.json()
             assert (cache / fake.entry.id / "manifest.json").exists()
             response = await api.post(
                 "/api/v1/config/ai-search/generations",
@@ -137,16 +128,13 @@ class TestLocalSearch:
             )
             assert response.status_code == 202, response.text
             generation_id = response.json()["id"]
-            for _ in range(400):
-                response = await api.get(
-                    "/api/v1/config/ai-search/generations", headers=superuser_headers
-                )
-                generation = next(
-                    row for row in response.json() if row["id"] == generation_id
-                )
-                if generation["state"] == "active":
-                    break
-                await asyncio.sleep(0.05)
+            await asyncio.to_thread(settle)
+            response = await api.get(
+                "/api/v1/config/ai-search/generations", headers=superuser_headers
+            )
+            generation = next(
+                row for row in response.json() if row["id"] == generation_id
+            )
             assert generation["state"] == "active", generation
             # Select only the dense leg. This original token table proves
             # native wiring; language quality has a separate real-model corpus.
@@ -176,8 +164,5 @@ class TestLocalSearch:
                 cache / fake.entry.id / "text.onnx"
             ).exists()
         finally:
-            worker.cancel()
-            with suppress(asyncio.CancelledError):
-                await worker
             close_queries()
             pool.close()

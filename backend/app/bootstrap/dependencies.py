@@ -3,11 +3,6 @@
 from fastapi import Request, WebSocket
 
 from app.modules.printing.printer_hub import PrinterHub
-from app.runtime.work_wakeup import WorkWakeup
-
-
-def get_work_wakeup(request: Request) -> WorkWakeup:
-    return request.app.state.work_wakeup
 
 
 def get_hub(request: Request) -> PrinterHub:

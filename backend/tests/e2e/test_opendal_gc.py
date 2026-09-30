@@ -7,7 +7,6 @@ declaration used for custom production S3. No identity or backup verifier is stu
 
 from __future__ import annotations
 
-import asyncio
 from datetime import timedelta
 from pathlib import Path
 from uuid import uuid4
@@ -21,6 +20,7 @@ from app.core.config import settings
 from app.core.time import utcnow
 from app.db.models import File, GcRun, Model
 from tests.containers import S3_ACCESS_KEY, S3_SECRET_KEY, s3_private_endpoint
+from tests.e2e._jobs import completed_job, create_backup
 from tests.paths import FIXTURES_DIR
 
 
@@ -87,26 +87,14 @@ class TestOpenDalGc:
             files={"file": ("sample.gcode", payload, "text/plain")},
             data={"model_name": "GC candidate"},
         )
-        assert uploaded.status_code == 202, uploaded.text
-        for _ in range(50):
-            job = (
-                await api.get(
-                    f"/api/v1/ingest/jobs/{uploaded.json()['job_id']}", headers=headers
-                )
-            ).json()
-            if job["state"] in {"completed", "failed", "duplicate"}:
-                break
-            await asyncio.sleep(0.05)
-        assert job["state"] == "completed", job
+        await completed_job(api, uploaded, headers)
         e2e_db.expire_all()
         candidate = e2e_db.exec(select(Model).where(Model.name == "GC candidate")).one()
         artifact = e2e_db.exec(select(File).where(File.model_id == candidate.id)).one()
         candidate_id, artifact_id = candidate.id, artifact.id
         untouched = Path(settings.data_dir) / "external-original.stl"
         untouched.write_bytes(b"not owned by PrintStash")
-        created = await api.post("/api/v1/backups", headers=headers)
-        assert created.status_code == 202, created.text
-        archive = created.json()
+        archive = await create_backup(api, headers)
         assert archive["location"] == "opendal:s3"
         assert not list(Path(settings.backup_dir).glob("*.tar.gz"))
         assert (

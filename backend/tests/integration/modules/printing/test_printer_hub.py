@@ -152,7 +152,9 @@ class TestPrinterHubLifecycle:
 
             hub._provider_builder = lambda _printer: FakeClient()
             with (
-                patch("app.modules.printing.printer_hub.asyncio.sleep", side_effect=_sleep),
+                patch(
+                    "app.modules.printing.printer_hub.asyncio.sleep", side_effect=_sleep
+                ),
             ):
                 await hub._run_printer(p.id, stop)
 
@@ -225,7 +227,9 @@ class TestPrinterHubChaosReconnect:
 
             hub._provider_builder = lambda _printer: FlakyClient()
             with (
-                patch("app.modules.printing.printer_hub.asyncio.sleep", side_effect=_sleep),
+                patch(
+                    "app.modules.printing.printer_hub.asyncio.sleep", side_effect=_sleep
+                ),
             ):
                 await hub._run_printer(p.id, stop)
 
@@ -441,7 +445,9 @@ class TestPrinterHubSyncActiveJob:
             calls += 1
             raise RuntimeError("database unavailable")
 
-        monkeypatch.setattr("app.modules.printing.printer_hub.asyncio.to_thread", failing_sync)
+        monkeypatch.setattr(
+            "app.modules.printing.printer_hub.asyncio.to_thread", failing_sync
+        )
 
         async def _run():
             for _ in range(4):

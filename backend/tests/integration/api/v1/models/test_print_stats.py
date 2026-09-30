@@ -118,7 +118,9 @@ def _oracle_totals(db_session: Session, period: str) -> dict:
 
     from app.db.scopes import live
 
-    lookback_days = models_statistics._STATS_PERIODS.get(period, models_statistics._STATS_PERIODS["30d"])
+    lookback_days = models_statistics._STATS_PERIODS.get(
+        period, models_statistics._STATS_PERIODS["30d"]
+    )
     end_at = utcnow()
     start_at = (
         end_at - timedelta(days=lookback_days) if lookback_days is not None else None

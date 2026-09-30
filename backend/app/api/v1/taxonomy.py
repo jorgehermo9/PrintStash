@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import re
-from typing import List
+from typing import List, Optional
 
 from fastapi import (
     APIRouter,
@@ -25,6 +25,7 @@ from fastapi import (
 )
 from printstash_core.files import slugify
 from sqlalchemy import func
+from sqlalchemy import select as sa_select
 from sqlmodel import Session, delete, select
 
 from app.api.artifact_responses import serve_stored_file
@@ -49,14 +50,16 @@ from app.db.projections import content_changed
 from app.db.scopes import live
 from app.db.session import get_session
 from app.modules.identity import rbac
-from app.modules.library import library_search, taxonomy, trash
+from app.modules.library import collection_tree, library_search, taxonomy, trash
 from app.modules.storage.storage_backend.contracts import StorageCollisionError
 from app.modules.storage.storage_backend.runtime import get_backend
 from app.modules.storage.storage_ownership import publish_bytes
 from app.schemas.models import (
     CollectionCreate,
     CollectionImageUpload,
+    CollectionLookupRead,
     CollectionMove,
+    CollectionPage,
     CollectionPermissionRead,
     CollectionPermissionUpdate,
     CollectionRead,
@@ -83,29 +86,6 @@ _IMAGE_NAME_RE = re.compile(r"^[0-9a-f]{64}\.(png|jpe?g|gif|webp)$")
 router = APIRouter(tags=["taxonomy"])
 
 
-def _collection_tags_by_id(
-    session: Session, collection_ids: list[int]
-) -> dict[int, list[str]]:
-    if not collection_ids:
-        return {}
-    result: dict[int, list[str]] = {
-        collection_id: [] for collection_id in collection_ids
-    }
-    rows = session.exec(
-        select(CollectionTagLink.collection_id, Tag.name)
-        .join(Tag, Tag.id == CollectionTagLink.tag_id)
-        .where(
-            CollectionTagLink.collection_id.in_(collection_ids),  # type: ignore[union-attr]
-            live(Tag),
-        )
-        .order_by(CollectionTagLink.collection_id.asc(), Tag.name.asc())  # type: ignore[attr-defined]
-    ).all()
-    for collection_id, tag_name in rows:
-        if collection_id is not None:
-            result[collection_id].append(tag_name)
-    return result
-
-
 def _collection_read(
     session: Session,
     current_user: User,
@@ -113,7 +93,7 @@ def _collection_read(
     *,
     model_count: int,
 ) -> CollectionRead:
-    tags = _collection_tags_by_id(
+    tags = collection_tree.collection_tags(
         session, [collection.id] if collection.id is not None else []
     )
     return CollectionRead(
@@ -141,8 +121,9 @@ def _collection_model_count(session: Session, path: str, user: User) -> int:
         (Collection.path == path) | (Collection.path.startswith(path + "/"))
     )
     if not user.is_superuser:
-        accessible_ids = rbac.accessible_collection_ids(session, user)
-        matching_cat_ids = matching_cat_ids.where(Collection.id.in_(accessible_ids))  # type: ignore[union-attr]
+        matching_cat_ids = matching_cat_ids.where(
+            Collection.id.in_(rbac.accessible_collection_ids_stmt(session, user))  # type: ignore[union-attr]
+        )
     count = session.exec(
         select(func.count(Model.id)).where(
             live(Model),
@@ -153,59 +134,124 @@ def _collection_model_count(session: Session, path: str, user: User) -> int:
 
 
 @router.get(
+    "/collections/children",
+    response_model=CollectionPage,
+    summary="Page through a collection's children, or the caller's root collections",
+)
+def list_collection_children(
+    parent_id: Optional[int] = Query(None),
+    cursor: Optional[str] = Query(None),
+    limit: int = Query(200, ge=1, le=collection_tree.CHILDREN_LIMIT_MAX),
+    current_user: User = Depends(require_user),
+    session: Session = Depends(get_session),
+) -> CollectionPage:
+    return collection_tree.children(
+        session, current_user, parent_id=parent_id, cursor=cursor, limit=limit
+    )
+
+
+@router.get(
+    "/collections/lookup",
+    response_model=CollectionLookupRead,
+    summary="Find a collection by path or id, with its visible ancestors",
+)
+def lookup_collection(
+    path: Optional[str] = Query(None, min_length=1, max_length=512),
+    collection_id: Optional[int] = Query(None, alias="id", ge=1),
+    current_user: User = Depends(require_user),
+    session: Session = Depends(get_session),
+) -> CollectionLookupRead:
+    if path is not None and collection_id is not None:
+        raise HTTPException(
+            status_code=422, detail="collection_lookup_requires_path_or_id"
+        )
+    if path is not None:
+        return collection_tree.lookup(session, current_user, path)
+    if collection_id is not None:
+        return collection_tree.lookup_by_id(session, current_user, collection_id)
+    raise HTTPException(status_code=422, detail="collection_lookup_requires_path_or_id")
+
+
+@router.get(
+    "/collections/search",
+    response_model=CollectionPage,
+    summary="Search collections by name, at a minimum role",
+)
+def search_collections(
+    q: str = Query("", max_length=128),
+    min_role: CollectionRole = Query(CollectionRole.VIEW),
+    cursor: Optional[str] = Query(None),
+    limit: int = Query(20, ge=1, le=collection_tree.SEARCH_LIMIT_MAX),
+    current_user: User = Depends(require_user),
+    session: Session = Depends(get_session),
+) -> CollectionPage:
+    return collection_tree.search(
+        session,
+        current_user,
+        query=q,
+        minimum=min_role,
+        cursor=cursor,
+        limit=limit,
+    )
+
+
+@router.get(
     "/collections",
     response_model=List[CollectionRead],
     summary="List all collections with model counts",
+    description=(
+        "Returns the whole tree. Deprecated: use /collections/children, "
+        "/collections/lookup and /collections/search; removal is planned for 0.16."
+    ),
+    deprecated=True,
 )
 def list_collections(
     current_user: User = Depends(require_user),
     session: Session = Depends(get_session),
 ) -> List[CollectionRead]:
-    stmt = select(Collection).where(live(Collection)).order_by(Collection.path)  # type: ignore[union-attr]
-    if not current_user.is_superuser:
-        accessible_ids = rbac.accessible_collection_ids(session, current_user)
-        if not accessible_ids:
-            return []
-        stmt = stmt.where(Collection.id.in_(accessible_ids))  # type: ignore[union-attr]
-    cats = session.exec(stmt).all()
-    # One grouped query for direct counts; subtree totals aggregate in memory.
-    model_count_stmt = select(Model.collection_id, func.count(Model.id)).where(
-        live(Model),
-        Model.collection_id.is_not(None),  # type: ignore[union-attr]
-    )
-    if not current_user.is_superuser:
-        model_count_stmt = model_count_stmt.where(
-            Model.collection_id.in_(accessible_ids)
-        )  # type: ignore[union-attr]
+    # A fixed number of statements, none binding a parameter per collection:
+    # the visible set is one subquery every other read filters by (#295).
+    visible = rbac.accessible_collection_ids_stmt(session, current_user)
+    rows = session.execute(
+        sa_select(
+            Collection.id,
+            Collection.name,
+            Collection.slug,
+            Collection.path,
+            Collection.parent_id,
+            # Only whether a readme exists; the text can be large.
+            func.coalesce(func.length(Collection.readme), 0) > 0,
+        )
+        .where(Collection.id.in_(visible))  # type: ignore[union-attr]
+        .order_by(Collection.path)
+    ).all()
     direct_counts: dict[int, int] = dict(
-        session.exec(model_count_stmt.group_by(Model.collection_id)).all()
+        session.exec(
+            select(Model.collection_id, func.count(Model.id))
+            .where(live(Model), Model.collection_id.in_(visible))  # type: ignore[union-attr]
+            .group_by(Model.collection_id)
+        ).all()
     )
-    count_by_path = {c.path: direct_counts.get(c.id, 0) for c in cats if c.id}
-    # Batched (2 queries total) instead of effective_collection_role per row,
-    # which cost 2 queries each — an N+1 on the endpoint feeding the sidebar.
-    roles = rbac.effective_roles_for_collections(
-        session, current_user, (c.id for c in cats)
+    totals = taxonomy.subtree_totals(
+        {path: direct_counts.get(cid, 0) for cid, _, _, path, _, _ in rows}
     )
-    tags_by_collection = _collection_tags_by_id(
-        session, [c.id for c in cats if c.id is not None]
+    roles = rbac.effective_roles_for_paths(
+        session, current_user, ((cid, path) for cid, _, _, path, _, _ in rows)
     )
+    tags_by_collection = collection_tree.collection_tags(session, visible)
     return [
         CollectionRead(
-            id=c.id,
-            name=c.name,
-            slug=c.slug,
-            path=c.path,
-            parent_id=c.parent_id,
-            model_count=sum(
-                n
-                for path, n in count_by_path.items()
-                if path == c.path or path.startswith(c.path + "/")
-            ),
-            effective_role=roles.get(c.id),
-            tags=tags_by_collection.get(c.id or 0, []),
-            has_readme=bool(c.readme),
+            id=cid,
+            name=name,
+            slug=slug,
+            path=path,
+            parent_id=parent_id,
+            model_count=totals[path],
+            effective_role=roles[cid],
+            tags=tags_by_collection.get(cid, []),
+            has_readme=has_readme,
         )
-        for c in cats
+        for cid, name, slug, path, parent_id, has_readme in rows
     ]
 
 
@@ -634,49 +680,29 @@ def list_tags(
         select(Tag).where(live(Tag)).order_by(Tag.name)  # type: ignore[union-attr]
     ).all()
     if current_user.is_superuser:
-        accessible_model_ids = select(Model.id).where(live(Model))
+        visible = None
         accessible_multipart_ids = select(MultipartModel.id)
-        counts = dict(
-            session.exec(
-                library_search.accessible_tag_counts_stmt(accessible_model_ids)
-            ).all()
-        )
-        has_accessible_multipart_models = True
     else:
-        accessible_ids = rbac.accessible_collection_ids(session, current_user)
-        if not accessible_ids:
-            counts = {}
-            multipart_counts = {}
-            has_accessible_multipart_models = False
-        else:
-            accessible_model_ids = select(Model.id).where(
-                live(Model),
-                Model.collection_id.in_(accessible_ids),  # type: ignore[union-attr]
-            )
-            counts = dict(
-                session.exec(
-                    library_search.accessible_tag_counts_stmt(accessible_model_ids)
-                ).all()
-            )
-            accessible_multipart_ids = select(MultipartModel.id).where(
-                MultipartModel.collection_id.in_(accessible_ids)  # type: ignore[union-attr]
-            )
-            has_accessible_multipart_models = True
-    if has_accessible_multipart_models:
-        multipart_counts = dict(
-            session.exec(
-                select(
-                    MultipartModelTagLink.tag_id,
-                    func.count(func.distinct(MultipartModelTagLink.multipart_model_id)),
-                )
-                .where(
-                    MultipartModelTagLink.multipart_model_id.in_(
-                        accessible_multipart_ids
-                    )
-                )  # type: ignore[union-attr]
-                .group_by(MultipartModelTagLink.tag_id)
-            ).all()
+        # A subquery, never the id set bound one parameter per collection.
+        visible = rbac.accessible_collection_ids_stmt(session, current_user)
+        accessible_multipart_ids = select(MultipartModel.id).where(
+            MultipartModel.collection_id.in_(visible)  # type: ignore[union-attr]
         )
+    counts = dict(
+        session.exec(library_search.accessible_tag_counts_stmt(visible)).all()
+    )
+    multipart_counts = dict(
+        session.exec(
+            select(
+                MultipartModelTagLink.tag_id,
+                func.count(func.distinct(MultipartModelTagLink.multipart_model_id)),
+            )
+            .where(
+                MultipartModelTagLink.multipart_model_id.in_(accessible_multipart_ids)
+            )  # type: ignore[union-attr]
+            .group_by(MultipartModelTagLink.tag_id)
+        ).all()
+    )
     return [
         TagRead(
             id=t.id,

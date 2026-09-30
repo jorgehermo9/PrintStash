@@ -1,6 +1,6 @@
 """Optional Similar Models adapter for the shared vector platform.
 
-Only this consumer knows SimilarityRun leases, geometry Artifact identities and
+Only this consumer knows SimilarityRun writers, geometry Artifact identities and
 EDIT-only candidate permissions. The store has no dependency on these owners.
 """
 
@@ -13,7 +13,6 @@ from printstash_core.inference.vectors import NeighborResult
 from sqlalchemy import literal
 from sqlmodel import Session, col, select
 
-from app.core.time import utcnow
 from app.db.models import File, Model, PassageVector, SimilarityRun, User
 from app.modules.search import vector_store
 from app.modules.search.vector_store import active_generation as active_generation
@@ -34,14 +33,18 @@ def publish(
     input_hash: str,
     vector: Iterable[float],
     run_id: int,
-    lease_token: str,
+    writer: str,
 ) -> bool:
+    """Publish one vector, fenced on the run's current execution (its writer).
+
+    A superseded attempt of the run's Job no longer matches ``writer`` and
+    publishes nothing.
+    """
     owner = (
         select(SimilarityRun.id)
         .where(
             SimilarityRun.id == run_id,
-            SimilarityRun.lease_token == lease_token,
-            col(SimilarityRun.lease_expires_at) > utcnow(),
+            SimilarityRun.writer == writer,
             col(SimilarityRun.cancel_requested).is_(False),
             SimilarityRun.state == "running",
         )

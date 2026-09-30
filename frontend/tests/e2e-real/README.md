@@ -15,6 +15,11 @@ trash, scans and remote storage), run the repository-level lane instead:
 ./scripts/test-critical.sh
 ```
 
+`backup-recovery.spec.ts` leaves a completed ZIP inspection unselected before
+purging a Model and restoring it through Settings, then compares the recovered
+Artifact bytes. Historical release archives are checked separately by the
+[local backup recovery jobs](../../../docs/backup-recovery-testing.md).
+
 `playwright.real.config.ts` boots the application plus its printer emulator:
 
 - `scripts/start-backend.sh` — wipes state, runs Alembic, launches uvicorn on
@@ -86,17 +91,17 @@ the storage step from any page, choose storage, then upload a first Model.
 
 auth (UI login, wrong-password, username + API-key login then revoke) ·
 vault (search, tag filter, list/grid toggle, empty state, narrow responsive toolbar) · collections
-(create / nest / subtree count / delete / recursive-delete non-empty from the sidebar) ·
+(create / nest / subtree count / delete / recursive-delete non-empty from the sidebar / lazy child expansion and Model move) ·
 documents (markdown editor, collection README, GFM tables) · tags (quick create/assign from a card,
 global delete) ·
-uploads (mesh-only source, BGCODE metadata, into a collection) · full backup recovery
+uploads (mesh-only source, BGCODE metadata, into a collection, ZIP preparation in Tasks → select all or select a folder → selected import) · full backup recovery
 (purge → UI restore → byte-for-byte download) · filament & printer presets
 (create / edit / delete) · model lifecycle (upload → edit → trash → restore →
 purge) · model detail (edit tags with save/cancel, log a manual print, download
 a revision) · G-code revisions (add, auto-recommend, re-recommend,
 status, compare) · public share links (view-only vs downloadable, revoke → 404) ·
 multipart sets (empty-set first action, external cover, tags, favorites, reusable members, collection browsing with multiple part selection) ·
-RBAC (create user, grant collection access, non-admin sees only granted
+RBAC (create user, search a nested collection and grant access without a whole-tree read, non-admin sees only granted
 collections, view vs edit role gates editing + deleting) · user management
 (promote/disable/reset password) · API keys · settings overview (system status
 and vault stats) · supervised API restart · display currency · auto-mark-known-good toggle · metadata
@@ -146,3 +151,5 @@ Only the test certificate's trust check is relaxed; browser CORS remains enabled
 Search clarity: the AI-search flow verifies that Enter preserves the live library filter, explicit AI search opens results, and retrieval explanations stay hidden. Library workflows reveal secondary commands through Library tools.
 
 AI Search settings: the Settings browser flow waits for loaded AI data, visits guided setup, search types, AI servers and technical options, captures desktop and mobile views, and checks visible choices and horizontal fit.
+
+- ZIP uploads: a failed preparation retains input capacity; Tasks confirms and discards it safely.

@@ -10,4 +10,6 @@ if __name__ == "__main__":
     while not release.exists():
         time.sleep(0.02)
     sys.argv.append("--persistent")
-    runpy.run_module("app.modules.inference.worker", run_name="__main__", alter_sys=True)
+    runpy.run_module(
+        "app.modules.inference.worker", run_name="__main__", alter_sys=True
+    )

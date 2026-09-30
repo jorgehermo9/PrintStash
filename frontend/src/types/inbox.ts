@@ -90,7 +90,7 @@ export interface InboxItem {
   manifest: InboxManifest;
   target_collection_id: number | null;
   requested_tags: string[];
-  background_job_id: string | null;
+  job_id: string | null;
   resulting_model_id: number | null;
   results: InboxItemResult[];
   error_code: string | null;

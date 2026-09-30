@@ -16,12 +16,12 @@ from sqlmodel import Session, select
 
 from app.db.models import (
     SENTINEL_FILE_HASH,
+    ArtifactDerivative,
     Collection,
     Document,
     File,
     ModelSourceCover,
     MultipartModel,
-    ThumbnailGeneration,
 )
 from app.modules.storage.storage_backend.contracts import StorageBackend
 from app.modules.storage.storage_backend.runtime import get_backend
@@ -66,10 +66,10 @@ def ownership_snapshot(
 
     files = list(session.exec(select(File)).all())
     generation_keys: dict[int, set[str]] = {}
-    for generation in session.exec(select(ThumbnailGeneration)).all():
-        if generation.storage_key:
-            generation_keys.setdefault(generation.file_id, set()).add(
-                generation.storage_key
+    for derivative in session.exec(select(ArtifactDerivative)).all():
+        if derivative.storage_key:
+            generation_keys.setdefault(derivative.file_id, set()).add(
+                derivative.storage_key
             )
     for row in files:
         if row.id is None:
@@ -114,7 +114,7 @@ def ownership_snapshot(
             result.derived.append(
                 OwnedBlob(
                     key=generation_key,
-                    resource_type="thumbnail_generation",
+                    resource_type="artifact_derivative",
                     resource_id=row.id,
                     display_name=row.original_filename,
                 )
@@ -208,6 +208,7 @@ def ownership_snapshot(
         # default walk already covers every vault-data prefix.
         if backend.direct_path(backend.thumbnail_key(0)) is not None:
             from pathlib import Path
+
             result.discovered_keys.update(
                 backend.walk_keys(str(Path(backend.thumbnail_key(0)).parent))
             )

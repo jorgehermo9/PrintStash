@@ -1,4 +1,4 @@
-"""Pending imports, accepted background jobs and staged-upload ownership."""
+"""Pending imports, accepted ingest requests and staged-upload ownership."""
 
 from datetime import datetime
 from typing import Optional
@@ -8,7 +8,6 @@ from sqlalchemy import (
     CheckConstraint,
     Column,
     ForeignKey,
-    Index,
     Integer,
     String,
     Text,
@@ -17,6 +16,7 @@ from sqlalchemy import (
 from sqlmodel import Field
 
 from app.core.time import utcnow
+from app.db.enum_columns import EnumText, enum_check
 
 from .base import SQLModel
 from .types import (
@@ -25,6 +25,7 @@ from .types import (
     InboxItemResultState,
     InboxItemState,
     InboxSourceKind,
+    IngestRequestKind,
 )
 
 
@@ -91,35 +92,55 @@ class InboxItemResult(SQLModel, table=True):
     updated_at: datetime = Field(default_factory=utcnow)
 
 
-class BackgroundJob(SQLModel, table=True):
-    __tablename__ = "background_jobs"
-    __table_args__ = (
-        Index(
-            "ix_background_jobs_visible_state_owner_updated",
-            "visible",
-            "state",
-            "owner_user_id",
-            "updated_at",
+class IngestRequest(SQLModel, table=True):
+    """The typed intent behind one accepted ingest Job.
+
+    Everything an ``ingest.*`` job needs besides the staged bytes (which its
+    staging leases own) lives here as columns, so an attempt rebuilds its work
+    from the current schema rather than from a serialized payload that an
+    upgrade could make unreadable.
+    """
+
+    __tablename__ = "ingest_requests"
+    __table_args__ = (enum_check("kind", IngestRequestKind),)
+
+    job_id: str = Field(
+        sa_column=Column(
+            String(64),
+            ForeignKey("jobs.id", ondelete="CASCADE"),
+            primary_key=True,
+        )
+    )
+    kind: IngestRequestKind = Field(
+        sa_column=Column(EnumText(IngestRequestKind), nullable=False)
+    )
+    owner_user_id: int = Field(foreign_key="users.id", index=True)
+    original_filename: Optional[str] = Field(default=None, max_length=512)
+    model_name: Optional[str] = Field(default=None, max_length=255)
+    collection: Optional[str] = Field(default=None, max_length=1024)
+    tags: Optional[str] = Field(default=None, sa_column=Column(Text))
+    source_hash: Optional[str] = Field(default=None, max_length=64)
+    file_type: Optional[str] = Field(default=None, max_length=16)
+    target_library_id: Optional[int] = Field(
+        default=None,
+        sa_column=Column(
+            Integer,
+            ForeignKey("external_libraries.id", ondelete="SET NULL"),
+            nullable=True,
         ),
     )
-
-    id: str = Field(primary_key=True, max_length=64)
-    owner_user_id: Optional[int] = Field(
-        default=None, foreign_key="users.id", index=True
-    )
-    visible: bool = Field(default=True, index=True)
-    kind: str = Field(default="generic", max_length=64, index=True)
-    state: str = Field(default="pending", max_length=16, index=True)
-    status_json: str = Field(default="{}", sa_column=Column(Text, nullable=False))
-    payload_json: Optional[str] = Field(default=None, sa_column=Column(Text))
-    replay_safe: bool = Field(default=False, index=True)
-    claim_token: Optional[str] = Field(default=None, max_length=64, index=True)
-    lease_expires_at: Optional[datetime] = Field(default=None, index=True)
-    attempts: int = Field(default=0)
-    next_attempt_at: Optional[datetime] = Field(default=None, index=True)
-    created_at: datetime = Field(default_factory=utcnow, index=True)
-    updated_at: datetime = Field(default_factory=utcnow, index=True)
-    finished_at: Optional[datetime] = Field(default=None, index=True)
+    source_url: Optional[str] = Field(default=None, max_length=2048)
+    # A user-supplied source credential (a Thingiverse cookie), encrypted with
+    # the installation's secrets key and cleared when the Job settles.
+    source_credential: Optional[str] = Field(default=None, sa_column=Column(Text))
+    # Kind-specific typed selection (archive entry names, model-page files,
+    # collection members), validated by its reader on every attempt.
+    selection_json: str = Field(default="{}", sa_column=Column(Text, nullable=False))
+    # A review manifest this request produced (an archive's entries, a model
+    # page's files, a collection's members), read back by the selection that
+    # follows it. Durable, so any process can serve the selection.
+    manifest_json: str = Field(default="{}", sa_column=Column(Text, nullable=False))
+    created_at: datetime = Field(default_factory=utcnow)
 
 
 class StagingLease(SQLModel, table=True):
@@ -128,10 +149,10 @@ class StagingLease(SQLModel, table=True):
     __tablename__ = "staging_leases"
     __table_args__ = (
         CheckConstraint(
-            "(background_job_id IS NOT NULL AND inbox_item_id IS NULL AND model_source_cover_id IS NULL AND capture_upload_slot_id IS NULL) OR "
-            "(background_job_id IS NULL AND inbox_item_id IS NOT NULL AND model_source_cover_id IS NULL AND capture_upload_slot_id IS NULL) OR "
-            "(background_job_id IS NULL AND inbox_item_id IS NULL AND model_source_cover_id IS NOT NULL AND capture_upload_slot_id IS NULL) OR "
-            "(background_job_id IS NULL AND inbox_item_id IS NULL AND model_source_cover_id IS NULL AND capture_upload_slot_id IS NOT NULL)",
+            "(job_id IS NOT NULL AND inbox_item_id IS NULL AND model_source_cover_id IS NULL AND capture_upload_slot_id IS NULL) OR "
+            "(job_id IS NULL AND inbox_item_id IS NOT NULL AND model_source_cover_id IS NULL AND capture_upload_slot_id IS NULL) OR "
+            "(job_id IS NULL AND inbox_item_id IS NULL AND model_source_cover_id IS NOT NULL AND capture_upload_slot_id IS NULL) OR "
+            "(job_id IS NULL AND inbox_item_id IS NULL AND model_source_cover_id IS NULL AND capture_upload_slot_id IS NOT NULL)",
             name="ck_staging_leases_exactly_one_owner",
         ),
     )
@@ -141,9 +162,7 @@ class StagingLease(SQLModel, table=True):
     owner_user_id: Optional[int] = Field(
         default=None, foreign_key="users.id", index=True
     )
-    background_job_id: Optional[str] = Field(
-        default=None, foreign_key="background_jobs.id", index=True
-    )
+    job_id: Optional[str] = Field(default=None, foreign_key="jobs.id", index=True)
     inbox_item_id: Optional[int] = Field(
         default=None,
         sa_column=Column(
@@ -214,11 +233,11 @@ class InboxItem(SQLModel, table=True):
     requested_tags_json: str = Field(
         default="[]", sa_column=Column(Text, nullable=False)
     )
-    background_job_id: Optional[str] = Field(
+    job_id: Optional[str] = Field(
         default=None,
         sa_column=Column(
             String(64),
-            ForeignKey("background_jobs.id", ondelete="SET NULL"),
+            ForeignKey("jobs.id", ondelete="SET NULL"),
             nullable=True,
             index=True,
         ),

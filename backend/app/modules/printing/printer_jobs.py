@@ -36,7 +36,6 @@ from app.modules.storage.artifact_content import (
     resolve,
 )
 from app.modules.storage.storage_backend.runtime import get_backend
-from app.runtime.work_wakeup import WorkWakeup
 
 logger = get_logger(__name__)
 
@@ -45,7 +44,6 @@ ProviderBuilder = Callable[[Printer], PrinterProviderClient]
 
 @dataclass
 class FleetSchedulerStatus:
-    running: bool = False
     last_tick_at: datetime | None = None
     last_dispatch_at: datetime | None = None
     last_error: str | None = None
@@ -136,15 +134,6 @@ def reproducibility_payload(
         "toolpath_preview_url": toolpath_preview_url,
         "artifact_capture_error_code": error_code,
         "artifact_capture_error_message": error_message,
-    }
-
-
-def scheduler_snapshot() -> dict[str, object]:
-    return {
-        "running": scheduler_status.running,
-        "last_tick_at": scheduler_status.last_tick_at,
-        "last_dispatch_at": scheduler_status.last_dispatch_at,
-        "last_error": scheduler_status.last_error,
     }
 
 
@@ -525,41 +514,25 @@ async def _dispatch_claimed(job_id: int, provider_builder: ProviderBuilder) -> N
     await asyncio.to_thread(_mark_dispatch_started, job_id, context)
 
 
-async def run_fleet_scheduler(
-    work_wakeup: WorkWakeup, provider_builder: ProviderBuilder
-) -> None:
-    from app.runtime.maintenance import (
-        begin_mutating_operation,
-        end_mutating_operation,
-    )
+async def drain_dispatch_queue(
+    provider_builder: ProviderBuilder, *, budget_seconds: float
+) -> int:
+    """Dispatch eligible queued fleet jobs until none is eligible or time runs out."""
+    import time
 
-    scheduler_status.running = True
-    try:
-        while True:
-            if not begin_mutating_operation():
-                await asyncio.sleep(0.5)
-                continue
-            scheduler_status.last_tick_at = utcnow()
-            try:
-                dispatched = await dispatch_next(provider_builder)
-                scheduler_status.last_error = None
-                if dispatched is not None:
-                    scheduler_status.last_dispatch_at = utcnow()
-            except Exception as exc:  # noqa: BLE001 - survive one bad tick
-                logger.exception("fleet scheduler tick failed")
-                scheduler_status.last_error = exc.__class__.__name__
-                dispatched = None
-            finally:
-                end_mutating_operation()
-            if dispatched is not None:
-                await asyncio.sleep(0)
-                continue
-            # Database remains source of truth; WorkWakeup is a low-latency wake
-            # transport. Timeout polling recovers queued work after restarts or
-            # a lost in-memory notification without external dependencies.
-            try:
-                await asyncio.wait_for(work_wakeup.wait(), timeout=2.0)
-            except asyncio.TimeoutError:
-                pass
-    finally:
-        scheduler_status.running = False
+    deadline = time.monotonic() + budget_seconds
+    dispatched = 0
+    while time.monotonic() < deadline:
+        scheduler_status.last_tick_at = utcnow()
+        try:
+            job_id = await dispatch_next(provider_builder)
+            scheduler_status.last_error = None
+        except Exception as exc:  # noqa: BLE001 - one bad claim ends the slice
+            logger.exception("fleet dispatch slice failed")
+            scheduler_status.last_error = exc.__class__.__name__
+            break
+        if job_id is None:
+            break
+        dispatched += 1
+        scheduler_status.last_dispatch_at = utcnow()
+    return dispatched

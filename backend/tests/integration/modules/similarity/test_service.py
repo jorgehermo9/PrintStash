@@ -132,18 +132,13 @@ class TestListRuns:
         run = make_similarity_run(
             make_user(superuser=True),
             checkpoint_json=json.dumps({"file_id": 10, "pending_pairs": [[1, 2]]}),
-            lease_token="private-worker-token",
+            writer="private-execution:1",
         )
 
         result = service.project_run(run)
 
         assert result["checkpoint"] == {"file_id": 10}
-        assert not {
-            "lease_token",
-            "settings_json",
-            "active_scope_key",
-            "lease_expires_at",
-        }.intersection(result)
+        assert not {"writer", "settings_json", "active_scope_key"}.intersection(result)
 
 
 class TestStatus:

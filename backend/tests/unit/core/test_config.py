@@ -22,11 +22,14 @@ class TestSettings:
             ("mesh_memory_budget_fraction", 1.01),
             ("mesh_render_face_chunk_size", 0),
             ("mesh_step_timeout_seconds", 0),
+            ("mesh_worker_timeout_seconds", 9),
+            ("mesh_worker_timeout_seconds", 3601),
             ("mesh_stream_timeout_seconds", 0),
             ("mesh_stream_timeout_seconds", 46),
             ("max_archive_entries", 0),
             ("backup_retention_days", -1),
             ("trash_retention_days", -1),
+            ("slow_request_ms", 0),
         ],
     )
     def test_numeric_settings_reject_impossible_values(
@@ -47,6 +50,20 @@ class TestSettings:
         # identifies the deployment's app registration.
         assert "client-id" not in rendered
         assert "client-secret" not in rendered
+
+    def test_slow_request_threshold_defaults_to_one_second(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.delenv("VAULT_SLOW_REQUEST_MS", raising=False)
+
+        assert FrozenSettings(_env_file=None).slow_request_ms == 1000
+
+    def test_slow_request_threshold_reads_the_environment(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("VAULT_SLOW_REQUEST_MS", "250")
+
+        assert FrozenSettings(_env_file=None).slow_request_ms == 250
 
     @pytest.mark.parametrize(
         ("field", "value"),

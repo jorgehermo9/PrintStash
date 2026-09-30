@@ -29,15 +29,16 @@ import {
   ExternalLibrariesPanel,
   type ExternalLibrariesApi,
 } from "@/components/external-libraries-panel";
-import { aStorageConnection } from "@/test-support/factories";
+import { ApiError } from "@/lib/errors";
+import { aJob as aSharedJob, aStorageConnection } from "@/test-support/factories";
 import { renderApp } from "@/test-support/render";
 import type {
   ExternalLibrary,
   ExternalLibraryCreate,
   ExternalLibraryScanSummary,
   ExternalLibraryUpdate,
-  IngestJobStatus,
-  IngestResponse,
+  JobStatus,
+  JobAccepted,
   StorageConnection,
 } from "@/types";
 
@@ -79,17 +80,14 @@ function aVolume(over: Partial<ExternalLibrary> = {}): ExternalLibrary {
   };
 }
 
-function aJob(over: Partial<IngestJobStatus> = {}): IngestJobStatus {
-  return {
+function aJob(over: Partial<JobStatus> = {}): JobStatus {
+  return aSharedJob({
     job_id: "job-1",
-    state: "completed",
+    kind: "sources.scan",
     model_id: null,
     file_id: null,
-    error: null,
-    started_at: FROZEN_NOW,
-    finished_at: FROZEN_NOW,
     ...over,
-  };
+  });
 }
 
 /**
@@ -112,9 +110,9 @@ function stubApi(over: Partial<ExternalLibrariesApi> = {}): ExternalLibrariesApi
       .mockResolvedValue(aVolume()),
     remove: vi.fn<(id: number) => Promise<void>>().mockResolvedValue(undefined),
     scan: vi
-      .fn<(id: number) => Promise<IngestResponse>>()
-      .mockResolvedValue({ job_id: "job-1", state: "pending", message: "queued" }),
-    jobStatus: vi.fn<(id: string) => Promise<IngestJobStatus>>().mockResolvedValue(aJob()),
+      .fn<(id: number) => Promise<JobAccepted>>()
+      .mockResolvedValue({ job_id: "job-1", state: "queued", message: "queued" }),
+    jobStatus: vi.fn<(id: string) => Promise<JobStatus>>().mockResolvedValue(aJob()),
     ...over,
   };
 }
@@ -508,7 +506,7 @@ describe("ExternalLibrariesPanel", () => {
       const user = userEvent.setup();
       renderPanel({
         jobStatus: vi
-          .fn<(id: string) => Promise<IngestJobStatus>>()
+          .fn<(id: string) => Promise<JobStatus>>()
           .mockResolvedValue(aJob({ state: "failed", error: "root_path_missing" })),
       });
       await screen.findByText("NAS models");
@@ -526,7 +524,7 @@ describe("ExternalLibrariesPanel", () => {
       const user = userEvent.setup();
       const { api } = renderPanel({
         jobStatus: vi
-          .fn<(id: string) => Promise<IngestJobStatus>>()
+          .fn<(id: string) => Promise<JobStatus>>()
           .mockResolvedValue(aJob({ state: "failed", error: "root_path_missing" })),
       });
       await screen.findByText("NAS models");
@@ -599,6 +597,22 @@ describe("ExternalLibrariesPanel", () => {
           collection_mode: "mirror",
         }),
       );
+    });
+
+    it("explains the writable mount requirement after enrollment fails", async () => {
+      const user = userEvent.setup();
+      renderPanel({
+        create: vi
+          .fn<(body: ExternalLibraryCreate) => Promise<ExternalLibrary>>()
+          .mockRejectedValue(new ApiError(409, "root_marker_unwritable", "")),
+      });
+      await screen.findByText("NAS models");
+      await user.type(screen.getByLabelText("Source name"), "Attic NAS");
+      await user.type(screen.getByLabelText("Mounted folder path"), "/mnt/attic");
+
+      await user.click(screen.getByRole("button", { name: /Add source/ }));
+
+      expect(await screen.findByText(/must be writable during enrollment/i)).toBeVisible();
     });
 
     it("adds a read-only remote S3 source through a reusable profile", async () => {

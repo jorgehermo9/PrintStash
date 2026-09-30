@@ -1,14 +1,22 @@
 /** Interactive searches have bounded waits and preserve navigation cancellation. */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { invalidateApiCache } from "@/lib/api/request";
 import {
+  cancelInferenceDownload,
+  deleteInferenceModel,
+  downloadInferenceModel,
   getSearchPreferences,
+  importEnvironmentEndpoint,
   parseSearch,
   searchImage,
   searchLibrary,
   searchUsingModel,
+  validateInferenceModel,
 } from "@/lib/api/search";
 import { json } from "@/test-support/render";
 import { searchResponse } from "@/test-support/search";
+
+import { expectRequest, fetchMock, lastBody, respondWith } from "./_wire";
 
 const fetcher = vi.fn<typeof fetch>();
 describe("Interactive search requests", () => {
@@ -86,5 +94,61 @@ describe("Interactive search requests", () => {
     fetcher.mockRejectedValue(new TypeError("Network unavailable"));
     await expect(searchLibrary({ q: "bracket" })).rejects.toThrow("Network unavailable");
     expect(vi.getTimerCount()).toBe(0);
+  });
+});
+
+/** Local model management: each call is one administrator request, never cached. */
+describe("Local model management", () => {
+  beforeEach(() => {
+    vi.stubGlobal("fetch", fetchMock);
+    fetchMock.mockReset();
+    invalidateApiCache();
+  });
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("answers a download request with the Job to follow", async () => {
+    respondWith({ job_id: "download-1" }, 202);
+
+    await expect(downloadInferenceModel("text/small v1")).resolves.toEqual({
+      job_id: "download-1",
+    });
+
+    expectRequest("/api/v1/inference/models/text%2Fsmall%20v1/download", "POST");
+    expect(lastBody()).toEqual({});
+  });
+
+  it("cancels a download by its Job", async () => {
+    respondWith(null, 204);
+
+    await cancelInferenceDownload("job/1");
+
+    expectRequest("/api/v1/inference/models/downloads/job%2F1/cancel", "POST");
+  });
+
+  it("validates an installed model", async () => {
+    respondWith({ id: "small", ready: true });
+
+    await expect(validateInferenceModel("small")).resolves.toEqual({ id: "small", ready: true });
+
+    expectRequest("/api/v1/inference/models/small/validate", "POST");
+  });
+
+  it("deletes an installed model", async () => {
+    respondWith(null, 204);
+
+    await deleteInferenceModel("small");
+
+    expectRequest("/api/v1/inference/models/small", "DELETE");
+  });
+
+  it("imports an endpoint the environment declares", async () => {
+    respondWith({ id: 3 }, 201);
+
+    await importEnvironmentEndpoint("chat");
+
+    expectRequest("/api/v1/config/ai-search/endpoints/from-environment/chat", "POST");
+    expect(lastBody()).toEqual({});
   });
 });

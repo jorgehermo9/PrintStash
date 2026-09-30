@@ -194,6 +194,38 @@ class TestSqliteSessionFactory:
 # --------------------------------------------------------------------------- #
 
 
+class TestConnectionAdmission:
+    """A restore that switches database names closes the gate on new sessions."""
+
+    def test_refuses_a_new_session_while_database_names_are_activated(
+        self, tmp_path
+    ) -> None:
+        from app.core.errors import OperationError
+        from app.runtime import maintenance
+
+        engine = create_engine(f"sqlite:///{tmp_path / 'gated.db'}")
+        factory = SQLiteSessionFactory(engine)
+        maintenance.fence_database_connections()
+        try:
+            with pytest.raises(OperationError, match="database_activation_in_progress"):
+                factory.session()
+        finally:
+            maintenance.release_database_connections()
+
+        with factory.scoped_session() as session:
+            assert session.exec(select(text("1"))).one() == 1
+
+    def test_resetting_maintenance_reopens_the_gate(self, tmp_path) -> None:
+        from app.runtime import maintenance
+
+        maintenance.fence_database_connections()
+
+        maintenance.reset_for_tests()
+
+        factory = SQLiteSessionFactory(create_engine(f"sqlite:///{tmp_path / 'x.db'}"))
+        factory.session().close()
+
+
 class TestSetSqlitePragmas:
     def test_set_sqlite_pragmas_configures_connection(self, tmp_path) -> None:
         db_file = tmp_path / "pragma-test.sqlite"

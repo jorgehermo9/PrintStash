@@ -60,9 +60,7 @@ class TestScanLibrary:
         nas.mkdir()
         library = build_external_library(db_session, nas, name="bounded-scan")
 
-        summary = external_library.scan_library(
-            library.id, relative_path=relative_path
-        )
+        summary = external_library.scan_library(library.id, relative_path=relative_path)
 
         assert summary["aborted"] is True
         assert expected_error in summary["error"]

@@ -342,8 +342,6 @@ class TestModelProjection:
             file_type=FileType.STL,
             blob_hash=hashlib.sha256(data).hexdigest(),
             meta={},
-            thumb_bytes=None,
-            overwrite_thumbnail=False,
         )
         drain_search(db_session)
         assert "Files: spring.stl" in passage_text(db_session, "model", model.id)

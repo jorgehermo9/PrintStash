@@ -35,9 +35,9 @@ from pathlib import Path
 
 import pytest
 
-import app.modules.media.mesh_operations as mesh_operations
 from app.core.config import _overlay
 from app.modules.media import mesh_processing, mesh_render
+from tests.fixtures.mesh_analysis import analyze
 
 from .._meshes import _fake_mesh, _write_binary_stl
 
@@ -264,10 +264,7 @@ class TestRenderSemaphore:
 
         monkeypatch.setattr(mesh_render, "render_mesh_thumbnail", _slow_render)
 
-        threads = [
-            threading.Thread(target=lambda: mesh_operations.analyze_mesh(p))
-            for _ in range(8)
-        ]
+        threads = [threading.Thread(target=lambda: analyze(p)) for _ in range(8)]
         for t in threads:
             t.start()
         for t in threads:
@@ -305,6 +302,24 @@ class TestExceedsCap:
         )
 
         assert mesh_processing._exceeds_cap(p) is False
+
+
+class TestNativeMemoryBudget:
+    """What one native worker (an embedding or search-view child) may use."""
+
+    def test_is_capped_at_two_gibibytes(self, monkeypatch) -> None:
+        monkeypatch.setattr(
+            mesh_processing, "_step_memory_budget_bytes", lambda: 64 * 1024**3
+        )
+
+        assert mesh_processing.native_memory_budget_bytes() == 2 * 1024**3
+
+    def test_an_undetectable_budget_falls_back_to_one_gibibyte(
+        self, monkeypatch
+    ) -> None:
+        monkeypatch.setattr(mesh_processing, "_step_memory_budget_bytes", lambda: None)
+
+        assert mesh_processing.native_memory_budget_bytes() == 1024**3
 
 
 class TestReclaimMemory:

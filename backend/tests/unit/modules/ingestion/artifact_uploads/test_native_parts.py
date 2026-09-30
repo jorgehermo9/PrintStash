@@ -13,6 +13,7 @@ from datetime import timedelta
 from pathlib import Path
 
 import pytest
+from printstash_core.files import PublicationStrategy
 
 import app.modules.ingestion.artifact_uploads.native_parts as native_parts
 from app.core.time import utcnow
@@ -56,11 +57,14 @@ def _part(number: int, payload: bytes) -> ArtifactUploadPart:
 
 
 class _NativeBackend:
+    staging_publication_strategy = PublicationStrategy.AUTO
     native_multipart_capability = NativeMultipartCapability(part_size=4, max_parts=10)
 
     def __init__(self, payload: bytes = b"abcdefgh") -> None:
         self.payload = payload
-        self.handle = NativeMultipartHandle("private/staging/upload", "provider-id", "token")
+        self.handle = NativeMultipartHandle(
+            "private/staging/upload", "provider-id", "token"
+        )
         self.remote_parts: list[NativeMultipartPart] = []
         self.receipt = CreationReceipt(
             key="private/staging/upload",
@@ -114,7 +118,7 @@ def cleartext_protection(monkeypatch: pytest.MonkeyPatch) -> None:
 
 class TestNativeMultipartUploadAdapter:
     def test_completes_verified_provider_parts(
-        self, tmp_path: Path, cleartext_protection: None
+        self, tmp_path: Path, cleartext_protection: None, hardlink_support
     ) -> None:
         payload = b"abcdefgh"
         backend = _NativeBackend(payload)
@@ -156,11 +160,18 @@ class TestNativeMultipartUploadAdapter:
         upload.protected_native_id = adapter.begin(upload)
         parts = [_part(1, b"abcd"), _part(2, b"efgh")]
         backend.remote_parts = [
-            NativeMultipartPart(part.part_number, part.size_bytes, part.sha256, f'"part-{part.part_number}"')
+            NativeMultipartPart(
+                part.part_number,
+                part.size_bytes,
+                part.sha256,
+                f'"part-{part.part_number}"',
+            )
             for part in parts
         ]
 
-        verified = adapter.complete(upload, parts, persist_completion=lambda _value: None)
+        verified = adapter.complete(
+            upload, parts, persist_completion=lambda _value: None
+        )
 
         assert verified.sha256 == upload.client_sha256
 
@@ -209,7 +220,10 @@ class TestNativeMultipartUploadAdapter:
             )
 
     def test_rejects_unprotected_or_invalid_provider_identity(
-        self, tmp_path: Path, cleartext_protection: None, monkeypatch: pytest.MonkeyPatch
+        self,
+        tmp_path: Path,
+        cleartext_protection: None,
+        monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         adapter = NativeMultipartUploadAdapter(_NativeBackend(), tmp_path)  # type: ignore[arg-type]
         upload = _upload()
@@ -236,7 +250,9 @@ class TestNativeMultipartUploadAdapter:
         directory.mkdir()
         (directory / "assembled.upload").write_bytes(b"payload")
         (directory / ".native-stale").write_bytes(b"partial")
-        protected = asdict(backend.handle) | {"completion_receipt": asdict(backend.receipt)}
+        protected = asdict(backend.handle) | {
+            "completion_receipt": asdict(backend.receipt)
+        }
         upload.protected_native_id = json.dumps(protected)
         adapter.abort_owned(upload)
         assert not directory.exists()

@@ -33,7 +33,6 @@ from datetime import timedelta
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
-from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from sqlalchemy import event
 from sqlmodel import Session, select
@@ -42,6 +41,7 @@ from app.core.time import utcnow
 from app.db.models import (
     CollectionRole,
     FileType,
+    JobKind,
     Model,
     OperatorGateState,
     Printer,
@@ -545,7 +545,9 @@ class TestQueueScheduler:
 
         provider.capabilities = capabilities_for_provider(printer.provider)
         with (
-            patch("app.modules.printing.printer_jobs.get_backend", return_value=Backend()),
+            patch(
+                "app.modules.printing.printer_jobs.get_backend", return_value=Backend()
+            ),
         ):
             from app.modules.printing.printer_jobs import dispatch_next
 
@@ -636,7 +638,9 @@ class TestQueueScheduler:
 
         provider.capabilities = capabilities_for_provider(printer.provider)
         with (
-            patch("app.modules.printing.printer_jobs.get_backend", return_value=Backend()),
+            patch(
+                "app.modules.printing.printer_jobs.get_backend", return_value=Backend()
+            ),
         ):
             assert (
                 asyncio.run(dispatch_next(_provider_builder(provider))) == queued["id"]
@@ -1981,13 +1985,15 @@ class TestFleet:
             }
         ]
 
-    def test_fleet_enqueue_notifies_work_wakeup(
+    def test_fleet_enqueue_nudges_the_dispatcher(
         self,
-        app: FastAPI,
         client: TestClient,
         auth_headers: dict[str, str],
         db_session: Session,
+        monkeypatch,
     ) -> None:
+        import app.modules.work as work
+
         build_printer(
             db_session,
             name="Wake",
@@ -1995,8 +2001,8 @@ class TestFleet:
             status=PrinterStatus.READY,
         )
         artifact = a_gcode_artifact(db_session, "Queue cube")
-        enqueue = AsyncMock()
-        app.state.work_wakeup.notify = enqueue
+        nudged: list[str] = []
+        monkeypatch.setattr(work, "nudge", lambda name, **_: nudged.append(name))
 
         response = client.post(
             "/api/v1/fleet/queue",
@@ -2005,10 +2011,7 @@ class TestFleet:
         )
 
         assert response.status_code == 201
-        enqueue.assert_awaited_once()
-        envelope = enqueue.await_args.args[0]
-        assert envelope.kind == "fleet_dispatch"
-        assert envelope.job_id == str(response.json()["id"])
+        assert nudged == [JobKind.PRINTING_DISPATCH]
 
     def test_patch_routing_maps_fleet_error_to_404(
         self,

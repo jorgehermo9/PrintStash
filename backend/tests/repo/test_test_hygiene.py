@@ -201,7 +201,7 @@ def _is_allowed(path: Path) -> bool:
 def _mirror_of(module: Path) -> Path | None:
     """The production module this test file defends, or None when nothing matches.
 
-    Four shapes count, and each exists for a reason:
+    Five shapes count, and each exists for a reason:
 
     * `<tier>/<pkg>/test_<mod>.py` → `<src>/<pkg>/<mod>.py` — the ordinary case.
     * `<tier>/<pkg>/test_<mod>.py` → `<src>/<pkg>/<mod>/__init__.py` — a module
@@ -211,6 +211,8 @@ def _mirror_of(module: Path) -> Path | None:
       file names inside it are endpoint or method groups.
     * `<tier>/<pkg>/test_<pkg>.py` → `<src>/<pkg>/__init__.py` — a package whose
       code lives in its own `__init__`, named for itself.
+    * `unit/scripts/test_<script>.py` → `<repo>/scripts/<script>.py` — shipped
+      standalone hooks live outside the application package by design.
     """
     for tests_root, source_root in MIRROR_ROOTS.items():
         if not module.is_relative_to(tests_root):
@@ -219,6 +221,10 @@ def _mirror_of(module: Path) -> Path | None:
         if tests_root is TESTS_ROOT:
             if relative.parts[0] not in MIRRORED_TIERS:
                 return None
+            if relative.parts[0:2] == ("unit", "scripts"):
+                stem = relative.name.removeprefix("test_").removesuffix(".py")
+                script = TESTS_ROOT.parent.parent / "scripts" / f"{stem}.py"
+                return script if script.exists() else None
             relative = Path(*relative.parts[1:])
         stem = relative.name.removeprefix("test_").removesuffix(".py")
         candidates = [

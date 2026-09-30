@@ -13,6 +13,7 @@ from app.db.models import File
 from app.modules.sources import external_library
 from app.modules.sources.library_source import SourceContent, SourceEntry, SourcePage
 from app.modules.storage import artifact_content
+from tests.e2e._jobs import settle
 from tests.paths import FIXTURES_DIR
 
 
@@ -105,6 +106,7 @@ class TestAdminGc:
             headers=superuser_headers,
         )
         assert scan.status_code == 202, scan.text
+        settle()
         e2e_db.expire_all()
         file_row = e2e_db.exec(
             select(File).where(File.source_key == "models/sample.gcode")

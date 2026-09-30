@@ -36,7 +36,9 @@ def delivery_request(
         purpose=purpose,
         inline=purpose == DeliveryPurpose.THUMBNAIL,
         origin=origin,
-        application_origin=(str(base_url).rstrip("/") if base_url is not None else None),
+        application_origin=(
+            str(base_url).rstrip("/") if base_url is not None else None
+        ),
         if_none_match=headers.get("if-none-match"),
         if_modified_since=headers.get("if-modified-since"),
         range_header=headers.get("range"),

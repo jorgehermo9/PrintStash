@@ -245,7 +245,8 @@ class TestBambuPrinter:
         with (
             patch("app.api.v1.printers.get_backend", return_value=backend),
             patch(
-                "app.modules.printing.dispatch.transfer_artifact", new_callable=AsyncMock
+                "app.modules.printing.dispatch.transfer_artifact",
+                new_callable=AsyncMock,
             ) as transfer,
         ):
             response = client.post(

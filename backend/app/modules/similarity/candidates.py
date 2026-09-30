@@ -467,8 +467,7 @@ def publish(
             select(SimilarityRun.id)
             .where(
                 SimilarityRun.id == run.id,
-                SimilarityRun.lease_token == run_token,
-                col(SimilarityRun.lease_expires_at) > utcnow(),
+                SimilarityRun.writer == run_token,
                 col(SimilarityRun.cancel_requested).is_(False),
             )
             .exists()

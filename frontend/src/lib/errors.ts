@@ -145,6 +145,9 @@ const ERROR_MESSAGES = {
   artifact_ingestion_failed: "The upload was verified but could not be processed.",
   native_upload_capability_unavailable:
     "Direct upload is unavailable. Refresh to request a fallback plan.",
+  staging_ownership_uncertain:
+    "Staged input ownership could not be verified. Its capacity remains reserved.",
+  staging_job_not_terminal: "Wait for this import to finish before discarding its staged input.",
   staging_capacity_exceeded: "Upload staging is full. Free space or wait for active uploads.",
   // The backstop, not the upload limit: `BodyLimitMiddleware` bounds the whole
   // request — which sits above the per-file cap — so a merely-large file gets the
@@ -234,6 +237,9 @@ const ERROR_MESSAGES = {
     "The backup copy could not be published. Check the destination and try again.",
   backup_retry_not_failed: "This destination no longer needs a retry. Refresh the backup runs.",
   backup_retry_in_progress: "A retry is already in progress for this destination.",
+  backup_retry_backup_running:
+    "This backup is still publishing its other destinations. Retry once it finishes.",
+  backup_retry_cancelled: "The retry was cancelled before it published a copy.",
   backup_remote_delete_unverified:
     "This remote backup changed or couldn't be verified, so it was not deleted.",
   // General

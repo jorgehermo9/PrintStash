@@ -17,8 +17,8 @@ from sqlmodel import Session, SQLModel, create_engine, select
 
 from app.core.config import settings
 from app.core.logging import get_logger
+from app.db.admission import require as require_database_connection_admission
 from app.db.url import normalize_async_database_url, normalize_database_url
-from app.runtime.maintenance import require_database_connection_admission
 
 logger = get_logger(__name__)
 

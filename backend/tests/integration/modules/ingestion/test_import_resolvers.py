@@ -151,7 +151,9 @@ class TestProviderMetadataCache:
         monkeypatch.setattr(
             import_resolvers.provider_connections, "fetch_mmf_model_metadata", metadata
         )
-        provider_metadata_cache._provider_metadata_cache[(1, "myminifactory", "123")] = (
+        provider_metadata_cache._provider_metadata_cache[
+            (1, "myminifactory", "123")
+        ] = (
             ProviderModelMetadata(
                 "123",
                 "stale",
@@ -618,7 +620,9 @@ class TestConnectedManifest:
         persisted = db_session.get(InboxItem, row.id)
         assert persisted is not None
         assert "never-persist" not in persisted.manifest_json
-        assert "never-persist" not in repr(provider_metadata_cache._provider_metadata_cache)
+        assert "never-persist" not in repr(
+            provider_metadata_cache._provider_metadata_cache
+        )
 
 
 class TestProviderFailures:
@@ -708,7 +712,9 @@ class TestProviderFailures:
             )
         assert str(exc_info.value) == "provider_contract_changed"
         assert "bearer-secret" not in str(exc_info.value)
-        assert "bearer-secret" not in repr(provider_metadata_cache._provider_metadata_cache)
+        assert "bearer-secret" not in repr(
+            provider_metadata_cache._provider_metadata_cache
+        )
 
     @pytest.mark.parametrize(
         ("url", "fetch_name"),

@@ -6,8 +6,9 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
-import { listIngestJobs } from "@/lib/api/models";
+import { listJobs } from "@/lib/api/jobs";
 import {
+  MODEL_DOWNLOAD_KIND,
   actOnSearchGeneration,
   cancelInferenceDownload,
   deleteInferenceModel,
@@ -44,13 +45,20 @@ export function SearchGenerationControls({ settings }: { settings: SearchSetting
     queryKey: ["ai-search", "generations"],
     queryFn: listSearchGenerations,
     refetchInterval: (query) =>
-      query.state.data?.some((generation) => generation.state === "building") ? 5000 : false,
+      query.state.data?.some(
+        (generation) =>
+          generation.state === "building" &&
+          generation.phase !== "ready" &&
+          generation.phase !== "verify_failed",
+      )
+        ? 5000
+        : false,
   });
   const downloads = useQuery({
     queryKey: ["ai-search", "downloads"],
-    queryFn: async () => (await listIngestJobs()).filter((job) => job.kind === "model_download"),
+    queryFn: async () => (await listJobs()).filter((job) => job.kind === MODEL_DOWNLOAD_KIND),
     refetchInterval: (query) =>
-      query.state.data?.some((job) => job.state === "pending" || job.state === "running")
+      query.state.data?.some((job) => job.state === "queued" || job.state === "running")
         ? 1500
         : 15000,
   });
@@ -389,7 +397,7 @@ export function SearchGenerationControls({ settings }: { settings: SearchSetting
                       !settings.settings.download_enabled ||
                       !local.runtime_available ||
                       downloads.data?.some(
-                        (job) => job.state === "running" || job.state === "pending",
+                        (job) => job.state === "running" || job.state === "queued",
                       )
                     }
                     onClick={() => download.mutate(local.key)}
@@ -640,7 +648,7 @@ export function SearchGenerationControls({ settings }: { settings: SearchSetting
                     </p>
                   )}
                 </div>
-                {(job.state === "pending" || job.state === "running") && (
+                {(job.state === "queued" || job.state === "running") && (
                   <Button
                     variant="outline"
                     size="sm"
@@ -679,11 +687,16 @@ export function SearchGenerationControls({ settings }: { settings: SearchSetting
                   </Badge>
                 </div>
                 <p className="mt-1 text-xs text-muted-foreground">
-                  {statusLabel(`aiSearch.phase.${generation.phase}`)} ·{" "}
-                  {t("aiSearch.indexProgress", {
-                    indexed: generation.indexed,
-                    total: generation.eligible,
-                  })}
+                  {statusLabel(`aiSearch.phase.${generation.phase}`)}
+                  {(generation.phase === "backfill" || generation.phase === "ready") && (
+                    <>
+                      {" · "}
+                      {t("aiSearch.indexProgress", {
+                        indexed: generation.indexed,
+                        total: generation.eligible,
+                      })}
+                    </>
+                  )}
                 </p>
                 <p className="mt-1 text-xs text-muted-foreground">
                   {generation.index_dimension} · {generation.quantization} ·{" "}

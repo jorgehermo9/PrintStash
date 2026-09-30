@@ -14,7 +14,6 @@ from app.db.models import FileType, User
 from app.db.session import get_session
 from app.modules.similarity import candidates, configuration, review, runs, service
 from app.modules.similarity.semantic_search import SearchRequest
-from app.runtime.work_wakeup import WorkNotice
 
 router = APIRouter(tags=["similarity"])
 PathId = Annotated[int, Path(ge=1, le=2**63 - 1)]
@@ -29,11 +28,12 @@ class RunCreate(BaseModel):
 
 
 async def _wake(request: Request, run_id: int) -> None:
-    wakeup = getattr(request.app.state, "similarity_wakeup", None)
-    if wakeup is not None:
-        await wakeup.notify(
-            WorkNotice(job_id=str(run_id), kind="similarity", payload={})
-        )
+    """A run was created or changed: its analysis Job should run now."""
+    del request, run_id
+    from app.db.models import JobKind
+    from app.modules.work import nudge
+
+    nudge(JobKind.SIMILARITY_ANALYZE)
 
 
 @router.get("/similarity/status")

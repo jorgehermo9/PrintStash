@@ -219,7 +219,7 @@ def main() -> None:
     tick = time.perf_counter()
     first_new = None
     for unit in range(1000):
-        worker.work_one()
+        worker.work_one(run_id, "benchmark:1")
         with Session(engine) as session:
             run = session.get(SimilarityRun, run_id)
             count = session.exec(

@@ -22,12 +22,14 @@ from typing import Any, Protocol
 from printstash_core.search.passages import SearchSubject, SubjectType
 
 from app.db.models import (
+    ArtifactDerivative,
     ArtifactProvenanceLink,
     CaptureUploadSlot,
     Collection,
     CollectionPermission,
     CollectionRole,
     CollectionTagLink,
+    DerivativeState,
     Document,
     DocumentKind,
     EmbeddingSpace,
@@ -42,6 +44,11 @@ from app.db.models import (
     InboxSourceKind,
     IndexGeneration,
     InferenceEndpoint,
+    IngestRequest,
+    IngestRequestKind,
+    Job,
+    JobKind,
+    JobState,
     Model,
     ModelProvenanceSource,
     ModelSourceCover,
@@ -76,7 +83,6 @@ from app.db.models import (
     SubjectCaption,
     SystemConfig,
     Tag,
-    ThumbnailGeneration,
     User,
     UserSearchPreferences,
     VaultAuditEvent,
@@ -85,6 +91,8 @@ from app.db.models import (
     VaultGeneration,
     VaultMigrationObject,
     VaultMigrationRun,
+    WorkExecutor,
+    WorkFence,
 )
 from app.db.models.search import (
     SearchDependency,
@@ -324,6 +332,64 @@ class MakeExternalLibrary(Protocol):
     ) -> ExternalLibrary: ...
 
 
+class MakeJob(Protocol):
+    def __call__(
+        self,
+        *,
+        kind: str = JobKind.WORK_HOUSEKEEPING,
+        state: JobState = ...,
+        owner: User | None = None,
+        subject: str | None = None,
+        finished: bool | None = None,
+        **overrides: Any,
+    ) -> Job: ...
+
+
+class MakeIngestRequest(Protocol):
+    def __call__(
+        self,
+        owner: User,
+        *,
+        kind: IngestRequestKind = ...,
+        state: JobState = ...,
+        **overrides: Any,
+    ) -> IngestRequest: ...
+
+
+class MakeDerivative(Protocol):
+    def __call__(
+        self,
+        file: File,
+        kind: str,
+        *,
+        state: DerivativeState = ...,
+        recipe_version: int | None = None,
+        exhausted: bool = False,
+        **overrides: Any,
+    ) -> ArtifactDerivative: ...
+
+
+class MakeWorkFence(Protocol):
+    def __call__(
+        self,
+        name: str,
+        *,
+        holder: str = "another-executor",
+        expired: bool = False,
+        **overrides: Any,
+    ) -> WorkFence: ...
+
+
+class MakeWorkExecutor(Protocol):
+    def __call__(
+        self,
+        executor_id: str | None = None,
+        *,
+        stale: bool = False,
+        **overrides: Any,
+    ) -> WorkExecutor: ...
+
+
 class MakeDocument(Protocol):
     def __call__(
         self,
@@ -402,6 +468,11 @@ __all__ = [
     "MakeProvenanceSource",
     "MakeShareLink",
     "MakeUser",
+    "MakeJob",
+    "MakeIngestRequest",
+    "MakeDerivative",
+    "MakeWorkFence",
+    "MakeWorkExecutor",
     "TagCollection",
     "TagFile",
     "UserHeaders",
@@ -603,13 +674,7 @@ class MakeUserSearchPreferences(Protocol):
     def __call__(self, user: User, **overrides: Any) -> UserSearchPreferences: ...
 
 
-
-
 class MakeSearchProjectionRequest(Protocol):
     def __call__(
         self, source: ContentSource, **overrides: Any
     ) -> SearchProjectionRequest: ...
-
-
-class MakeThumbnailGeneration(Protocol):
-    def __call__(self, file: File, **overrides: Any) -> ThumbnailGeneration: ...

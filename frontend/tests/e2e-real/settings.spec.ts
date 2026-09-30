@@ -10,7 +10,14 @@
 import { existsSync } from "node:fs";
 
 import { test, expect, type Page } from "./helpers";
-import { clickModelAction, modelCard, seedExpiredStaging, uploadGcodeModel } from "./util";
+import {
+  backupFromAccepted,
+  clickModelAction,
+  createBackupViaApi,
+  modelCard,
+  seedExpiredStaging,
+  uploadGcodeModel,
+} from "./util";
 import { aSimilarityCandidate } from "../../src/test-support/similarity";
 import { anArtifactCache } from "../../src/test-support/factories";
 import type { StorageInventoryReport } from "../../src/lib/api/storage-inventory";
@@ -619,7 +626,7 @@ test.describe("settings", () => {
             backup_id: "2026-09-24T000000Z",
             created_at: "2026-09-24T00:00:00Z",
             location: "local",
-            app_version: "0.13.0",
+            app_version: "0.14.0",
             file_count: 42,
             size_bytes: 1024,
             storage_backend: "local",
@@ -934,7 +941,8 @@ test.describe("settings", () => {
       ),
       page.getByRole("button", { name: "Backup now" }).click(),
     ]);
-    const metadata = await created.json();
+    const metadata = await backupFromAccepted(page, created);
+    await expect(page.getByText(/Backup created/)).toBeVisible();
 
     // The new backup shows up in the Restore-backup list with a Download action.
     const backupRow = page.locator("div.grid").filter({ hasText: metadata.backup_id }).last();
@@ -1022,9 +1030,7 @@ test.describe("settings", () => {
   });
 
   test("upload an existing backup archive", async ({ page }) => {
-    const createdResponse = await page.request.post("/api/v1/backups");
-    expect(createdResponse.ok()).toBeTruthy();
-    const metadata = await createdResponse.json();
+    const metadata = await createBackupViaApi(page);
     const source = new URLSearchParams({ source_ref: metadata.source_ref });
     const archiveResponse = await page.request.get(
       `/api/v1/backups/${metadata.backup_id}/download?${source}`,
@@ -1061,6 +1067,7 @@ test.describe("settings", () => {
     await page.getByLabel("Bucket").fill("printstash-e2e");
     await page.getByLabel("Access key").fill("e2e-access");
     await page.getByLabel("Secret key").fill("e2e-secret");
+    await page.getByRole("button", { name: "Backups + libraries" }).click();
     const created = page.waitForResponse(
       (response) =>
         response.url().endsWith("/api/v1/storage-connections") &&
@@ -1195,8 +1202,9 @@ test.describe("settings", () => {
         response.url().endsWith("/api/v1/backups") && response.request().method() === "POST",
     );
     await page.getByRole("button", { name: "Backup now" }).click();
-    const metadata = await (await created).json();
+    const metadata = await backupFromAccepted(page, await created);
     expect(metadata.source_ref).toBeTruthy();
+    await expect(page.getByText(/Backup created/)).toBeVisible();
 
     const download = page.waitForRequest(
       (request) =>

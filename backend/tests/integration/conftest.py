@@ -36,6 +36,7 @@ from tests.factories.protocols import (
     MakeCaptureSlot,
     MakeCollection,
     MakeCover,
+    MakeDerivative,
     MakeDocument,
     MakeEmbeddingSpace,
     MakeExternalLibrary,
@@ -44,6 +45,8 @@ from tests.factories.protocols import (
     MakeInboxItem,
     MakeIndexGeneration,
     MakeInferenceEndpoint,
+    MakeIngestRequest,
+    MakeJob,
     MakeModel,
     MakeMultipartBuild,
     MakeMultipartBuildAttempt,
@@ -77,12 +80,13 @@ from tests.factories.protocols import (
     MakeStorageConnection,
     MakeSubjectCaption,
     MakeSystemConfig,
-    MakeThumbnailGeneration,
     MakeUser,
     MakeUserSearchPreferences,
     MakeVaultGeneration,
     MakeVaultMigration,
     MakeVaultMigrationObject,
+    MakeWorkExecutor,
+    MakeWorkFence,
     TagCollection,
     TagFile,
     UserHeaders,
@@ -323,8 +327,33 @@ def make_owned_storage_object(db_session: Session) -> MakeOwnedStorageObject:
 
 
 @pytest.fixture
-def make_background_job(db_session: Session) -> Any:
-    return _bound(factories.build_background_job, db_session)
+def make_job(db_session: Session) -> MakeJob:
+    """A Job of a registered definition; terminal states carry ``finished_at``."""
+    return _bound(factories.build_job, db_session)
+
+
+@pytest.fixture
+def make_ingest_request(db_session: Session) -> MakeIngestRequest:
+    """An accepted ingest request together with the queued Job that owns it."""
+    return _bound(factories.build_ingest_request, db_session)
+
+
+@pytest.fixture
+def make_derivative(db_session: Session) -> MakeDerivative:
+    """A derivative row at the kind's current recipe; ``exhausted`` gives up."""
+    return _bound(factories.build_derivative, db_session)
+
+
+@pytest.fixture
+def make_work_fence(db_session: Session) -> MakeWorkFence:
+    """A fence held by another process, live or ``expired``."""
+    return _bound(factories.build_work_fence, db_session)
+
+
+@pytest.fixture
+def make_work_executor(db_session: Session) -> MakeWorkExecutor:
+    """Another job-running process, heartbeating or ``stale``."""
+    return _bound(factories.build_work_executor, db_session)
 
 
 @pytest.fixture
@@ -467,7 +496,11 @@ __all__ = [
     "make_audit_event",
     "make_audit_finding",
     "make_audit_run",
-    "make_background_job",
+    "make_derivative",
+    "make_ingest_request",
+    "make_job",
+    "make_work_executor",
+    "make_work_fence",
     "make_capture",
     "make_capture_slot",
     "make_collection",
@@ -694,17 +727,9 @@ def make_user_search_preferences(db_session: Session) -> MakeUserSearchPreferenc
     return _bound(factories.build_user_search_preferences, db_session)
 
 
-
-
 @pytest.fixture
 def make_search_projection_request(db_session: Session) -> MakeSearchProjectionRequest:
     return _bound(factories.build_search_projection_request, db_session)
 
+
 __all__ += ["make_search_projection_request"]
-
-
-@pytest.fixture
-def make_thumbnail_generation(db_session: Session) -> MakeThumbnailGeneration:
-    return _bound(factories.build_thumbnail_generation, db_session)
-
-__all__ += ["make_thumbnail_generation"]

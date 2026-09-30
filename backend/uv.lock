@@ -809,6 +809,23 @@ wheels = [
 ]
 
 [[package]]
+name = "dbos"
+version = "2.31.1"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "click" },
+    { name = "psycopg", extra = ["binary"] },
+    { name = "python-dateutil" },
+    { name = "pyyaml" },
+    { name = "sqlalchemy", extra = ["asyncio"] },
+    { name = "websockets" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/26/30/9865e3592b757e89251bfb9f30c315e972ce6e23175eee4dc486ff8c1073/dbos-2.31.1.tar.gz", hash = "sha256:646918de8ec579f56281ec744b87f562497e2618edbedf79960311fa03f2b078", size = 703678, upload-time = "2026-09-08T17:02:48.486Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/5a/0c/674bb1e686257003a149218b68a398884f2185c7de2e3dcf1d552ee97ebb/dbos-2.31.1-py3-none-any.whl", hash = "sha256:5c32840683cbb10727d30d208d8e1eb3ccaec7ed881776e5bf9d89cb32d7583c", size = 278527, upload-time = "2026-09-08T17:02:46.764Z" },
+]
+
+[[package]]
 name = "defusedxml"
 version = "0.7.1"
 source = { registry = "https://pypi.org/simple" }
@@ -2151,6 +2168,7 @@ dependencies = [
     { name = "botocore" },
     { name = "croniter" },
     { name = "cryptography" },
+    { name = "dbos" },
     { name = "fastapi" },
     { name = "greenlet" },
     { name = "httpx" },
@@ -2248,6 +2266,7 @@ requires-dist = [
     { name = "cheroot", marker = "extra == 'dev'", specifier = ">=11,<12" },
     { name = "croniter", specifier = ">=6.2,<7" },
     { name = "cryptography", specifier = ">=50,<51" },
+    { name = "dbos", specifier = ">=2.31,<3" },
     { name = "deptry", marker = "extra == 'dev'", specifier = ">=0.23,<1" },
     { name = "fastapi", specifier = ">=0.141,<1" },
     { name = "greenlet", specifier = ">=3.5,<4" },
@@ -3209,6 +3228,11 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/f2/48/dbb2cc4e5bad88c89c7bb296e2d0a8df58aab9edc75853728c361eefc24f/sqlite_vec-0.1.6-py3-none-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:7b0519d9cd96164cd2e08e8eed225197f9cd2f0be82cb04567692a0a4be02da3", size = 103704, upload-time = "2024-11-20T16:40:33.729Z" },
     { url = "https://files.pythonhosted.org/packages/80/76/97f33b1a2446f6ae55e59b33869bed4eafaf59b7f4c662c8d9491b6a714a/sqlite_vec-0.1.6-py3-none-manylinux_2_17_x86_64.manylinux2014_x86_64.manylinux1_x86_64.whl", hash = "sha256:823b0493add80d7fe82ab0fe25df7c0703f4752941aee1c7b2b02cec9656cb24", size = 151556, upload-time = "2024-11-20T16:40:35.387Z" },
     { url = "https://files.pythonhosted.org/packages/6a/98/e8bc58b178266eae2fcf4c9c7a8303a8d41164d781b32d71097924a6bebe/sqlite_vec-0.1.6-py3-none-win_amd64.whl", hash = "sha256:c65bcfd90fa2f41f9000052bcb8bb75d38240b2dae49225389eca6c3136d3f0c", size = 281540, upload-time = "2024-11-20T16:40:37.296Z" },
+]
+
+[package.optional-dependencies]
+asyncio = [
+    { name = "greenlet" },
 ]
 
 [[package]]

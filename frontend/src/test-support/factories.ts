@@ -37,9 +37,12 @@ import type { ArtifactCacheRead } from "@/lib/api/artifact-cache";
  */
 
 import type {
+  CollectionNodeRead,
+  CollectionPage,
   CollectionRead,
+  DerivativeRead,
   ExternalLibrary,
-  IngestJobStatus,
+  JobStatus,
   ModelListItem,
   PrinterAccess,
   PrinterCapabilities,
@@ -49,6 +52,7 @@ import type {
   StorageUsageRead,
   TagRead,
   VaultStatsRead,
+  WorkOverview,
 } from "@/types";
 
 /** A fixed instant. Every builder's timestamps derive from this one. */
@@ -186,6 +190,22 @@ export function aCollection(override?: Partial<CollectionRead>): CollectionRead 
   };
 }
 
+/** A node of the lazily loaded tree: a top-level folder with nothing below it. */
+export function aCollectionNode(override?: Partial<CollectionNodeRead>): CollectionNodeRead {
+  return {
+    ...aCollection(),
+    child_count: 0,
+    descendant_count: 0,
+    display_path: "Parts",
+    ...override,
+  };
+}
+
+/** The last page of a tree level, search or lookup listing. */
+export function aCollectionPage(items: CollectionNodeRead[]): CollectionPage {
+  return { items, next_cursor: null };
+}
+
 export function aTag(override?: Partial<TagRead>): TagRead {
   return { id: 1, name: "functional", slug: "functional", model_count: 3, ...override };
 }
@@ -248,6 +268,7 @@ export function aModelListItem(override?: Partial<ModelListItem>): ModelListItem
     slug: "bracket",
     collection: null,
     collection_id: null,
+    collection_label: null,
     source_url: null,
     effective_role: null,
     tags: [],
@@ -274,6 +295,7 @@ export function aModel(
     hash: "a".repeat(64),
     collection: null,
     collection_id: null,
+    collection_label: null,
     description: null,
     source_url: null,
     effective_role: "admin",
@@ -411,6 +433,7 @@ export function aMultipartModel(
     description: null,
     collection: null,
     collection_id: null,
+    collection_label: null,
     part_count: 1,
     model_count: 1,
     guide_count: 0,
@@ -507,16 +530,102 @@ export function anExternalLibrary(override?: Partial<ExternalLibrary>): External
   };
 }
 
-/** A terminal ingestion job; callers supply distinct IDs to isolate the task cache. */
-export function anIngestJob(override?: Partial<IngestJobStatus>): IngestJobStatus {
+/** A completed import Job; callers supply distinct IDs to isolate the task cache. */
+export function aJob(override?: Partial<JobStatus>): JobStatus {
   return {
     job_id: "test-job",
+    kind: "ingestion.upload",
     state: "completed",
+    priority: "interactive",
+    attempts: 1,
+    resubmits: 0,
     model_id: 1,
     file_id: 1,
     error: null,
+    retryable: false,
+    created_at: FROZEN_NOW,
+    updated_at: FROZEN_NOW,
     started_at: FROZEN_NOW,
     finished_at: FROZEN_NOW,
+    committed_at: null,
+    step: null,
+    total_steps: null,
+    label: null,
+    progress: null,
+    result: null,
+    stage: null,
+    current_item: null,
+    processed: 0,
+    total: null,
+    succeeded: 0,
+    deduplicated: 0,
+    skipped: 0,
+    failed: 0,
+    completion: null,
+    failed_items: [],
+    staging: null,
+    ...override,
+  };
+}
+
+/** One derivative of an Artifact; `ready` unless the test says otherwise. */
+export function aDerivative(override?: Partial<DerivativeRead>): DerivativeRead {
+  return {
+    kind: "thumbnail",
+    recipe_version: 1,
+    state: "ready",
+    attempts: 1,
+    failure_reason: null,
+    updated_at: FROZEN_NOW,
+    retryable: false,
+    ...override,
+  };
+}
+
+/** The Background work overview of a single-process install with nothing queued. */
+export function aWorkOverview(override?: Partial<WorkOverview>): WorkOverview {
+  return {
+    lanes: [
+      {
+        name: "derive.native",
+        concurrency: 1,
+        default_concurrency: 1,
+        overridden: false,
+        scope: "worker",
+        partitioned: false,
+        queued: 0,
+        running: 0,
+      },
+    ],
+    definitions: [
+      {
+        name: "derivatives.mesh",
+        label: "Mesh derivatives",
+        lane: "derive.native",
+        queued: 0,
+        running: 0,
+        interrupted: 0,
+        failed: 0,
+        completed: 3,
+        derivative_kinds: ["metadata", "thumbnail"],
+        next_due_at: null,
+        last_finished_at: FROZEN_NOW,
+      },
+    ],
+    executors: [
+      {
+        executor_id: "all-host-1",
+        role: "all",
+        hostname: "host",
+        app_version: "0.14.0",
+        lanes: ["derive.native"],
+        started_at: FROZEN_NOW,
+        heartbeat_at: FROZEN_NOW,
+        stale: false,
+      },
+    ],
+    failed_jobs: [],
+    failed_derivatives: 0,
     ...override,
   };
 }
@@ -583,7 +692,7 @@ export function aMigrationBackup(
     size_bytes: 100,
     file_count: 1,
     storage_backend: "local",
-    app_version: "0.13.0",
+    app_version: "0.14.0",
     location: "local",
     source_ref: "exact-backup-source",
     ...override,

@@ -17,6 +17,7 @@ from app.api.v1 import (
     health,
     inbox,
     ingest,
+    jobs,
     maintenance,
     models,
     multipart_builds,
@@ -34,6 +35,7 @@ from app.api.v1 import (
     system,
     taxonomy,
     vault_migration,
+    work,
 )
 from app.bootstrap.optional_features import (
     install_optional_routes,
@@ -52,6 +54,9 @@ api_router.include_router(provider_connections.router)
 api_router.include_router(provider_connections.pairing_router)
 api_router.include_router(admin.router)
 api_router.include_router(ingest.router)
+api_router.include_router(jobs.router)
+api_router.include_router(jobs.events_router)
+api_router.include_router(work.router)
 api_router.include_router(inbox.router)
 api_router.include_router(maintenance.router)
 api_router.include_router(models.router)

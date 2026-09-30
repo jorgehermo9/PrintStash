@@ -1,7 +1,14 @@
 /** A browser-created remote-only backup restores a purged Model and its bytes. */
 import { expect, test } from "@playwright/test";
 
-import { clickModelAction, gcodeFor, modelCard, uploadGcodeModel } from "../util";
+import {
+  backupFromAccepted,
+  clickModelAction,
+  completedJob,
+  gcodeFor,
+  modelCard,
+  uploadGcodeModel,
+} from "../util";
 
 const webdavPort = Number(process.env.PLAYWRIGHT_CRITICAL_BACKUP_WEBDAV_PORT ?? 8776);
 
@@ -57,7 +64,7 @@ test.describe("remote-only backup recovery", () => {
         response.url().endsWith("/api/v1/backups") && response.request().method() === "POST",
     );
     await page.getByRole("button", { name: "Backup now" }).click();
-    const metadata = await (await created).json();
+    const metadata = await backupFromAccepted(page, await created);
     expect(metadata.location).toBe("opendal:webdav");
     await expect
       .poll(
@@ -149,13 +156,10 @@ test.describe("partial backup recovery", () => {
           response.url().endsWith("/api/v1/backups") && response.request().method() === "POST",
       );
       await page.getByRole("button", { name: "Backup now" }).click();
-      const response = await created;
-      expect(response.status()).toBe(202);
-      const meta = await response.json();
+      const meta = await backupFromAccepted(page, await created);
       expect(meta.outcome).toBe("partial");
-      const failed = meta.destination_results.find(
-        (result: { name: string }) => result.name === root,
-      );
+      const failed = (meta.destination_results ?? []).find((result) => result.name === root);
+      if (!failed) throw new Error(`no destination result for ${root}`);
       expect(failed.outcome).toBe("failed");
       const article = page.getByRole("article", { name: `${meta.backup_id}: Partially completed` });
       await expect(article.getByText(`${root} · Failed`)).toBeVisible();
@@ -168,12 +172,14 @@ test.describe("partial backup recovery", () => {
           candidate.request().method() === "POST",
       );
       await article.getByRole("button", { name: "Retry this destination" }).click();
-      expect((await retried).status()).toBe(200);
+      // The retry is a Job: the POST queues it, and the copy is published
+      // when that Job completes.
+      await completedJob(page, await retried);
       const completed = page.getByRole("article", { name: `${meta.backup_id}: Completed` });
       await expect(completed.getByText(`${root} · Published`)).toBeVisible();
       await expect(completed.getByText(/Last verified:/)).toBeVisible();
       const remote = await page.request.get(
-        `http://127.0.0.1:${webdavPort}/${failed.key.replace(/^webdav\//, "")}`,
+        `http://127.0.0.1:${webdavPort}/${(failed.key ?? "").replace(/^webdav\//, "")}`,
       );
       expect(remote.ok()).toBeTruthy();
       expect(

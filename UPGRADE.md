@@ -1,6 +1,40 @@
 # PrintStash Upgrade Guide
 
-## Unreleased: Model Family removal
+## 0.14.0: background work on a durable engine
+
+Background work now runs as Jobs on an embedded engine (DBOS). Nothing new has
+to be installed or configured for the default single-container deployment.
+
+- **Finish or cancel imports first.** Work that is queued or running when you
+  upgrade is not carried over: those Jobs are marked failed with a message
+  saying so, and the files they had staged are reclaimed by the usual staging
+  cleanup. Retry them after the upgrade.
+- **Previews and metadata are kept.** Existing thumbnails and metadata are
+  recorded as already derived, so the library is not re-rendered. Meshes that
+  never had geometry are derived in the background after startup.
+- **Engine state is disposable.** On SQLite it is `printstash-dbos.sqlite`
+  beside the vault database; on PostgreSQL the `dbos` schema of the same
+  database. It is not part of a backup, and a restore rebuilds it. Do not copy
+  it between installations.
+- **API changes for scripts and integrations.** Poll `GET /api/v1/jobs/{id}`
+  instead of `/api/v1/ingest/jobs/{id}`. Job states are `queued`, `running`,
+  `interrupted`, `completed`, `failed` and `cancelled`. `POST /api/v1/backups`
+  returns `202` with a `job_id`; the finished Job's `result` is the backup.
+  `POST /api/v1/files/thumbnails/rebuild` is replaced by
+  `POST /api/v1/admin/work/derivatives/thumbnail/regenerate` with
+  `{"mode": "all"}`. A binary G-code toolpath that is still being prepared
+  answers `202` with `{"state": …}`. Pending Imports report `job_id`.
+- **Optional workers.** On PostgreSQL, with one volume every process mounts
+  (`VAULT_SHARED_STORAGE=true`), you can add
+  `python -m app.worker` processes: `docker-compose.advanced.yml --profile workers`
+  runs them; see
+  [Background work and workers](docs/deployment.md#background-work-and-workers).
+  A worker never migrates; it waits for the API, which migrates on start.
+- **`VAULT_INGEST_WORKER_COUNT` is gone.** Nothing read it; uploads committed
+  at once are `VAULT_JOBS_INGEST_CONCURRENCY` (default 2), or Settings →
+  Background work.
+
+## 0.14.0: Model Family removal
 
 This upgrade removes the Model Families feature and its database tables. Back up
 both the database and managed storage before upgrading if you need to retain
@@ -12,7 +46,7 @@ Family entries and views filtered by Family are skipped.
 Uploaded Family cover blobs may remain in managed storage without a live
 reference after the database tables are removed.
 
-## Unreleased: canonical Artifact downloads
+## 0.14.0: canonical Artifact downloads
 
 Clients using `/api/v1/files/{id}/download-url` or `download-direct` must use
 `/api/v1/files/{id}/download` and follow temporary redirects. Authentication is
@@ -24,7 +58,7 @@ This guide covers supported self-hosted upgrades. SQLite plus local filesystem
 storage remains the default. Always upgrade from a fresh backup and retain the
 previous application image until validation is complete.
 
-## Unreleased: one data volume
+## 0.14.0: one data volume
 
 Both Compose files now mount **one** volume, `printstash`, at `/data` instead of
 five (`printstash_data`, `printstash_thumbs`, `printstash_db`,
@@ -77,7 +111,7 @@ If you set `VAULT_DATA_DIR`, `VAULT_THUMB_DIR`, `VAULT_STAGING_DIR` or
 `VAULT_BACKUP_DIR` yourself, they still work as per-directory overrides. Keep
 staging on the same mount as the library, or imports fall back to copying.
 
-## Unreleased: fewer Compose files
+## 0.14.0: fewer Compose files
 
 The repository root now has two Compose files. `docker-compose.yml` runs
 PrintStash as **one container** (web UI + full API, image
@@ -100,7 +134,7 @@ pulling:
 
 Both files mount the same `printstash` volume, so data is found as long as the
 Compose project name (normally the directory name) stays the same; coming from
-the five older volumes, first follow [one data volume](#unreleased-one-data-volume).
+the five older volumes, first follow [one data volume](#0140-one-data-volume).
 Stop the old stack
 with `docker compose -f <old file> down` (never `down -v`) before starting the
 new one. Moving from two containers to the single container, run

@@ -17,6 +17,7 @@ import { useTags } from "@/lib/queries";
 import { toast } from "@/lib/toast";
 import { FileRead, ModelRead, TrashedSourceFileRead } from "@/types";
 
+import { DerivativeStatus } from "@/components/derivative-status";
 import { SlicerOpenButton } from "@/components/slicer-open-button";
 import { Localized } from "@/components/ui/localized";
 import { EntityTagsDialog } from "@/components/entity-tags-dialog";
@@ -140,6 +141,7 @@ export function FilesTab({
                       value2: String(f.version ?? ""),
                     })}
                   </p>
+                  <DerivativeStatus modelId={modelId} fileId={f.id} canRetry={canEdit} />
                   <div className="mt-1.5">
                     <EntityTagsDialog
                       entityLabel={f.original_filename}

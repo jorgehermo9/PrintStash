@@ -37,9 +37,17 @@ host mount is undesirable or unavailable.
 ## Create A Remote Connection
 
 1. Open **Settings > Remote storage** and create an S3, WebDAV, SFTP or Google
-   Drive connection whose use includes **Library sources**. Credentials are
+   Drive connection whose use includes **Library sources**. Choose **Library
+   sources** for a read-only SFTP account; **Backups + libraries** also tests
+   backup access. Credentials are
    encrypted in the database and never returned by the API after creation.
-2. Test the connection. A failed test does not create a source or change files.
+2. Test the connection. For a connection used by both Library sources and backup
+   replicas, the test checks that the Library root can be listed and that the
+   backup destination is reachable. A failed test does not change source files.
+   A connection can still be saved and selected as a source. If Library listing
+   succeeds but backup access fails, Library scans can still use it; change its
+   use to **Library sources** unless it also needs backup access. A Library
+   listing failure must be corrected before scans can use the connection.
 3. Open **Settings > Library sources**, enable the feature, add a source, select
    the connection and enter an optional source path.
 4. Run **Scan now**, then open and download a representative linked Artifact.
@@ -146,11 +154,15 @@ services:
 Enter `/mnt/library` in PrintStash. The mount must be writable while the source
 is added so PrintStash can create its root-identity marker. After enrollment,
 you may remount it `:ro` unless write-back is required. Before adding it, verify
-the mapping from inside the running API:
+the mapping and write permission from inside the running API:
 
 ```bash
-docker compose exec printstash sh -c 'test -r /mnt/library && find /mnt/library -maxdepth 1 -type f | head'
+docker compose exec printstash sh -c 'test -r /mnt/library && test -w /mnt/library && find /mnt/library -maxdepth 1 -type f | head'
 ```
+
+If an earlier attempt left an unbound Library source in Settings, use its
+**Enroll root** action after making the mount writable instead of adding the
+same folder again.
 
 Do not map a library source over `/data/files`, `/data/thumbs`, `/data/backups`,
 the database, staging, or another source. PrintStash rejects known overlaps.

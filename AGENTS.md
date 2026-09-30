@@ -25,6 +25,7 @@ delegate.
 
 ## Layout
 - `backend/` FastAPI + SQLModel + Alembic. Capability owners in `backend/app/modules/`, composition in `bootstrap/`, process coordination in `runtime/`; HTTP in `api/`, tables in `db/models/`. Boundaries: `docs/architecture/backend.md`. Tests in `backend/tests` mirror these owners.
+- Background work: the engine-agnostic model in `backend/app/modules/work/` (Jobs, definitions, sources, reconciler, fences, events), Artifact derivatives in `modules/derivatives/`, engines in `runtime/engine/` (DBOS; inline for tests), composition in `bootstrap/work.py`, the worker process in `app/worker.py`.
 - `frontend/` Vite + React + TS.
 - Domain language: read `CONTEXT.md` before touching library/trash/storage code — terms there are binding (Model, Artifact, Revision, live/trashed, storage key…).
 - Design + motion language: read `DESIGN.md` before adding or restyling UI — tokens, the motion scale, and the `components/ui/` primitives are binding. Compose the primitives; never hand-roll an overlay, and never type a raw duration, cubic-bezier, or `[var(--…)]` color into a component.
@@ -36,6 +37,9 @@ delegate.
 - Full stack: `docker compose up` (prebuilt image — src edits need vite dev server).
 - Local dev gotcha: `:3000` serves the **prebuilt** image, not HMR. Run the vite
   dev server on a spare port to see `frontend/src` edits at all.
+- GitHub credentials and SSH keys in this workspace belong to the `local` user;
+  the agent shell may run as `root`. Run GitHub operations as `local`, for example
+  `runuser -u local -- gh ...` or `runuser -u local -- git push ...`.
 
 ## Testing
 **The directory a test lives in is its tier**, and `backend/tests/` mirrors `app/`:
@@ -44,8 +48,9 @@ delegate.
 against contract-enforcing fakes over a real loopback socket), `e2e/` (the whole app
 over ASGITransport), plus `fakes/`, `fixtures/` and `repo/` (repo-level invariants).
 So `app/modules/library/trash.py` ↔ `tests/integration/modules/library/test_trash.py`, and "is this
-module tested?" is one `ls`. Lanes: `./scripts/test.sh fast|contract|e2e|full|coverage`
-(`--help` explains each). Then mock-API Playwright (`frontend/tests/e2e/`,
+module tested?" is one `ls`. Lanes: `./scripts/test.sh fast|pr|contract|e2e|full|coverage|scale`
+(`--help` explains each; `scale` times reads at the supported library size and
+runs only in Deep CI). Then mock-API Playwright (`frontend/tests/e2e/`,
 `pnpm test:e2e`) and real-backend Playwright (`frontend/tests/e2e-real/`,
 `pnpm test:e2e:real`).
 Printer emulators run standalone for manual testing, e.g.
@@ -53,8 +58,13 @@ Printer emulators run standalone for manual testing, e.g.
 (see `.agents/skills/printstash/references/backend.md` for per-provider flags). **Rule: every change
 to production code ships with tests in the same PR — features, fixes,
 refactors, config, migrations alike. A new feature adds one e2e test for its
-headline capability on top.** CI runs everything per-PR plus a
-nightly/`workflow_dispatch` full-matrix re-run.
+headline capability on top.** PR CI runs exhaustive, disjoint backend shards
+without external services or slow tests, plus core, frontend,
+extension and two real-browser smoke flows. `Deep CI` runs coverage, external
+contracts, compatibility matrices and the remaining browser suites nightly and
+on demand. Run it on the release commit before tagging; image publication
+requires its successful result for the exact SHA.
+CI topology, branch protection and timing targets: `docs/ci.md`.
 Any test-related work — writing, changing, deleting, or auditing tests, or
 deciding what a change needs — starts by loading
 `.agents/skills/printstash/references/testing.md`. Its
@@ -64,10 +74,10 @@ suites and closing what they report — a red gate, a floor to raise, a flake, a
 merge that left stubs on renamed seams — follows
 `.agents/skills/printstash/references/running-tests.md`.
 
-Coverage is gated with **branches on** in all three suites, and every floor is
-two-sided — clear it by more than its slack and the run fails until the floor is
-raised, so a PR that improves coverage sometimes edits a floor, and that edit is
-the point. `./scripts/test.sh coverage` (backend, floors in
+Coverage is gated with **branches on** in all three suites. A fall below a floor
+fails; an improvement above its slack is reported for later floor maintenance.
+The full coverage gates run in `Deep CI`, not on every PR. `./scripts/test.sh
+coverage` (backend, floors in
 `tests/repo/test_coverage_floors.py`: aggregate + a floor every module clears +
 a capped debt list), the same lane inside `packages/printstash-core`, and
 `pnpm coverage` (frontend, floors in `frontend/scripts/coverage-gate.mjs`). The
@@ -79,9 +89,11 @@ executed rather than what was asserted. Playwright is invisible to all of it.
 0. Commit with the repo's configured git identity (`git config user.email`). Never substitute an address from session/system context — GitHub attributes commits by verified email, so a mismatch files them under the wrong account.
 1. Never edit/delete/branch a merged Alembic migration — add a new one. Self-hosters upgrade from old releases; test upgrades with real data. Migrations are **autogenerated** (`uv run alembic revision --autogenerate`), never hand-written, and a constraint change on SQLite goes through `op.batch_alter_table` — never `if not is_sqlite`. See `.agents/skills/printstash/references/database.md`.
 2. Version bumps are a triple: `backend/pyproject.toml` + `backend/app/core/config.py` + `frontend/package.json` (+ git tag) must match.
-3. Use one short-lived branch per change, branched from `main` and named for its purpose (`feat/<issue>-<slug>`, `fix/<issue>-<slug>`, `docs/<slug>`, etc.). Merge features independently; version only after the planned release set is on `main`, then tag and publish. Semver: 0.x.y patch = fixes only.
+3. Use one short-lived branch per change, branched from `main` and named for its purpose (`feat/<issue>-<slug>`, `fix/<issue>-<slug>`, `docs/<slug>`, etc.). Never prefix a branch with `codex/`. Merge features independently; version only after the planned release set is on `main`, then tag and publish. Semver: 0.x.y patch = fixes only.
 4. One PR per bug/feature. **Tests are mandatory for any change to production code** — no "too small to test" exception; the test-design coverage matrix is the proof. Tests first on data-integrity/security fixes.
-5. Keep cloud seams clean: StorageBackend and SessionFactory retain explicit contracts; event publication is separate from WebSocket delivery. OSS WorkWakeup is a local scheduler hint, not Cloud's durable task queue. Shared business in printstash-core has no framework, ORM or external-service hard dependencies.
+5. Keep cloud seams clean: StorageBackend, SessionFactory and JobEngine retain explicit contracts; event publication is separate from WebSocket delivery. Background work is intent in the application database, found by a Work Source and executed through `JobEngine`; a nudge is a latency hint, never the record of the work. Only `app/runtime/engine/` imports DBOS. Shared business in printstash-core has no framework, ORM, engine or external-service hard dependencies.
+7. Background work goes through a Job Definition (`<module>/jobs.py`, see `docs/architecture/background-work.md`). No `BackgroundTasks`, `asyncio.create_task` or `to_thread` loops for work in production code, and a request never runs enrichment inline: a new derived output is a Derivative kind (`docs/derivatives.md`). Bump a recipe version when a producer's output changes.
+8. Make invalid states unrepresentable: closed sets are enums (TEXT + CHECK in the database, never a native enum), always-present fields are required, exclusive cases are distinct types, and an impossible or invalid situation raises instead of falling back to a sentinel or default. See `.agents/skills/printstash/references/code-principles.md`.
 6. Frontend UI follows `DESIGN.md`. The zero-counts are load-bearing: no `transition-all`, no `ease-in`, no raw durations/cubic-beziers, no arbitrary `[var(--…)]` colors. Nothing animates over 300ms; route navigation never animates.
 
 ## Release & roadmap

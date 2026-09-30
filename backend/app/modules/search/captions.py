@@ -18,6 +18,7 @@ from app.db.models import (
     Document,
     File,
     InferenceEndpoint,
+    JobKind,
     Model,
     MultipartModel,
     SubjectCaption,
@@ -127,6 +128,9 @@ def queue(
     row.updated_at = utcnow()
     session.add(row)
     session.flush()
+    from app.modules.work.submission import nudge_after_commit
+
+    nudge_after_commit(session, JobKind.SEARCH_CAPTION)
 
 
 def read(session: Session, actor: User, subject: SearchSubject) -> CaptionRead:

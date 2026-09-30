@@ -34,13 +34,15 @@ from sqlmodel import Session, select
 from app.core.config import _overlay
 from app.core.time import utcnow
 from app.db.models import (
-    BackgroundJob,
     CaptureUploadSlot,
     File,
     FileType,
     InboxItem,
     InboxItemState,
     InboxSourceKind,
+    Job,
+    JobKind,
+    JobState,
     StagingLease,
     User,
 )
@@ -309,18 +311,13 @@ class TestStagingItCannotProveItOwns:
 class TestAmbiguousJobLeases:
     @pytest.fixture
     def two_leases(
-        self, db_session: Session, tmp_path: Path, make_user, headers_for
-    ) -> tuple[InboxItem, BackgroundJob, list[Path], User]:
+        self, db_session: Session, tmp_path: Path, make_user, headers_for, make_job
+    ) -> tuple[InboxItem, Job, list[Path], User]:
         """One job holding two leases — the state a retried capture can leave."""
         owner = make_user("dismiss-ambiguous-job-leases")
-        job = BackgroundJob(
-            id="dismiss-ambiguous-job",
-            owner_user_id=owner.id,
-            state="failed",
-            status_json='{"state":"failed"}',
+        job = make_job(
+            kind=JobKind.INGESTION_INBOX_IMPORT, state=JobState.FAILED, owner=owner
         )
-        db_session.add(job)
-        db_session.commit()
 
         paths: list[Path] = []
         for index, name in enumerate(("first.stl", "second.stl")):
@@ -332,7 +329,7 @@ class TestAmbiguousJobLeases:
                     id=f"ambiguous-lease-{index}",
                     path=str(path),
                     owner_user_id=owner.id,
-                    background_job_id=job.id,
+                    job_id=job.id,
                     size_bytes=stat.st_size,
                     sha256="d" * 64,
                     device=stat.st_dev,
@@ -349,7 +346,7 @@ class TestAmbiguousJobLeases:
             source_hostname="makerworld.com",
             source_kind=InboxSourceKind.BROWSER,
             state=InboxItemState.FAILED,
-            background_job_id=job.id,
+            job_id=job.id,
             staging_key=None,
         )
         db_session.add(row)
@@ -385,7 +382,7 @@ class TestAmbiguousJobLeases:
 
         db_session.expire_all()
         retained = db_session.exec(
-            select(StagingLease).where(StagingLease.background_job_id == job.id)
+            select(StagingLease).where(StagingLease.job_id == job.id)
         ).all()
         assert {lease.id for lease in retained} == {
             "ambiguous-lease-0",
@@ -402,5 +399,5 @@ class TestAmbiguousJobLeases:
         db_session.expire_all()
         retained = db_session.get(InboxItem, row.id)
         assert retained.state == InboxItemState.FAILED
-        assert retained.background_job_id == job.id
+        assert retained.job_id == job.id
         assert retained.staging_key is None

@@ -1,48 +1,14 @@
+"""Request and manifest shapes of the ingestion endpoints.
+
+Job status lives in ``app.schemas.jobs``; every ingest endpoint returns a
+``JobAccepted``.
+"""
+
 from __future__ import annotations
 
-from datetime import datetime
-from typing import Any, Literal, Optional
+from typing import Optional
 
-from pydantic import BaseModel, Field
-
-JobState = Literal["pending", "running", "completed", "failed"]
-ImportStage = Literal[
-    "resolving",
-    "downloading",
-    "inspecting",
-    "extracting",
-    "hashing",
-    "ingesting",
-    "thumbnailing",
-    "completed",
-]
-ImportCompletion = Literal[
-    "complete",
-    "partial",
-]
-FingerprintStatus = Literal[
-    "pending", "ready", "partial", "unsupported", "failed", "stale", "skipped"
-]
-ThumbnailStatus = Literal[
-    "generated",
-    "fallback_generated",
-    "skipped",
-    "failed",
-]
-
-
-class ImportFailedItem(BaseModel):
-    name: str
-    reason: str
-    retryable: bool = False
-
-
-class IngestResponse(BaseModel):
-    """Returned immediately from POST /ingest/orca."""
-
-    job_id: str
-    state: JobState
-    message: str = "ingestion queued"
+from pydantic import BaseModel
 
 
 class UrlIngestRequest(BaseModel):
@@ -134,39 +100,3 @@ class CollectionSelectRequest(BaseModel):
     member_ids: list[str]
     collection: Optional[str] = None
     tags: Optional[str] = None
-
-
-class IngestJobStatus(BaseModel):
-    job_id: str
-    owner_user_id: Optional[int] = Field(default=None, exclude=True)
-    visible: bool = Field(default=True, exclude=True)
-    state: JobState
-    kind: str = "ingest"
-    model_id: Optional[int] = None
-    file_id: Optional[int] = None
-    error: Optional[str] = None
-    started_at: Optional[datetime] = None
-    finished_at: Optional[datetime] = None
-    committed_at: Optional[datetime] = None
-    updated_at: Optional[datetime] = None
-    # Progress hints — additive, absent for clients that only know the
-    # original state machine.
-    step: Optional[int] = None
-    total_steps: Optional[int] = None
-    label: Optional[str] = None
-    progress: Optional[float] = None  # 0–100
-    result: Optional[dict[str, Any]] = None
-    stage: Optional[ImportStage] = None
-    current_item: Optional[str] = None
-    processed: int = 0
-    total: Optional[int] = None
-    succeeded: int = 0
-    deduplicated: int = 0
-    skipped: int = 0
-    failed: int = 0
-    completion: Optional[ImportCompletion] = None
-    fingerprint_status: Optional[FingerprintStatus] = None
-    thumbnail_status: Optional[ThumbnailStatus] = None
-    thumbnail_reason: Optional[str] = None
-    retryable: bool = False
-    failed_items: list[ImportFailedItem] = Field(default_factory=list)

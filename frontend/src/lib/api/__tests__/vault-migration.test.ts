@@ -8,7 +8,6 @@ import {
   auditVaultMigration,
   retainVaultMigration,
   getVaultMigrationReport,
-  advanceVaultMigration,
   cleanupVaultMigration,
   cutoverVaultMigration,
   getVaultMigration,
@@ -73,7 +72,6 @@ describe("Vault migration API", () => {
     expect(lastBody()).toEqual({ plan_digest: "reviewed-digest" });
   });
   it.each([
-    { action: "advance", invoke: advanceVaultMigration },
     { action: "cutover", invoke: cutoverVaultMigration },
     { action: "recover", invoke: recoverVaultMigration },
     { action: "pause", invoke: pauseVaultMigration },

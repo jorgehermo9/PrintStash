@@ -5,8 +5,10 @@ files in the repo ``testdata/`` folder (real STL/3MF meshes and real slicer
 g-code), so a regression in mesh geometry extraction, slicer-metadata parsing,
 embedded-thumbnail handling, dedup, or revision bookkeeping fails loudly here.
 
-Tests skip automatically when a given file is absent, so the folder can grow or
-shrink without breaking the suite.
+Ingestion commits a bare Artifact; geometry, slicer metadata and thumbnails are
+derivatives. So each helper commits the staged copy and then drains the job
+engine, which runs the derivative jobs the commit nudged — the same two halves
+production runs, in order.
 
 Safety: ingestion *moves* the staged blob into vault storage, so every test
 stages a **copy** of the real file — the originals under ``testdata/`` are never
@@ -26,11 +28,11 @@ from app.core.config import _overlay
 from app.db.models import File, FileType, Metadata, Model
 from app.db.scopes import live
 from app.modules.ingestion.ingestion import (
+    StagedArtifact,
     add_gcode_revision_to_model,
-    ingest_mesh,
-    ingest_orca_gcode,
+    commit_staged_artifact,
 )
-from app.runtime.jobs import registry
+from app.runtime.engine.inline import InlineJobEngine
 from tests._env import use_local_storage
 from tests.paths import TESTDATA_DIR, require_fixtures
 
@@ -85,43 +87,43 @@ def _metadata_for(session: Session, file_id: int) -> Metadata:
     return md
 
 
-def _ingest_mesh(
-    session: Session, src: Path, file_type: FileType, *, model_name: str
+def _ingest(
+    session: Session,
+    engine: InlineJobEngine,
+    src: Path,
+    file_type: FileType,
+    *,
+    model_name: str,
 ) -> tuple[Model, File]:
-    job_id = registry.create()
-    ingest_mesh(
-        job_id=job_id,
-        staged_path=_stage_copy(src),
-        original_filename=src.name,
-        model_name=model_name,
-        file_type=file_type,
-        collection=None,
-        tags=None,
-        source_hash=None,
+    outcome = commit_staged_artifact(
+        StagedArtifact(
+            staged_path=_stage_copy(src),
+            original_filename=src.name,
+            model_name=model_name,
+            file_type=file_type,
+        ),
+        ingestion_key=uuid.uuid4().hex,
     )
-    job = registry.get(job_id)
-    assert job is not None and job.state == "completed", getattr(job, "error", None)
+    engine.drain()
     session.expire_all()
-    return session.get(Model, job.model_id), session.get(File, job.file_id)
+    return session.get(Model, outcome.model_id), session.get(File, outcome.file_id)
+
+
+def _ingest_mesh(
+    session: Session,
+    engine: InlineJobEngine,
+    src: Path,
+    file_type: FileType,
+    *,
+    model_name: str,
+) -> tuple[Model, File]:
+    return _ingest(session, engine, src, file_type, model_name=model_name)
 
 
 def _ingest_gcode(
-    session: Session, src: Path, *, model_name: str, source_hash: str | None = None
+    session: Session, engine: InlineJobEngine, src: Path, *, model_name: str
 ) -> tuple[Model, File]:
-    job_id = registry.create()
-    ingest_orca_gcode(
-        job_id=job_id,
-        staged_path=_stage_copy(src),
-        original_filename=src.name,
-        model_name=model_name,
-        collection=None,
-        tags=None,
-        source_hash=source_hash,
-    )
-    job = registry.get(job_id)
-    assert job is not None and job.state == "completed", getattr(job, "error", None)
-    session.expire_all()
-    return session.get(Model, job.model_id), session.get(File, job.file_id)
+    return _ingest(session, engine, src, FileType.GCODE, model_name=model_name)
 
 
 # --------------------------------------------------------------------------- #
@@ -147,11 +149,11 @@ def _ingest_gcode(
 class TestMetadata:
     @_requires(CUBE_GCODE)
     def test_ingest_real_gcode_parses_slicer_metadata(
-        self, tmp_path: Path, db_session: Session
+        self, tmp_path: Path, db_session: Session, work_engine: InlineJobEngine
     ) -> None:
         use_local_storage(tmp_path)
         model, f = _ingest_gcode(
-            db_session, CUBE_GCODE, model_name="Calibration Cube GCode"
+            db_session, work_engine, CUBE_GCODE, model_name="Calibration Cube GCode"
         )
 
         assert f.file_type == FileType.GCODE
@@ -166,11 +168,15 @@ class TestMetadata:
 
     @_requires(CUBE_STL)
     def test_a_real_stl_ingest_produces_geometry_with_a_thumbnail(
-        self, tmp_path: Path, db_session: Session
+        self, tmp_path: Path, db_session: Session, work_engine: InlineJobEngine
     ) -> None:
         use_local_storage(tmp_path)
         model, f = _ingest_mesh(
-            db_session, CUBE_STL, FileType.STL, model_name="Calibration Cube"
+            db_session,
+            work_engine,
+            CUBE_STL,
+            FileType.STL,
+            model_name="Calibration Cube",
         )
 
         assert f.file_type == FileType.STL
@@ -191,11 +197,15 @@ class TestMetadata:
 
     @_requires(SPATULA_3MF)
     def test_ingest_real_3mf_extracts_geometry(
-        self, tmp_path: Path, db_session: Session
+        self, tmp_path: Path, db_session: Session, work_engine: InlineJobEngine
     ) -> None:
         use_local_storage(tmp_path)
         model, f = _ingest_mesh(
-            db_session, SPATULA_3MF, FileType.THREE_MF, model_name="Spatula"
+            db_session,
+            work_engine,
+            SPATULA_3MF,
+            FileType.THREE_MF,
+            model_name="Spatula",
         )
 
         assert f.file_type == FileType.THREE_MF
@@ -209,10 +219,12 @@ class TestMetadata:
 
     @_requires(SPATULA_GCODE)
     def test_ingest_real_prusa_gcode_extracts_embedded_thumbnail(
-        self, tmp_path: Path, db_session: Session
+        self, tmp_path: Path, db_session: Session, work_engine: InlineJobEngine
     ) -> None:
         use_local_storage(tmp_path)
-        model, f = _ingest_gcode(db_session, SPATULA_GCODE, model_name="Spatula GCode")
+        model, f = _ingest_gcode(
+            db_session, work_engine, SPATULA_GCODE, model_name="Spatula GCode"
+        )
 
         md = _metadata_for(db_session, f.id)
         assert md.printer_model == "MK4IS"
@@ -226,14 +238,14 @@ class TestMetadata:
 class TestModel:
     @_requires(CUBE_STL)
     def test_reingesting_identical_real_file_dedups_to_one_model(
-        self, tmp_path: Path, db_session: Session
+        self, tmp_path: Path, db_session: Session, work_engine: InlineJobEngine
     ) -> None:
         use_local_storage(tmp_path)
         model_a, file_v1 = _ingest_mesh(
-            db_session, CUBE_STL, FileType.STL, model_name="Cube"
+            db_session, work_engine, CUBE_STL, FileType.STL, model_name="Cube"
         )
         model_b, file_v2 = _ingest_mesh(
-            db_session, CUBE_STL, FileType.STL, model_name="Cube Again"
+            db_session, work_engine, CUBE_STL, FileType.STL, model_name="Cube Again"
         )
 
         # Same content hash → same model; the re-upload is a new version, not a clone.
@@ -254,11 +266,11 @@ class TestModel:
     @_requires(BENCHY_GCODE_A)
     @_requires(BENCHY_GCODE_B)
     def test_marking_new_real_revision_recommended_clears_previous(
-        self, tmp_path: Path, db_session: Session
+        self, tmp_path: Path, db_session: Session, work_engine: InlineJobEngine
     ) -> None:
         use_local_storage(tmp_path)
         model, first = _ingest_gcode(
-            db_session, BENCHY_GCODE_A, model_name="3DBenchy B"
+            db_session, work_engine, BENCHY_GCODE_A, model_name="3DBenchy B"
         )
 
         second = add_gcode_revision_to_model(
@@ -284,10 +296,12 @@ class TestFirst:
     @_requires(BENCHY_GCODE_A)
     @_requires(BENCHY_GCODE_B)
     def test_a_second_gcode_revision_leaves_the_first_recommended(
-        self, tmp_path: Path, db_session: Session
+        self, tmp_path: Path, db_session: Session, work_engine: InlineJobEngine
     ) -> None:
         use_local_storage(tmp_path)
-        model, first = _ingest_gcode(db_session, BENCHY_GCODE_A, model_name="3DBenchy")
+        model, first = _ingest_gcode(
+            db_session, work_engine, BENCHY_GCODE_A, model_name="3DBenchy"
+        )
         assert first.is_recommended is True
 
         second = add_gcode_revision_to_model(

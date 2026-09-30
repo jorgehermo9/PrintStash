@@ -11,6 +11,9 @@ usage() {
 usage: ./scripts/test.sh [lane] [pytest arguments...]
 
 Lanes
+  pr         unit + integration + contract + E2E + repo, once, without slow
+             or container-backed tests. An unmarked request for a service fails.
+             The required PR gate.
   fast       tests/unit + tests/integration, minus `slow`.        (default)
              The feature loop: real SQLite, real routers, no sockets.
   contract   tests/contract — our clients against contract-enforcing fakes
@@ -21,11 +24,15 @@ Lanes
              --image TAG --variant full|lite; requires an already built image.
   critical   release-blocking workflows across integration, contract and E2E.
              Includes real remote providers and therefore needs Docker.
-  full       everything, including `slow`, minus the coverage gate.
+  full       everything, including `slow`, minus the coverage gate and `scale`.
+  scale      wall-clock budgets with a library seeded at the supported size
+             (25,000 collections, 100,000 Models). Deep CI runs it nightly;
+             every other lane deselects it. Deterministic scaling checks run
+             in `pr` (tests/repo/test_read_scaling.py).
   coverage   `full` under branch coverage, then the coverage gate: aggregate
-             ratchet plus a per-module floor (tests/repo/test_coverage_floors.py).
+             regression floor plus a per-module floor (tests/repo/test_coverage_floors.py).
              Writes term-missing, .coverage-html/index.html and coverage.json.
-             This is the lane CI gates on.
+             Deep CI runs this lane nightly and before a release.
   affected   `--testmon`: only tests whose executed lines changed. Seed it with
              one full run first, and never use it as the only pre-merge gate.
   serial     `full` without xdist. For debugging an ordering or state bug.
@@ -76,8 +83,13 @@ done
 # default full/coverage lanes run container-backed contracts in a second, serial
 # pass so every service starts once rather than once per xdist worker.
 parallel=(-n auto --dist worksteal)
+# A scale job runs one benchmark at a time. Four Deep CI matrix jobs provide
+# parallelism across runners; sharing one runner across seeded 100k-Model
+# databases exhausted the 30-minute job cap without a test result.
 resource_expression="postgres or s3 or remote_storage or bgcode"
 non_resource_expression="not postgres and not s3 and not remote_storage and not bgcode"
+# Timed at the supported library size; only its own lane selects it.
+not_scale="not scale"
 
 # `${a[@]+"${a[@]}"}` rather than `"${a[@]}"` everywhere below. bash 3.2 — still
 # the default shell on macOS — treats `"${empty[@]}"` under `set -u` as an unbound
@@ -96,35 +108,42 @@ add_paths() {
 }
 
 case "$lane" in
+  pr)
+    add_paths tests/unit tests/integration tests/contract tests/e2e tests/repo
+    export PRINTSTASH_TEST_NO_EXTERNAL=1
+    exec uv run pytest "${parallel[@]}" -m "not slow and not coverage_gate and $not_scale and $non_resource_expression" ${lane_paths[@]+"${lane_paths[@]}"} ${pytest_args[@]+"${pytest_args[@]}"}
+    ;;
   image)
     exec uv run python -m tests.e2e.runtime_image "${pytest_args[@]}"
     ;;
   fast)
     add_paths tests/unit tests/integration
-    exec uv run pytest "${parallel[@]}" -m "not slow and not coverage_gate and $non_resource_expression" ${lane_paths[@]+"${lane_paths[@]}"} ${pytest_args[@]+"${pytest_args[@]}"}
+    export PRINTSTASH_TEST_NO_EXTERNAL=1
+    exec uv run pytest "${parallel[@]}" -m "not slow and not coverage_gate and $not_scale and $non_resource_expression" ${lane_paths[@]+"${lane_paths[@]}"} ${pytest_args[@]+"${pytest_args[@]}"}
     ;;
   contract)
     add_paths tests/contract
-    exec uv run pytest "${parallel[@]}" -m "not coverage_gate and $non_resource_expression" ${lane_paths[@]+"${lane_paths[@]}"} ${pytest_args[@]+"${pytest_args[@]}"}
+    export PRINTSTASH_TEST_NO_EXTERNAL=1
+    exec uv run pytest "${parallel[@]}" -m "not coverage_gate and $not_scale and $non_resource_expression" ${lane_paths[@]+"${lane_paths[@]}"} ${pytest_args[@]+"${pytest_args[@]}"}
     ;;
   e2e)
     add_paths tests/e2e
-    exec uv run pytest "${parallel[@]}" -m "not coverage_gate" ${lane_paths[@]+"${lane_paths[@]}"} ${pytest_args[@]+"${pytest_args[@]}"}
+    exec uv run pytest "${parallel[@]}" -m "not coverage_gate and $not_scale" ${lane_paths[@]+"${lane_paths[@]}"} ${pytest_args[@]+"${pytest_args[@]}"}
     ;;
   critical)
     add_paths tests
     if [[ "$has_target" == true ]]; then
-      exec uv run pytest "${parallel[@]}" -m "critical and not coverage_gate" ${pytest_args[@]+"${pytest_args[@]}"}
+      exec uv run pytest "${parallel[@]}" -m "critical and not coverage_gate and $not_scale" ${pytest_args[@]+"${pytest_args[@]}"}
     fi
-    uv run pytest "${parallel[@]}" -m "critical and not coverage_gate and $non_resource_expression" tests ${pytest_args[@]+"${pytest_args[@]}"}
+    uv run pytest "${parallel[@]}" -m "critical and not coverage_gate and $not_scale and $non_resource_expression" tests ${pytest_args[@]+"${pytest_args[@]}"}
     exec uv run pytest -m "critical and ($resource_expression)" tests ${pytest_args[@]+"${pytest_args[@]}"}
     ;;
   full)
     add_paths tests
     if [[ "$has_target" == true ]]; then
-      exec uv run pytest "${parallel[@]}" -m "not coverage_gate" ${pytest_args[@]+"${pytest_args[@]}"}
+      exec uv run pytest "${parallel[@]}" -m "not coverage_gate and $not_scale" ${pytest_args[@]+"${pytest_args[@]}"}
     fi
-    uv run pytest "${parallel[@]}" -m "not coverage_gate and $non_resource_expression" tests ${pytest_args[@]+"${pytest_args[@]}"}
+    uv run pytest "${parallel[@]}" -m "not coverage_gate and $not_scale and $non_resource_expression" tests ${pytest_args[@]+"${pytest_args[@]}"}
     exec uv run pytest -m "$resource_expression" tests ${pytest_args[@]+"${pytest_args[@]}"}
     ;;
   coverage)
@@ -136,11 +155,11 @@ case "$lane" in
     # pass that runs nothing else.
     add_paths tests
     if [[ "$has_target" == true ]]; then
-      uv run pytest "${parallel[@]}" -m "not coverage_gate" \
+      uv run pytest "${parallel[@]}" -m "not coverage_gate and $not_scale" \
         --cov --cov-report=term-missing --cov-report=json --cov-report=html \
         ${pytest_args[@]+"${pytest_args[@]}"}
     else
-      uv run pytest "${parallel[@]}" -m "not coverage_gate and $non_resource_expression" \
+      uv run pytest "${parallel[@]}" -m "not coverage_gate and $not_scale and $non_resource_expression" \
         --cov --cov-report= tests ${pytest_args[@]+"${pytest_args[@]}"}
       uv run pytest -m "$resource_expression" --cov --cov-append \
         --cov-report=term-missing --cov-report=json --cov-report=html \
@@ -153,11 +172,16 @@ case "$lane" in
     ;;
   affected)
     add_paths tests
-    exec uv run pytest "${parallel[@]}" -m "not coverage_gate" --testmon ${lane_paths[@]+"${lane_paths[@]}"} ${pytest_args[@]+"${pytest_args[@]}"}
+    exec uv run pytest "${parallel[@]}" -m "not coverage_gate and $not_scale" --testmon ${lane_paths[@]+"${lane_paths[@]}"} ${pytest_args[@]+"${pytest_args[@]}"}
     ;;
   serial)
     add_paths tests
-    exec uv run pytest -m "not coverage_gate" ${lane_paths[@]+"${lane_paths[@]}"} ${pytest_args[@]+"${pytest_args[@]}"}
+    exec uv run pytest -m "not coverage_gate and $not_scale" ${lane_paths[@]+"${lane_paths[@]}"} ${pytest_args[@]+"${pytest_args[@]}"}
+    ;;
+  scale)
+    add_paths tests/repo/test_read_scale_budgets.py
+    export PRINTSTASH_TEST_NO_EXTERNAL=1
+    exec uv run pytest -m "scale" ${lane_paths[@]+"${lane_paths[@]}"} ${pytest_args[@]+"${pytest_args[@]}"}
     ;;
   *)
     echo "unknown lane: $lane" >&2

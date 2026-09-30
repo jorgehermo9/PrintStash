@@ -10,10 +10,9 @@ from app.db.models import (
     CapacityReservation,
     FileType,
     GeometryFingerprint,
-    ThumbnailRenderSlot,
 )
 from app.db.session import get_session_factory
-from app.modules.media.thumbnail_engine import ThumbnailEngine
+from app.modules.media import mesh_isolation
 from app.modules.similarity import configuration, runs
 from app.modules.similarity.processing import SimilarityProcessor
 from app.modules.storage.storage_backend.s3 import S3StorageBackend
@@ -21,6 +20,7 @@ from app.modules.storage.storage_providers import (
     parse_provider_config,
     resolve_transport,
 )
+from tests.factories.similarity import TEST_WRITER
 from tests.fixtures.storage_presets import real_preset_configuration
 
 pytestmark = pytest.mark.s3
@@ -50,27 +50,25 @@ class TestRemoteProcessing:
         db_session.commit()
         backend._client.put_object(Bucket=backend._bucket, Key=file.path, Body=content)
         materialized = []
-        generate = ThumbnailEngine.generate
+        generate = mesh_isolation.generate
 
-        def observe(engine, request):
+        def observe(request):
             materialized.append(request.path)
             assert request.path.read_bytes() == content
-            return generate(engine, request)
+            return generate(request)
 
-        monkeypatch.setattr(ThumbnailEngine, "generate", observe)
+        monkeypatch.setattr(mesh_isolation, "generate", observe)
         try:
             run = runs.start(db_session, actor)
-            assert SimilarityProcessor(get_session_factory(), backend).work_one()
+            assert SimilarityProcessor(get_session_factory(), backend).work_one(
+                run.id, TEST_WRITER
+            )
             db_session.refresh(run)
             assert json.loads(run.counters_json)["failed"] == 1
             assert db_session.exec(select(GeometryFingerprint)).one().state == "failed"
             assert len(materialized) == 1
             assert not materialized[0].exists()
             assert db_session.exec(select(CapacityReservation)).all() == []
-            assert all(
-                row.lease_token is None
-                for row in db_session.exec(select(ThumbnailRenderSlot))
-            )
             assert backend.read_bytes(file.path) == content
         finally:
             backend._client.delete_object(Bucket=backend._bucket, Key=file.path)

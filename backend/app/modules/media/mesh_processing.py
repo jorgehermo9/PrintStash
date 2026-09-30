@@ -4,10 +4,10 @@ Trimesh is heavy, so it is lazy-imported inside each function that needs it.
 Callers pass a `Path` and receive plain dicts / bytes — they never touch a
 trimesh object directly.
 
-The software thumbnail rasteriser lives in `mesh_render` and is re-exposed
-here as `render_thumbnail` for backwards compatibility. Ingestion uses
-`analyze_mesh`, which loads the mesh once for both geometry and thumbnail when
-safe; oversized STL files use the isolated streaming renderer instead.
+The software thumbnail rasteriser lives in `mesh_render`. The mesh derivative
+runs both through `thumbnail_engine`, which loads the mesh once for geometry
+and thumbnail when safe; oversized STL files use the isolated streaming
+renderer instead.
 """
 
 from __future__ import annotations
@@ -47,22 +47,6 @@ _MAX_3MF_COMPRESSION_RATIO = 200
 _MAX_3MF_ENTRY_NAME_BYTES = 1024
 
 
-class FallbackThumbnail(bytes):
-    """PNG bytes produced by the bounded STL fallback.
-
-    ``complete`` records whether the fallback consumed a complete, valid source
-    representation. Callers may persist the image when it is false, but must not
-    treat sampled geometry statistics as exact metadata.
-    """
-
-    complete: bool
-
-    def __new__(cls, value: bytes, *, complete: bool = True):
-        instance = super().__new__(cls, value)
-        instance.complete = complete
-        return instance
-
-
 # Resolved once: the glibc handle used by _reclaim_memory, or False on a libc
 # without malloc_trim (musl/Alpine, non-Linux). None means "not looked up yet".
 _LIBC: "ctypes.CDLL | bool | None" = None
@@ -91,38 +75,77 @@ def _reclaim_memory() -> None:
         _LIBC = False
 
 
-# Process-wide gate limiting how many mesh load+render jobs run at once. Cached
-# as (limit, semaphore) so a runtime override / test change to max_render_jobs
-# rebuilds it; protected by a lock because ingestion calls in from the
-# background-task threadpool.
-_RENDER_SEMAPHORE: "tuple[int, threading.BoundedSemaphore] | None" = None
+class _RenderAdmission:
+    """One admission controller, including while administrators change its limit.
+
+    A new allocation split becomes effective after old admissions drain. Mixing
+    old large shares with new small ones could otherwise exceed the total budget.
+    Nested work in the same thread consumes the existing admission.
+    """
+
+    def __init__(self) -> None:
+        self.condition = threading.Condition()
+        self.active = 0
+        self.limit = 1
+        self.requested = 1
+        self.local = threading.local()
+
+    def configure(self, limit: int) -> None:
+        with self.condition:
+            self.requested = limit
+            self.condition.notify_all()
+
+    def __enter__(self):
+        depth = getattr(self.local, "depth", 0)
+        if depth:
+            self.local.depth = depth + 1
+            return self
+        with self.condition:
+            while True:
+                if self.active == 0:
+                    self.limit = self.requested
+                if self.limit == self.requested and self.active < self.limit:
+                    self.active += 1
+                    self.local.depth = 1
+                    self.local.limit = self.limit
+                    return self
+                self.condition.wait()
+
+    def __exit__(self, *_args) -> None:
+        self.local.depth -= 1
+        if self.local.depth:
+            return
+        with self.condition:
+            self.active -= 1
+            self.condition.notify_all()
+
+
+_RENDER_SEMAPHORE: _RenderAdmission | None = None
 _RENDER_SEMAPHORE_LOCK = threading.Lock()
 
 
-def _render_jobs_limit() -> int:
-    """Effective max concurrent render jobs (always >= 1)."""
+def _configured_render_jobs() -> int:
     try:
         return max(int(settings.max_render_jobs), 1)
     except (TypeError, ValueError):
         return 1
 
 
-def _render_semaphore() -> "threading.BoundedSemaphore":
-    """Concurrency gate for mesh load+render.
+def _render_jobs_limit() -> int:
+    """The allocation split belonging to this thread's admission."""
+    gate = _RENDER_SEMAPHORE
+    if gate is not None and getattr(gate.local, "depth", 0):
+        return gate.local.limit
+    return _configured_render_jobs()
 
-    Ingestion runs in FastAPI's background-task threadpool, so a bulk/folder
-    upload (#26) can otherwise fire dozens of concurrent renders that each peak
-    hundreds of MB and collectively OOM the box (#29). This caps how many run at
-    once to ``VAULT_MAX_RENDER_JOBS``; the RAM-aware triangle cap separately
-    divides its per-job budget by the same count so each concurrent job stays
-    within its share.
-    """
+
+def _render_semaphore() -> _RenderAdmission:
     global _RENDER_SEMAPHORE
-    limit = _render_jobs_limit()
     with _RENDER_SEMAPHORE_LOCK:
-        if _RENDER_SEMAPHORE is None or _RENDER_SEMAPHORE[0] != limit:
-            _RENDER_SEMAPHORE = (limit, threading.BoundedSemaphore(limit))
-        return _RENDER_SEMAPHORE[1]
+        if _RENDER_SEMAPHORE is None:
+            _RENDER_SEMAPHORE = _RenderAdmission()
+        _RENDER_SEMAPHORE.configure(_configured_render_jobs())
+        return _RENDER_SEMAPHORE
 
 
 def _canonical_suffix(path: Path, file_type: str | None = None) -> str:
@@ -334,6 +357,17 @@ def _ram_triangle_cap(suffix: str) -> Optional[int]:
     return max(int(budget / per_tri), 1)
 
 
+def _load_face_budget(suffix: str) -> int:
+    """Faces a loader may admit for *suffix*: the static, analysis and RAM ceilings.
+
+    The single answer for every path that parses a mesh into memory, so a caller
+    cannot pick a looser bound than the one the thumbnail engine enforces.
+    """
+    budget = min(int(settings.mesh_max_render_triangles), MAX_ANALYSIS_FACES)
+    ram_cap = _ram_triangle_cap(suffix)
+    return budget if ram_cap is None else min(budget, ram_cap)
+
+
 def _exceeds_cap(path: Path, *, file_type: str | None = None) -> bool:
     """True when *path* is too expensive to hand to trimesh (#24, #29).
 
@@ -423,9 +457,61 @@ def _process_rss_bytes(pid: int) -> int | None:
 def _step_memory_budget_bytes() -> int | None:
     limit = _detect_memory_limit_bytes()
     fraction = settings.mesh_memory_budget_fraction
-    if limit is None or fraction <= 0:
+    if limit is None:
         return None
-    return max(int(limit * fraction / _render_jobs_limit()), 1)
+    # Zero disables triangle estimation, never containment.
+    safety_fraction = fraction if fraction > 0 else 0.5
+    return max(int(limit * safety_fraction / _render_jobs_limit()), 1)
+
+
+def process_rss_bytes(pid: int) -> int | None:
+    """A child process's resident set, for owners that police their own children."""
+    return _process_rss_bytes(pid)
+
+
+def process_tree_rss_bytes(pid: int) -> int | None:
+    """Resident memory of an admitted worker including its descendants."""
+    pending = [pid]
+    seen: set[int] = set()
+    total = 0
+    found = False
+    while pending:
+        current = pending.pop()
+        if current in seen:
+            continue
+        seen.add(current)
+        rss = _process_rss_bytes(current)
+        if rss is not None:
+            total += rss
+            found = True
+        try:
+            pending.extend(
+                int(value)
+                for value in Path(f"/proc/{current}/task/{current}/children")
+                .read_text()
+                .split()
+            )
+        except (OSError, ValueError):
+            # A process can exit between the two reads.
+            continue
+    return total if found else None
+
+
+def step_memory_budget_bytes() -> int | None:
+    """The RSS one native render step may use; ``None`` when undetectable."""
+    return _step_memory_budget_bytes()
+
+
+def native_memory_budget_bytes() -> int:
+    """The render-step RSS policy, applied to one native worker process.
+
+    Bounded even when automatic geometry RAM caps are disabled on a platform
+    where cgroup or host memory cannot be detected. Embedding and search-view
+    workers are killed past it.
+    """
+    return min(
+        step_memory_budget_bytes() or 1024**3 // _render_jobs_limit(), 2 * 1024**3
+    )
 
 
 def _load_step_mesh_isolated(path: Path, *, include_brep: bool = False):
@@ -441,11 +527,14 @@ def _load_step_mesh_isolated(path: Path, *, include_brep: bool = False):
     # Worst case: three float64 vertices and three int64 indices per face.
     # Include NPZ headers and the bounded B-rep sidecar in the capacity lease.
     result_limit = max(triangle_limit, 1) * 96 + 1024 * 1024
+    from app.modules.media.worker_bootstrap import WORKER_MARKER
+
+    isolated = os.environ.get(WORKER_MARKER) == str(os.getpid())
     with ExitStack() as resources:
         tmp = resources.enter_context(
             tempfile.TemporaryDirectory(prefix="printstash-step-")
         )
-        if include_brep:
+        if include_brep and not isolated:
             import secrets
 
             from app.db.session import get_session_factory
@@ -461,39 +550,53 @@ def _load_step_mesh_isolated(path: Path, *, include_brep: bool = False):
             )
             resources.callback(reservation.release)
         output = Path(tmp) / ("mesh.npz" if include_brep else "mesh.glb")
-        env = os.environ.copy()
-        env["PRINTSTASH_STEP_BREP"] = "1" if include_brep else "0"
-        env["PRINTSTASH_STEP_TRIANGLE_LIMIT"] = str(triangle_limit)
-        command = [
-            sys.executable,
-            "-m",
-            "app.modules.media.step_worker",
-            str(path),
-            str(output),
-        ]
-        process = subprocess.Popen(  # nosec B603 - argv is fixed; no shell
-            command,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            env=env,
-            cwd=Path(application_file).resolve().parent.parent,
-        )
-        deadline = time.monotonic() + settings.mesh_step_timeout_seconds
-        memory_budget = _step_memory_budget_bytes()
-        failure = ""
-        while process.poll() is None:
-            if time.monotonic() >= deadline:
-                failure = "timeout"
-                process.kill()
-                break
-            rss = _process_rss_bytes(process.pid)
-            if memory_budget is not None and rss is not None and rss > memory_budget:
-                failure = "memory budget"
-                process.kill()
-                break
-            time.sleep(0.05)
-        _stdout, stderr = process.communicate()
-        if failure or process.returncode != 0 or not output.is_file():
+        if isolated:
+            from app.modules.media.step_worker import convert
+
+            returncode = convert(
+                path, output, triangle_limit, include_brep=include_brep
+            )
+            failure = ""
+            stderr = b""
+        else:
+            env = os.environ.copy()
+            env["PRINTSTASH_STEP_BREP"] = "1" if include_brep else "0"
+            env["PRINTSTASH_STEP_TRIANGLE_LIMIT"] = str(triangle_limit)
+            command = [
+                sys.executable,
+                "-m",
+                "app.modules.media.step_worker",
+                str(path),
+                str(output),
+            ]
+            process = subprocess.Popen(  # nosec B603 - argv is fixed; no shell
+                command,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                env=env,
+                cwd=Path(application_file).resolve().parent.parent,
+            )
+            deadline = time.monotonic() + settings.mesh_step_timeout_seconds
+            memory_budget = _step_memory_budget_bytes()
+            failure = ""
+            while process.poll() is None:
+                if time.monotonic() >= deadline:
+                    failure = "timeout"
+                    process.kill()
+                    break
+                rss = _process_rss_bytes(process.pid)
+                if (
+                    memory_budget is not None
+                    and rss is not None
+                    and rss > memory_budget
+                ):
+                    failure = "memory budget"
+                    process.kill()
+                    break
+                time.sleep(0.05)
+            _stdout, stderr = process.communicate()
+            returncode = process.returncode
+        if failure or returncode != 0 or not output.is_file():
             if include_brep:
                 from printstash_core.mesh.similarity import GeometryError
 
@@ -501,17 +604,17 @@ def _load_step_mesh_isolated(path: Path, *, include_brep: bool = False):
                     "tessellation_timeout"
                     if failure == "timeout"
                     else "worker_oom"
-                    if failure == "memory budget" or process.returncode == -9
+                    if failure == "memory budget" or returncode == -9
                     else "step_unavailable"
-                    if process.returncode == 7
+                    if returncode == 7
                     else "geometry_work_limit"
-                    if process.returncode == 3
+                    if returncode == 3
                     else "invalid_step"
                 )
             logger.warning(
                 "mesh_processing: isolated STEP tessellation failed for %s (%s%s)",
                 path.name,
-                failure or f"exit {process.returncode}",
+                failure or f"exit {returncode}",
                 f": {stderr.decode(errors='replace')[-300:]}" if stderr else "",
             )
             return None
@@ -555,6 +658,28 @@ def _load_step_mesh_isolated(path: Path, *, include_brep: bool = False):
         return None
 
 
+def _load_3mf_mesh(path: Path, suffix: str):
+    """One `trimesh.Trimesh` for a 3MF, or None when it is invalid or over budget.
+
+    trimesh expands repeated build/component placements while it loads, so a few
+    KiB of XML can allocate for millions of faces before any post-load check runs
+    (#259). The resource loader counts the expanded faces first and bounds the XML
+    it parses, so every 3MF entry point shares that guard rather than the
+    size-based estimate, which cannot see placements.
+    """
+    from printstash_core.mesh.similarity import GeometryError
+
+    from app.modules.media.mesh_resources import load_3mf
+
+    try:
+        return load_3mf(path, max_faces=_load_face_budget(suffix)).whole_mesh
+    except GeometryError as exc:
+        logger.warning(
+            "mesh_processing: 3MF load refused for %s (%s)", path.name, exc.code
+        )
+        return None
+
+
 def _load_mesh(path: Path, *, file_type: str | None = None):
     """Return a single `trimesh.Trimesh` for *path*, or None on failure."""
     import trimesh
@@ -562,6 +687,8 @@ def _load_mesh(path: Path, *, file_type: str | None = None):
     suffix = _canonical_suffix(path, file_type)
     if suffix in (".step", ".stp"):
         return _load_step_mesh_isolated(path)
+    if suffix == ".3mf":
+        return _load_3mf_mesh(path, suffix)
 
     try:
         # Load the scene rather than asking trimesh for a mesh directly. 3MF
@@ -577,6 +704,8 @@ def _load_mesh(path: Path, *, file_type: str | None = None):
             loaded = trimesh.load_scene(
                 str(path), file_type=suffix.lstrip(".") or None, process=False
             )
+    except MemoryError:
+        raise
     except Exception:
         logger.warning(
             "mesh_processing: trimesh.load_scene failed for %s",
@@ -646,9 +775,17 @@ def _geometry_from_mesh(mesh) -> Dict[str, Optional[float]]:
         out["triangle_count"] = len(mesh.faces)
 
     try:
-        vol = mesh.volume
+        measured = mesh
+        if not mesh.is_watertight:
+            # STL represents each facet with independent vertices. Measure its
+            # welded topology without changing the renderer/fingerprint input.
+            measured = mesh.copy()
+            measured.merge_vertices()
+        vol = measured.volume if measured.is_watertight else None
         if vol is not None and vol > 0:
             out["volume_mm3"] = round(float(vol), 2)
+    except MemoryError:
+        raise
     except Exception:
         # Non-watertight meshes raise here; volume is best-effort only.
         pass

@@ -853,12 +853,8 @@ class TestRunGc:
         db_session: Session,
         transition: str,
     ) -> None:
-        admin = build_user(
-            db_session, f"admin-gc-missing-{transition}", superuser=True
-        )
-        kwargs = (
-            {"json": {"digest": "0" * 64}} if transition == "approve" else {}
-        )
+        admin = build_user(db_session, f"admin-gc-missing-{transition}", superuser=True)
+        kwargs = {"json": {"digest": "0" * 64}} if transition == "approve" else {}
 
         response = client.post(
             f"/api/v1/admin/gc/999999/{transition}",
@@ -910,6 +906,8 @@ class TestRunGc:
         assert approved.status_code == 200
         assert aborted.status_code == 200
         assert finalized.status_code == 200
-        assert {approved.json()["id"], aborted.json()["id"], finalized.json()["id"]} == {
-            run.id
-        }
+        assert {
+            approved.json()["id"],
+            aborted.json()["id"],
+            finalized.json()["id"],
+        } == {run.id}

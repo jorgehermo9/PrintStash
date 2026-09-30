@@ -46,13 +46,24 @@ docker buildx bake -f docker-bake.hcl unified --load
 PRINTSTASH_IMAGE=printstash PRINTSTASH_VERSION=local docker compose up -d
 ```
 
-The existing **GHCR Release Images** workflow publishes native AMD64 and ARM64
-images on release tags after CI passes. Run **Manual Docker Images** on the
-default branch to publish `latest`. Both use the repository owner's GHCR namespace
+The **GHCR Release Images** workflow publishes native AMD64 and ARM64 images
+on release tags after the same commit passes `CI` and a manual or nightly
+`Deep CI` run. Run **Manual Docker Images** on `main` to publish `latest` after
+its `CI` run passes. Both use the repository owner's GHCR namespace
 and the built-in `GITHUB_TOKEN`; a separate registry password is unnecessary.
+Run **GHCR Nightly Images** manually on `main` after its `CI` run passes:
+
+```bash
+gh workflow run nightly.yml --ref main
+```
+
+It publishes `nightly` plus a `nightly-<commit>` tag for each image without
+changing `latest`.
+For the single-container deployment, set `PRINTSTASH_VERSION=nightly` in `.env`.
+Pin `nightly-<commit>` to test a specific build after later nightly runs.
 Pull-request CI validates the application without building container images.
-The release workflow builds both architectures and runs the unified-image smoke
-test before promoting their digests to shared tags.
+The publication workflow builds all four images once per native architecture,
+smokes each digest, then promotes only the tested digests to shared tags.
 
 On a fork, enable Actions before running the manual workflow. After the first
 publish, open the `printstash` package's settings and change visibility to
@@ -233,16 +244,21 @@ An empty value means the default. **Move `VAULT_DATA_DIR` and
 ### Hard-linked imports
 
 Every upload, URL import, library-transfer archive and printer capture is first
-written to the staging directory, then published into the library by **hard
-link**: the staged file *becomes* the library file. Publishing takes the same
-fraction of a millisecond at any size (a 2 GiB file that took about 7 s to copy
+written to the staging directory. When the filesystem supports it, publication
+into the local library uses a **hard link**: the staged file *becomes* the
+library file. Publishing takes the same fraction of a millisecond at any size (a 2 GiB file that took about 7 s to copy
 publishes in under 1 ms), and the file never occupies disk twice, not even
 briefly.
 
 A hard link works only **within one mount**. Linux refuses one between two
 mounts even when both sit on the same disk. PrintStash then copies the file
 instead. Nothing breaks, but every import gets slower as files grow and briefly
-needs twice its size in free space.
+needs twice its size in free space. Ordinary file-upload staging also falls
+back to an exclusive copy if its own filesystem refuses hard links (for example,
+Unraid SHFS with hard-link support disabled). Existing files are never overwritten.
+The fallback returns only after copying and syncing the bytes; interrupted copies
+can leave an unreferenced partial staging file. See the
+[Unraid upload and logging guide](../unraid/README.md#uploads-on-mntuser).
 
 | Layout | Imports |
 | --- | --- |
@@ -263,16 +279,23 @@ copy:
 
 - Settings shows **"Imports are copied, not hard-linked"**, both on the overview
   and on the Storage section.
-- The log says `imports copy every staged file: staging (…) cannot hard-link
-  into the library (…)`.
+- For separate mounts, the log says `imports copy every staged file: staging (…) cannot hard-link into the library (…)`.
+- For a filesystem without hard links, one startup warning names the affected
+  root and explains that publication uses extra temporary space for copying.
+  Staging is checked even when the Vault provider is remote.
 - `GET /api/v1/health/details` reports
-  `components.storage.diagnostics.staged_hardlink: false`.
+  `components.storage.diagnostics.staged_hardlink: false` for local imports.
+  `components.storage.diagnostics.staging` records staging's `hardlink`,
+  `exclusive_create`, `directory_fsync` and `fs_kind` capabilities for every
+  provider; its warnings also appear in the storage capability response.
 
-**Fixing it** means giving staging and the library the same mount, then
-restarting:
+**Avoiding the extra copies** requires staging and the library to share a mount
+that supports hard links, then restarting. A single SHFS/FUSE mount can still
+require copying; uploads continue to work without relocating it:
+
 
 - Remove a volume mapped onto a subfolder of `/data`, after copying its contents
-  into the main volume the way [UPGRADE.md](../UPGRADE.md#unreleased-one-data-volume)
+  into the main volume the way [UPGRADE.md](../UPGRADE.md#0140-one-data-volume)
   moves the old volumes.
 - Or, when files must live on another disk, point **both** `VAULT_DATA_DIR` and
   `VAULT_STAGING_DIR` at that disk's mount.
@@ -364,16 +387,30 @@ on the API for your provider:
 | `VAULT_STAGING_MAX_ACTIVE_PER_USER` | `4` | Concurrent active staging operations per user. |
 | `VAULT_STAGING_MAX_GB` | `4` | Staging disk budget. |
 | `VAULT_STAGING_MIN_FREE_GB` | `1` | Minimum free disk space for staging. |
-| `VAULT_INGEST_WORKER_COUNT` | `2` | Ingestion worker count. |
 | `VAULT_MEDIA_WORKER_TIMEOUT_SECONDS` | `180` | Media worker timeout. |
 | `VAULT_SQLITE_SYNCHRONOUS` | `NORMAL` | SQLite durability mode. |
 | `VAULT_LOG_LEVEL` | `INFO` | API logging level. |
+| `VAULT_SLOW_REQUEST_MS` | `1000` | Log a warning for requests at or above this duration in milliseconds. Response `Server-Timing` reports total and SQL time plus SQL statement count; pair it with `X-Request-ID` when diagnosing latency. |
 | `VAULT_BACKUP_RETENTION_DAYS` | `30` | Local backup retention in days. |
 | `VAULT_RESTART_ENABLED` | `true` in Compose | Enables supervised restart from Settings; the app default outside Compose is `false`. |
 
 Storage paths all default under the `/data` volume; see
 [Data and host folders](#data-and-host-folders) before moving one. A database
 path outside a persistent mount loses state on container replacement.
+
+### Background work
+
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `VAULT_PROCESS_ROLE` | `all` | `all` runs HTTP and every background Job; `api` is the one HTTP process of a deployment with [workers](#background-work-and-workers). |
+| `VAULT_API_RUNS_JOBS` | `true` | With `api`, whether the API also runs Jobs; `false` leaves them to the workers. |
+| `VAULT_SHARED_STORAGE` | `false` | Declares that every process mounts the same volumes; required with workers. |
+| `VAULT_MAX_RENDER_JOBS` | `1` | Mesh renders and local AI inference at once, per process; raise it on hosts with spare RAM. |
+| `VAULT_JOBS_INGEST_CONCURRENCY` | `2` | Uploads and imports committed at once. |
+
+Settings → Background work overrides each kind of work's concurrency at runtime,
+for every process. The other `VAULT_JOBS_*` defaults are in
+[Background work](architecture/background-work.md#configuration).
 
 For remote storage, see [Storage providers](./storage-providers.md).
 The full image includes the optional storage dependencies. PostgreSQL/S3 services
@@ -451,11 +488,57 @@ keep the same Compose project name, and carry over custom settings and mounts.
 Do not run two stacks against the same data. Moving from PostgreSQL or remote
 primary storage requires a separate data migration; switching files is not one.
 
+## Background work and workers
+
+Imports, previews, metadata, backups, scans, search indexing and notifications
+run as background Jobs. By default the API process runs them itself
+(`VAULT_PROCESS_ROLE=all`), which is right for almost every installation, and
+what both Compose files do without any setting. Settings → Background work
+shows what is running and lets an administrator change how many Jobs of each
+kind run at once.
+
+| Topology | How | Requires |
+| --- | --- | --- |
+| One process (default) | Either Compose file, unchanged | SQLite or PostgreSQL |
+| API plus workers | Advanced file, `--profile workers` | PostgreSQL and shared volumes |
+| API without jobs | The same, with `VAULT_API_RUNS_JOBS=false` | PostgreSQL and shared volumes |
+
+To add workers, uncomment the PostgreSQL `VAULT_DB_URL` in
+`docker-compose.advanced.yml` (the API and the workers share its settings),
+then set in `.env`:
+
+```bash
+VAULT_PROCESS_ROLE=api
+VAULT_SHARED_STORAGE=true
+# Optional: leave all background work to the workers.
+VAULT_API_RUNS_JOBS=false
+# How many worker containers to run (default 2).
+PRINTSTASH_WORKERS=2
+```
+
+```bash
+docker compose -f docker-compose.advanced.yml --profile postgres --profile workers up -d
+```
+
+A worker runs the API image with `VAULT_PROCESS_ROLE=worker` and the command
+`/app/.venv/bin/python -m app.worker`. It serves no HTTP, never migrates (it
+waits for the API to), and stops cleanly on `SIGTERM`. Every process mounts the
+same `/data` volume, so the worker that commits an upload reads what the API
+staged, and local AI Search models (`/data/ai-models`) are there for workers
+embedding while indexing and for a download wherever its Job runs. A worker
+refuses to start on SQLite or without `VAULT_SHARED_STORAGE=true`, saying why.
+Keep exactly one API container per vault.
+
+The engine keeps its own state beside the vault database (SQLite) or in the
+`dbos` schema (PostgreSQL). It is disposable, not part of a backup, and rebuilt
+after a restore. Tuning settings are listed in
+[Background work](architecture/background-work.md#configuration).
+
 ## Other Compose files
 
 | File | Purpose |
 | --- | --- |
 | **`docker-compose.yml`** | **Recommended.** One container with web UI and full API, SQLite, no configuration. |
-| `docker-compose.advanced.yml` | Every setting wired; separate web UI and API containers; opt-in PostgreSQL and S3. |
+| `docker-compose.advanced.yml` | Every setting wired; separate web UI and API containers; opt-in PostgreSQL, S3 and [workers](#background-work-and-workers). |
 | `deploy/manual-testing/compose.yml` | Maintainer release-testing stack. |
 | `deploy/minio-migration/compose.yml` | One-release helper for old bundled MinIO data; see [MinIO migration](./minio-migration.md). |

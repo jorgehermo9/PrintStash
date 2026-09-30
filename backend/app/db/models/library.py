@@ -54,6 +54,9 @@ class Metadata(SQLModel, table=True):
     filament_cost: Optional[float] = None
     material_type: Optional[str] = Field(default=None, max_length=64)
     material_brand: Optional[str] = Field(default=None, max_length=128)
+    native_context_json: Optional[str] = Field(
+        default=None, sa_column=Column(Text, nullable=True)
+    )
 
     # Geometry (filled later by Trimesh; left None in Stage 1 for STL/3MF)
     bbox_x_mm: Optional[float] = None

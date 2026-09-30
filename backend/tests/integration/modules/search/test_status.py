@@ -117,16 +117,27 @@ class TestStatus:
         assert result.degraded == ["search_semantic_unavailable"]
         assert db_session.get(IndexGeneration, generation.id).state == "active"
 
-    def test_reports_pending_lexical_projection(self, db_session, make_user, make_model, make_search_projection_request):
+    def test_reports_pending_lexical_projection(
+        self, db_session, make_user, make_model, make_search_projection_request
+    ):
         from app.db.projections import ContentSource
         from app.modules.search.status import read
+
         model = make_model()
         make_search_projection_request(ContentSource("model", model.id))
         assert read(db_session, make_user(superuser=True)).backlog is True
 
-    def test_hides_private_lexical_backlog(self, db_session, make_user, make_model, make_collection, make_search_projection_request):
+    def test_hides_private_lexical_backlog(
+        self,
+        db_session,
+        make_user,
+        make_model,
+        make_collection,
+        make_search_projection_request,
+    ):
         from app.db.projections import ContentSource
         from app.modules.search.status import read
+
         model = make_model(collection=make_collection("Private"))
         make_search_projection_request(ContentSource("model", model.id))
         assert read(db_session, make_user()).backlog is False

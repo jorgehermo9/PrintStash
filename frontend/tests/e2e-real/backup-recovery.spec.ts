@@ -3,14 +3,24 @@
  *
  * This deliberately destroys a fully ingested Model after taking a backup, restores through
  * the operator UI, and reads the recovered bytes through the public download endpoint.
+ * A completed ZIP inspection is deliberately left unselected: its retained staging
+ * lease used to block this restore despite there being no running import.
  */
+import { execFileSync } from "node:child_process";
 import { test, expect } from "./helpers";
-import { clickModelAction, gcodeFor, modelCard, uploadGcodeModel } from "./util";
+import {
+  backupFromAccepted,
+  clickModelAction,
+  completedJob,
+  gcodeFor,
+  modelCard,
+  uploadGcodeModel,
+} from "./util";
 
 test.describe("backup recovery", () => {
   test(
     "@critical restores a purged model with its Artifact bytes",
-    { tag: "@critical" },
+    { tag: ["@critical", "@pr-smoke"] },
     async ({ page }) => {
       const name = `e2e-backup-recovery-${Date.now()}`;
       const expectedBytes = Buffer.from(gcodeFor(name));
@@ -30,9 +40,22 @@ test.describe("backup recovery", () => {
           response.url().endsWith("/api/v1/backups") && response.request().method() === "POST",
       );
       await page.getByRole("button", { name: "Backup now" }).click();
-      const metadata = await (await created).json();
+      const metadata = await backupFromAccepted(page, await created);
       const backupRow = page.locator("div.grid").filter({ hasText: metadata.backup_id }).last();
       await expect(backupRow.getByRole("button", { name: "Restore", exact: true })).toBeVisible();
+
+      const archive = execFileSync(
+        "python3",
+        [
+          "-c",
+          'import io,sys,zipfile; out=io.BytesIO(); z=zipfile.ZipFile(out,"w"); z.writestr("unused.gcode",sys.stdin.buffer.read()); z.close(); sys.stdout.buffer.write(out.getvalue())',
+        ],
+        { input: expectedBytes },
+      );
+      const inspected = await page.request.post("/api/v1/ingest/archive/inspect", {
+        multipart: { file: { name: "unused.zip", mimeType: "application/zip", buffer: archive } },
+      });
+      await completedJob(page, inspected);
 
       // ── Remove the catalog row and owned bytes ──────────────────────────────
       await page.goto("/");

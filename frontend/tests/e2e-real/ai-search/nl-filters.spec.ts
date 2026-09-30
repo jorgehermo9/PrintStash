@@ -2,7 +2,7 @@
 import { createServer } from "node:http";
 import { test, expect } from "../helpers";
 import { modelCard, uploadModel } from "../util";
-import type { SearchSettingsRead } from "../../../src/types/search";
+import type { SearchResponse, SearchSettingsRead } from "../../../src/types/search";
 
 const API = `http://127.0.0.1:${process.env.PLAYWRIGHT_REAL_API_PORT ?? 8410}`;
 
@@ -69,6 +69,23 @@ test.describe("AI Search", () => {
       await uploadModel(page, name, { mesh: true, gcode: false });
       const href = await modelCard(page, name).getAttribute("href");
       modelId = Number(href?.split("/").at(-1));
+      // Upload completion precedes the search projection Job. Wait for the
+      // indexed Model before testing the one-shot suggestion request.
+      await expect
+        .poll(
+          async () => {
+            const response = await page.request.get(`${API}/api/v1/search`, {
+              params: { q: name, mode: "lexical", instant: true, limit: 5 },
+            });
+            expect(response.ok()).toBe(true);
+            const result: SearchResponse = await response.json();
+            return result.items.some(
+              (item) => item.subject_type === "model" && item.subject_id === modelId,
+            );
+          },
+          { timeout: 30_000 },
+        )
+        .toBe(true);
       const immediate = page.waitForResponse((response) => {
         const url = new URL(response.url());
         return url.pathname === "/api/v1/search" && url.searchParams.get("instant") === "true";

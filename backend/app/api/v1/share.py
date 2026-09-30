@@ -198,22 +198,15 @@ def revoke_model_share(
     "/{token}/files/{file_id}/toolpath",
     summary="Toolpath only for download-authorized shares",
 )
-async def get_shared_toolpath(
+def get_shared_toolpath(
     token: str,
     file_id: int,
     session: Session = Depends(get_session),
 ):
-    from fastapi.responses import Response
-
-    from app.modules.media import toolpath
+    from app.api.toolpath_response import toolpath_response
 
     link = share.resolve_share(session, token)
     if not link.allow_download:
         raise HTTPException(status_code=403, detail="download_disabled")
     file = share.share_file_or_404(session, link, file_id)
-    content = await toolpath.render(file)
-    return Response(
-        content=content,
-        media_type="text/plain",
-        headers={"Cache-Control": "private, no-store"},
-    )
+    return toolpath_response(session, file)

@@ -31,9 +31,12 @@ from app.db.session import get_session_factory
 from app.modules.similarity.processing import SimilarityProcessor
 from app.modules.storage.storage_backend.runtime import get_backend
 use_local_storage(Path(sys.argv[1]))
+from tests.factories.similarity import advance_oldest_run
 worker = SimilarityProcessor(get_session_factory(), get_backend())
+# Each process is a new attempt, so it takes the write fence afresh.
+writer = f"restart:{os.getpid()}"
 for _ in range(int(sys.argv[2])):
-    if not worker.work_one():
+    if not advance_oldest_run(worker, writer=writer):
         break
 os._exit(int(sys.argv[3]))
 """

@@ -32,6 +32,7 @@ check only fires for markers a *selected* test carries.
 
 from __future__ import annotations
 
+import os
 import subprocess
 import time
 from typing import Any, Callable, NoReturn
@@ -150,6 +151,11 @@ def _resolve(key: str, resource: str, start: Callable[[], str]) -> str:
     Raises rather than returning `None`: a caller that reached here needs the
     service, and handing back nothing would let the test skip itself.
     """
+    if os.environ.get("PRINTSTASH_TEST_NO_EXTERNAL") == "1":
+        pytest.fail(
+            f"{resource} was requested in a no-external test lane. "
+            "Mark this case with its resource marker so it runs in Deep CI."
+        )
     if key not in _resolved:
         require_docker(resource)
         _resolved[key] = start()
@@ -233,6 +239,27 @@ def _start_seaweedfs() -> str:
 def postgres_url() -> str:
     """A real PostgreSQL URL. Raises when Docker is not running."""
     return _resolve("postgres", POSTGRES_RESOURCE, _start_postgres)
+
+
+def fresh_postgres_database(prefix: str) -> str:
+    """Create an empty database on the run's server and return its URL.
+
+    For a test that needs a whole vault of its own (every table, every
+    process), not the shared server's default database.
+    """
+    from uuid import uuid4
+
+    from sqlalchemy import create_engine, make_url
+
+    from app.db.url import normalize_database_url
+
+    server = make_url(normalize_database_url(postgres_url()))
+    name = f"{prefix}_{uuid4().hex[:12]}"
+    admin = create_engine(server, isolation_level="AUTOCOMMIT")
+    with admin.connect() as connection:
+        connection.exec_driver_sql(f'CREATE DATABASE "{name}"')
+    admin.dispose()
+    return server.set(database=name).render_as_string(hide_password=False)
 
 
 def pgvector_url() -> str:

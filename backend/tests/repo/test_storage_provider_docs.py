@@ -32,5 +32,17 @@ class TestStorageProviderDocumentation:
         assert docs.count("Runtime packaging: **") == 23
         assert docs.count("Large objects: ") == 23
         assert docs.count("Supported roles: ") == 23
-        assert "Runtime packaging: **Full image**; requires OpenDAL with WebDAV support." in docs
-        assert "Large objects: multipart or bounded streaming writes and range reads." in docs
+        assert (
+            "Runtime packaging: **Full image**; requires OpenDAL with WebDAV support."
+            in docs
+        )
+        assert (
+            "Large objects: multipart or bounded streaming writes and range reads."
+            in docs
+        )
+
+    def test_documents_independent_staging_capabilities(self) -> None:
+        docs = render_storage_provider_docs()
+        assert "components.storage.diagnostics.staging" in docs
+        assert "Unraid `/mnt/user` (SHFS/FUSE)" in docs
+        assert "A staging copy warning does not change the Vault's safety tier." in docs

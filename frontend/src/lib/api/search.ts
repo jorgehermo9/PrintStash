@@ -147,6 +147,9 @@ export function actOnSearchGeneration(
 export function listInferenceModels() {
   return getJson<InferenceModel[]>("/api/v1/inference/models", { fresh: true });
 }
+/** The Job kind of a model download; follow it through the Jobs API. */
+export const MODEL_DOWNLOAD_KIND = "inference.model_download";
+
 export function downloadInferenceModel(key: string) {
   return sendJson<{ job_id: string }>(
     `/api/v1/inference/models/${encodeURIComponent(key)}/download`,
