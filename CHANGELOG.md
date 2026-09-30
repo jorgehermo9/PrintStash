@@ -80,6 +80,9 @@
 
 ### Performance
 
+- Tag counts now follow collection links when inheriting tags, so listing tags
+  stays responsive in libraries with tens of thousands of collections and
+  100,000 Models, including for users with collection-specific access.
 - **3MF geometry loads about 1.6 times faster.** The bounded 3MF loader read
   every vertex and triangle attribute with a Python call per value; it now
   hands each column to NumPy in one pass. A 320,000-face project went from
