@@ -30,6 +30,7 @@
 
 ### Fixed
 
+- Removed the duplicate Wiki entry from the profile dropdown.
 - Rendering model views for learned similarity embeddings no longer happens in
   the API process ([#259](https://github.com/xiao-villamor/PrintStash/issues/259)).
   With embeddings enabled, the similarity run rendered six views of every model

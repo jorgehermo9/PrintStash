@@ -214,7 +214,6 @@ function ProfileMenu({
     { href: "/printers", label: t("nav.printers"), icon: Printer, adminOnly: true },
     { href: "/statistics", label: t("nav.statistics"), icon: BarChart3, adminOnly: true },
     { href: "/profiles", label: t("nav.profiles"), icon: SlidersHorizontal },
-    { href: WIKI_URL, label: t("nav.wiki"), icon: BookOpen, external: true },
     { href: "/settings", label: t("nav.settings"), icon: Settings },
   ].filter((item) => !item.adminOnly || isAdmin);
 
@@ -226,21 +225,7 @@ function ProfileMenu({
           active
             ? "bg-accent text-accent-foreground"
             : "text-foreground hover:bg-popover-hover hover:text-foreground"
-        } focus-visible:bg-popover-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset ${item.href === WIKI_URL ? "border-t border-border" : ""}`;
-        if (item.external) {
-          return (
-            <a
-              key={item.href}
-              href={item.href}
-              role="menuitem"
-              onClick={onNavigate}
-              className={className}
-            >
-              <item.icon className="h-4 w-4" />
-              <span>{item.label}</span>
-            </a>
-          );
-        }
+        } focus-visible:bg-popover-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset`;
         return (
           <Link
             key={item.href}
