@@ -1,12 +1,17 @@
-run: https://github.com/jorgehermo9/PrintStash/actions/runs/39410541073
-date: 2026-10-20T10:49:27Z
+run: https://github.com/jorgehermo9/PrintStash/actions/runs/39410823881
+date: 2026-10-20T10:51:42Z
 docker: 28.0.4
 image: ghcr.io/xiao-villamor/printstash@sha256:cef11e20924ea7fc9037dc3f2b73d4b9a213882992ba060fcec91277911ca3d8
 health: {"status":"ok","name":"PrintStash","storage":{"provider":"local","capabilities":{"conditional_create":false,"object_identity":"none","verified_delete":false,"conditional_replace":false,"namespace_ownership":true,"direct_path":true,"browser_multipart_upload":false,"multipart_sha256_checksums":false,"tier":"unguarded","warnings":["Two simultaneous uploads of the same revision can silently overwrite each other.","PrintStash cannot verify that a file is the one it wrote.","Interrupted uploads can leave retained bytes requiring storage-specific cleanup.","PrintStash cannot conditionally replace an object while its proof still matches."]},"tier":"unguarded","diagnostics":{"probed":true,"roots_ready":false,"root_bindings":{"data":"binding_missing","thumb":"binding_missing"},"staging":{"role":"staging","path":"/data/staging","fs_kind":"local","hardlink":true,"exclusive_create":true,"directory_fsync":true}},"warnings":["Two simultaneous uploads of the same revision can silently overwrite each other.","PrintStash cannot verify that a file is the one it wrote.","Interrupted uploads can leave retained bytes requiring storage-specific cleanup.","PrintStash cannot conditionally replace an object while its proof still matches."]}}
 status: {"configured":true,"setup_available":false,"recovery_required":true,"storage_choice_required":true,"user_count":0}
 login: {"scope":"admin","token_type":"bearer","has_token":true}
 me: {"id":1,"username":"admin","is_superuser":true,"email":null}
-prepare-storage: {"detail":"setup_storage_choice_required"}
+prepare-storage: {"detail":"2 validation errors for tagged-union[function-after[validate_root(), LocalProviderConfig],function-after[validate_root(), LocalProviderConfig],function-after[validate_root(), LocalProviderConfig],function-after[validate_root(), LocalProviderConfig],function-after[validate_root(), LocalProviderConfig],function-after[validate_root(), S3ProviderConfig],function-after[validate_root(), S3ProviderConfig],function-after[validate_root(), S3ProviderConfig],function-after[validate_root(), S3ProviderConfig],function-after[validate_root(), S3ProviderConfig],function-after[validate_root(), S3ProviderConfig],function-after[validate_root(), S3ProviderConfig],function-after[validate_root(), S3ProviderConfig],function-after[validate_root(), S3ProviderConfig],function-after[validate_root(), WebDAVProviderConfig],function-after[validate_root(), WebDAVProviderConfig],function-after[validate_root(
 status-after-storage: {"configured":true,"setup_available":false,"recovery_required":true,"storage_choice_required":true,"user_count":0}
-login-after-restart: {"scope":"admin","has_token":true}
+storage-roots: 
+upload: 
+job: 
+models: 
+login-after-restart: 
+models-after-restart: 
 container-state: running restarts=0
