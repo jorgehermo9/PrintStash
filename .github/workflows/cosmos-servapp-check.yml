@@ -5,12 +5,17 @@ on:
     branches: [ci/cosmos-servapp-check]
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 jobs:
   container-first-run:
     name: Real container, manifest environment
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
+      - uses: actions/checkout@v4
+
       - name: Runner has Docker
         run: docker version --format 'server {{.Server.Version}}'
 
@@ -60,22 +65,19 @@ jobs:
       - name: Owner provisioned, login works through the front
         run: |
           set -euo pipefail
-          echo "setup status:"
-          curl -s http://127.0.0.1:3000/api/v1/setup/status | tee /tmp/status.json | jq .
+          curl -s http://127.0.0.1:3000/api/v1/setup/status > /tmp/status.json
+          echo "setup status: $(cat /tmp/status.json)"
           jq -e '.configured == true' /tmp/status.json > /dev/null
           jq -e '.setup_available == false' /tmp/status.json > /dev/null
           jq -e '.storage_choice_required == true' /tmp/status.json > /dev/null
-
-          echo "login:"
           curl -s -X POST http://127.0.0.1:3000/api/v1/auth/login \
             -H 'Content-Type: application/json' \
-            -d '{"username":"admin","password":"correct-horse-battery-staple"}' \
-            | tee /tmp/login.json | jq '{scope, token_type, has_token: (.access_token != null)}'
+            -d '{"username":"admin","password":"correct-horse-battery-staple"}' > /tmp/login.json
+          echo "login: $(jq -c '{scope, token_type, has_token: (.access_token != null)}' /tmp/login.json)"
           TOKEN=$(jq -r .access_token /tmp/login.json)
           test "$TOKEN" != "null"
-
-          echo "who am i:"
-          curl -s http://127.0.0.1:3000/api/v1/auth/me -H "Authorization: Bearer $TOKEN" | tee /tmp/me.json | jq '{id, username, is_superuser, email}'
+          curl -s http://127.0.0.1:3000/api/v1/auth/me -H "Authorization: Bearer $TOKEN" > /tmp/me.json
+          echo "me: $(jq -c '{id, username, is_superuser, email}' /tmp/me.json)"
           jq -e '.username == "admin"' /tmp/me.json > /dev/null
           jq -e '.is_superuser == true' /tmp/me.json > /dev/null
 
@@ -85,13 +87,13 @@ jobs:
           TOKEN=$(curl -s -X POST http://127.0.0.1:3000/api/v1/auth/login \
             -H 'Content-Type: application/json' \
             -d '{"username":"admin","password":"correct-horse-battery-staple"}' | jq -r .access_token)
-          echo "prepare-storage:"
           curl -s -X POST http://127.0.0.1:3000/api/v1/setup/prepare-storage \
             -H "Authorization: Bearer $TOKEN" \
             -H 'Content-Type: application/json' \
-            -d '{}' | tee /tmp/prep.json | jq .
-          echo "status after storage:"
-          curl -s http://127.0.0.1:3000/api/v1/setup/status | jq .
+            -d '{}' > /tmp/prep.json
+          echo "prepare-storage: $(head -c 600 /tmp/prep.json)"
+          curl -s http://127.0.0.1:3000/api/v1/setup/status > /tmp/status2.json
+          echo "status after storage: $(cat /tmp/status2.json)"
 
       - name: Restart and prove /data persists the owner
         run: |
@@ -104,12 +106,37 @@ jobs:
             sleep 5
           done
           test "$code" = "200"
-          login=$(curl -s -X POST http://127.0.0.1:3000/api/v1/auth/login \
+          curl -s -X POST http://127.0.0.1:3000/api/v1/auth/login \
             -H 'Content-Type: application/json' \
-            -d '{"username":"admin","password":"correct-horse-battery-staple"}')
-          echo "$login" | jq '{scope, has_token: (.access_token != null)}'
-          echo "$login" | jq -e '.access_token != null' > /dev/null
+            -d '{"username":"admin","password":"correct-horse-battery-staple"}' > /tmp/restart_login.json
+          echo "login after restart: $(jq -c '{scope, has_token: (.access_token != null)}' /tmp/restart_login.json)"
+          jq -e '.access_token != null' /tmp/restart_login.json > /dev/null
+
+      - name: Publish the evidence on the branch
+        if: always()
+        run: |
+          mkdir -p evidence
+          {
+            echo "run: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+            echo "date: $(date -u +%FT%TZ)"
+            echo "docker: $(docker version --format '{{.Server.Version}}' 2>/dev/null)"
+            echo "image: $(docker image inspect ghcr.io/xiao-villamor/printstash:0.14.0 --format '{{index .RepoDigests 0}}' 2>/dev/null)"
+            echo "health: $(cat /tmp/health.json 2>/dev/null)"
+            echo "status: $(cat /tmp/status.json 2>/dev/null)"
+            echo "login: $(jq -c '{scope, token_type, has_token: (.access_token != null)}' /tmp/login.json 2>/dev/null)"
+            echo "me: $(jq -c '{id, username, is_superuser, email}' /tmp/me.json 2>/dev/null)"
+            echo "prepare-storage: $(head -c 800 /tmp/prep.json 2>/dev/null)"
+            echo "status-after-storage: $(cat /tmp/status2.json 2>/dev/null)"
+            echo "login-after-restart: $(jq -c '{scope, has_token: (.access_token != null)}' /tmp/restart_login.json 2>/dev/null)"
+            echo "container-state: $(docker inspect printstash --format '{{.State.Status}} restarts={{.RestartCount}}' 2>/dev/null)"
+          } > evidence/cosmos-servapp-check.txt
+          cat evidence/cosmos-servapp-check.txt
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add evidence/cosmos-servapp-check.txt
+          git commit -m "evidence: cosmos servapp container check [skip ci]" || echo "nothing to commit"
+          git push
 
       - name: Container logs
         if: always()
-        run: docker compose logs --no-color | tail -n 80
+        run: docker compose logs --no-color | tail -n 120
