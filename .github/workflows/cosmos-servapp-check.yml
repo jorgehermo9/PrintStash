@@ -1,0 +1,115 @@
+name: cosmos-servapp-check
+
+on:
+  push:
+    branches: [ci/cosmos-servapp-check]
+  workflow_dispatch:
+
+jobs:
+  container-first-run:
+    name: Real container, manifest environment
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Runner has Docker
+        run: docker version --format 'server {{.Server.Version}}'
+
+      - name: Render the manifest compose
+        run: |
+          cat > docker-compose.yml <<'YAML'
+          services:
+            printstash:
+              image: ghcr.io/xiao-villamor/printstash:0.14.0
+              container_name: printstash
+              restart: "no"
+              stop_grace_period: 60s
+              environment:
+                - VAULT_SETUP_MODE=environment
+                - VAULT_RESTART_ENABLED=true
+                - VAULT_SETUP_ADMIN_USERNAME=admin
+                - VAULT_SETUP_ADMIN_PASSWORD=correct-horse-battery-staple
+                - VAULT_SETUP_ADMIN_EMAIL=
+                - VAULT_COMPUTE_MODE=auto
+                - VAULT_COMPUTE_MEMORY_MB=1024
+                - VAULT_MESH_MEMORY_BUDGET_FRACTION=0.5
+                - VAULT_EMBEDDING_MEMORY_BUDGET_FRACTION=0.25
+              ports:
+                - "3000:3000"
+              volumes:
+                - printstash-data:/data
+          volumes:
+            printstash-data:
+          YAML
+          cat docker-compose.yml
+
+      - name: Start the container
+        run: docker compose up -d
+
+      - name: Wait for the web front on 3000
+        run: |
+          code=000
+          for i in $(seq 1 90); do
+            code=$(curl -s -o /tmp/health.json -w '%{http_code}' http://127.0.0.1:3000/api/v1/health || true)
+            echo "attempt $i: HTTP $code"
+            if [ "$code" = "200" ]; then break; fi
+            sleep 5
+          done
+          echo "health body: $(cat /tmp/health.json 2>/dev/null)"
+          test "$code" = "200"
+
+      - name: Owner provisioned, login works through the front
+        run: |
+          set -euo pipefail
+          echo "setup status:"
+          curl -s http://127.0.0.1:3000/api/v1/setup/status | tee /tmp/status.json | jq .
+          jq -e '.configured == true' /tmp/status.json > /dev/null
+          jq -e '.setup_available == false' /tmp/status.json > /dev/null
+          jq -e '.storage_choice_required == true' /tmp/status.json > /dev/null
+
+          echo "login:"
+          curl -s -X POST http://127.0.0.1:3000/api/v1/auth/login \
+            -H 'Content-Type: application/json' \
+            -d '{"username":"admin","password":"correct-horse-battery-staple"}' \
+            | tee /tmp/login.json | jq '{scope, token_type, has_token: (.access_token != null)}'
+          TOKEN=$(jq -r .access_token /tmp/login.json)
+          test "$TOKEN" != "null"
+
+          echo "who am i:"
+          curl -s http://127.0.0.1:3000/api/v1/auth/me -H "Authorization: Bearer $TOKEN" | tee /tmp/me.json | jq '{id, username, is_superuser, email}'
+          jq -e '.username == "admin"' /tmp/me.json > /dev/null
+          jq -e '.is_superuser == true' /tmp/me.json > /dev/null
+
+      - name: Finish the storage step the UI performs after sign-in
+        run: |
+          set -euo pipefail
+          TOKEN=$(curl -s -X POST http://127.0.0.1:3000/api/v1/auth/login \
+            -H 'Content-Type: application/json' \
+            -d '{"username":"admin","password":"correct-horse-battery-staple"}' | jq -r .access_token)
+          echo "prepare-storage:"
+          curl -s -X POST http://127.0.0.1:3000/api/v1/setup/prepare-storage \
+            -H "Authorization: Bearer $TOKEN" \
+            -H 'Content-Type: application/json' \
+            -d '{}' | tee /tmp/prep.json | jq .
+          echo "status after storage:"
+          curl -s http://127.0.0.1:3000/api/v1/setup/status | jq .
+
+      - name: Restart and prove /data persists the owner
+        run: |
+          set -euo pipefail
+          docker compose restart
+          code=000
+          for i in $(seq 1 60); do
+            code=$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:3000/api/v1/health || true)
+            if [ "$code" = "200" ]; then break; fi
+            sleep 5
+          done
+          test "$code" = "200"
+          login=$(curl -s -X POST http://127.0.0.1:3000/api/v1/auth/login \
+            -H 'Content-Type: application/json' \
+            -d '{"username":"admin","password":"correct-horse-battery-staple"}')
+          echo "$login" | jq '{scope, has_token: (.access_token != null)}'
+          echo "$login" | jq -e '.access_token != null' > /dev/null
+
+      - name: Container logs
+        if: always()
+        run: docker compose logs --no-color | tail -n 80
