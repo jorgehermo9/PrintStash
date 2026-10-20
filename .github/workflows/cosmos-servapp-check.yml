@@ -90,7 +90,7 @@ jobs:
           curl -s -X POST http://127.0.0.1:3000/api/v1/setup/prepare-storage \
             -H "Authorization: Bearer $TOKEN" \
             -H 'Content-Type: application/json' \
-            -d '{"storage_provider":"local","storage_provider_config":{"provider":"local"}}' \
+            -d '{"storage_provider":"local","storage_provider_config":{"provider":"local","data_dir":"/data/models","thumb_dir":"/data/thumbnails"}}' \
             > /tmp/prep.json
           echo "prepare-storage: $(head -c 800 /tmp/prep.json)"
           curl -s http://127.0.0.1:3000/api/v1/setup/status > /tmp/status2.json
