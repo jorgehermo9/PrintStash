@@ -74,14 +74,14 @@ jobs:
             -H 'Content-Type: application/json' \
             -d '{"username":"admin","password":"correct-horse-battery-staple"}' > /tmp/login.json
           echo "login: $(jq -c '{scope, token_type, has_token: (.access_token != null)}' /tmp/login.json)"
+          jq -e '.access_token != null' /tmp/login.json > /dev/null
           TOKEN=$(jq -r .access_token /tmp/login.json)
-          test "$TOKEN" != "null"
           curl -s http://127.0.0.1:3000/api/v1/auth/me -H "Authorization: Bearer $TOKEN" > /tmp/me.json
           echo "me: $(jq -c '{id, username, is_superuser, email}' /tmp/me.json)"
           jq -e '.username == "admin"' /tmp/me.json > /dev/null
           jq -e '.is_superuser == true' /tmp/me.json > /dev/null
 
-      - name: Finish the storage step the UI performs after sign-in
+      - name: Choose local storage, as the first-run screen does
         run: |
           set -euo pipefail
           TOKEN=$(curl -s -X POST http://127.0.0.1:3000/api/v1/auth/login \
@@ -90,10 +90,129 @@ jobs:
           curl -s -X POST http://127.0.0.1:3000/api/v1/setup/prepare-storage \
             -H "Authorization: Bearer $TOKEN" \
             -H 'Content-Type: application/json' \
-            -d '{}' > /tmp/prep.json
-          echo "prepare-storage: $(head -c 600 /tmp/prep.json)"
+            -d '{"storage_provider":"local","storage_provider_config":{"provider":"local"}}' \
+            > /tmp/prep.json
+          echo "prepare-storage: $(head -c 800 /tmp/prep.json)"
           curl -s http://127.0.0.1:3000/api/v1/setup/status > /tmp/status2.json
           echo "status after storage: $(cat /tmp/status2.json)"
+          jq -e '.storage_choice_required == false' /tmp/status2.json > /dev/null
+          curl -s http://127.0.0.1:3000/api/v1/health > /tmp/health2.json
+          echo "storage roots: $(jq -c '.storage.diagnostics | {probed, roots_ready, root_bindings}' /tmp/health2.json)"
+
+      - name: Upload a real STL and wait for the job
+        run: |
+          set -euo pipefail
+          cat > /tmp/cube.stl <<'STL'
+          solid cube
+          facet normal 0 0 -1
+           outer loop
+            vertex 0 0 0
+            vertex 0 20 0
+            vertex 20 20 0
+           endloop
+          endfacet
+          facet normal 0 0 -1
+           outer loop
+            vertex 0 0 0
+            vertex 20 20 0
+            vertex 20 0 0
+           endloop
+          endfacet
+          facet normal 0 -1 0
+           outer loop
+            vertex 0 0 0
+            vertex 20 0 0
+            vertex 20 0 20
+           endloop
+          endfacet
+          facet normal 0 -1 0
+           outer loop
+            vertex 0 0 0
+            vertex 20 0 20
+            vertex 0 0 20
+           endloop
+          endfacet
+          facet normal -1 0 0
+           outer loop
+            vertex 0 0 0
+            vertex 0 0 20
+            vertex 0 20 20
+           endloop
+          endfacet
+          facet normal -1 0 0
+           outer loop
+            vertex 0 0 0
+            vertex 0 20 20
+            vertex 0 20 0
+           endloop
+          endfacet
+          facet normal 0 0 1
+           outer loop
+            vertex 0 0 20
+            vertex 20 0 20
+            vertex 20 20 20
+           endloop
+          endfacet
+          facet normal 0 0 1
+           outer loop
+            vertex 0 0 20
+            vertex 20 20 20
+            vertex 0 20 20
+           endloop
+          endfacet
+          facet normal 0 1 0
+           outer loop
+            vertex 0 20 0
+            vertex 0 20 20
+            vertex 20 20 20
+           endloop
+          endfacet
+          facet normal 0 1 0
+           outer loop
+            vertex 0 20 0
+            vertex 20 20 20
+            vertex 20 20 0
+           endloop
+          endfacet
+          facet normal 1 0 0
+           outer loop
+            vertex 20 0 0
+            vertex 20 20 0
+            vertex 20 20 20
+           endloop
+          endfacet
+          facet normal 1 0 0
+           outer loop
+            vertex 20 0 0
+            vertex 20 20 20
+            vertex 20 0 20
+           endloop
+          endfacet
+          endsolid cube
+          STL
+          TOKEN=$(curl -s -X POST http://127.0.0.1:3000/api/v1/auth/login \
+            -H 'Content-Type: application/json' \
+            -d '{"username":"admin","password":"correct-horse-battery-staple"}' | jq -r .access_token)
+          curl -s -X POST http://127.0.0.1:3000/api/v1/ingest/model \
+            -H "Authorization: Bearer $TOKEN" \
+            -F "file=@/tmp/cube.stl;type=model/stl" \
+            -F "model_name=Cosmos Test Cube" > /tmp/upload.json
+          echo "upload: $(head -c 400 /tmp/upload.json)"
+          JOB=$(jq -r '.job_id // .id // empty' /tmp/upload.json)
+          test -n "$JOB"
+          state=""
+          for i in $(seq 1 40); do
+            curl -s "http://127.0.0.1:3000/api/v1/jobs/$JOB" -H "Authorization: Bearer $TOKEN" > /tmp/job.json
+            state=$(jq -r '.status // .state // empty' /tmp/job.json)
+            echo "job $i: $state"
+            case "$state" in completed|succeeded|done|failed|cancelled) break;; esac
+            sleep 5
+          done
+          echo "job final: $(head -c 600 /tmp/job.json)"
+          curl -s "http://127.0.0.1:3000/api/v1/models" -H "Authorization: Bearer $TOKEN" > /tmp/models.json
+          echo "models: $(jq -c '[.[] | {id, name, file_count}] | .[0:5]' /tmp/models.json 2>/dev/null || head -c 400 /tmp/models.json)"
+          jq -e '[.[] | select(.name == "Cosmos Test Cube")] | length > 0' /tmp/models.json > /dev/null
+          echo "volume contents:"; docker exec printstash sh -c 'ls -la /data; du -sh /data/* 2>/dev/null | head'
 
       - name: Restart and prove /data persists the owner
         run: |
@@ -111,6 +230,9 @@ jobs:
             -d '{"username":"admin","password":"correct-horse-battery-staple"}' > /tmp/restart_login.json
           echo "login after restart: $(jq -c '{scope, has_token: (.access_token != null)}' /tmp/restart_login.json)"
           jq -e '.access_token != null' /tmp/restart_login.json > /dev/null
+          TOKEN=$(jq -r .access_token /tmp/restart_login.json)
+          curl -s "http://127.0.0.1:3000/api/v1/models" -H "Authorization: Bearer $TOKEN" > /tmp/models2.json
+          echo "models after restart: $(jq -c '[.[] | .name] | .[0:5]' /tmp/models2.json)"
 
       - name: Publish the evidence on the branch
         if: always()
@@ -125,9 +247,14 @@ jobs:
             echo "status: $(cat /tmp/status.json 2>/dev/null)"
             echo "login: $(jq -c '{scope, token_type, has_token: (.access_token != null)}' /tmp/login.json 2>/dev/null)"
             echo "me: $(jq -c '{id, username, is_superuser, email}' /tmp/me.json 2>/dev/null)"
-            echo "prepare-storage: $(head -c 800 /tmp/prep.json 2>/dev/null)"
+            echo "prepare-storage: $(head -c 900 /tmp/prep.json 2>/dev/null)"
             echo "status-after-storage: $(cat /tmp/status2.json 2>/dev/null)"
+            echo "storage-roots: $(jq -c '.storage.diagnostics | {probed, roots_ready, root_bindings}' /tmp/health2.json 2>/dev/null)"
+            echo "upload: $(head -c 400 /tmp/upload.json 2>/dev/null)"
+            echo "job: $(head -c 600 /tmp/job.json 2>/dev/null)"
+            echo "models: $(jq -c '[.[] | {id, name, file_count}] | .[0:5]' /tmp/models.json 2>/dev/null)"
             echo "login-after-restart: $(jq -c '{scope, has_token: (.access_token != null)}' /tmp/restart_login.json 2>/dev/null)"
+            echo "models-after-restart: $(jq -c '[.[] | .name] | .[0:5]' /tmp/models2.json 2>/dev/null)"
             echo "container-state: $(docker inspect printstash --format '{{.State.Status}} restarts={{.RestartCount}}' 2>/dev/null)"
           } > evidence/cosmos-servapp-check.txt
           cat evidence/cosmos-servapp-check.txt
