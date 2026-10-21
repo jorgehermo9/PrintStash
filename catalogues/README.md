@@ -9,6 +9,7 @@ Applications reads directly.
 | Store | Files | First administrator |
 | --- | --- | --- |
 | Unraid | `templates/printstash.xml` | **First-run setup** dropdown: `trusted_network` (default; register in the browser, fields blank) or `environment` (fields required) |
+| TrueNAS | `truenas/apps`: `ix-dev/community/printstash/` | `trusted_network`; the catalog has no install-form credentials, so the first administrator registers in the browser from the local network |
 | Runtipi | `runtipi/printstash/` | `environment`, with required install-form fields, so the owner exists before the app serves a request |
 | Umbrel | `umbrel/printstash/` | `environment`, with Umbrel's per-app credentials (`defaultUsername`, `deterministicPassword`) shown on the app's page |
 | CasaOS / ZimaOS | `casaos/PrintStash/` | `trusted_network` by default; set `VAULT_SETUP_MODE=environment` and fill the fields to provision instead |
@@ -57,6 +58,17 @@ The digest it prints (`sha256:…`) is what Umbrel pins.
 Nothing to submit. Community Applications re-reads `templates/printstash.xml` from
 `main`, and the template deliberately tracks `:latest`, the Community Applications
 convention, so it is the one manifest the version test does not pin.
+
+### TrueNAS: pull request to `truenas/apps`
+
+The package is not under `catalogues/`: the TrueNAS community train is a
+repository that holds the app itself, at `ix-dev/community/printstash/`
+(`app.yaml`, `ix_values.yaml`, `questions.yaml`, `README.md`, `item.yaml`, the
+Jinja compose template, its vendored library and one test-values file). The
+release order, including the metadata regeneration step and the two things the
+template pins (container port `3000` and the `PUID`/`PGID` identity), is in
+[`.agents/skills/printstash/references/release.md`](../.agents/skills/printstash/references/release.md),
+section "TrueNAS community catalog, every release".
 
 ### Umbrel: pull request to `getumbrel/umbrel-apps`
 
