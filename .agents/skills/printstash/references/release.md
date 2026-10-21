@@ -73,22 +73,11 @@ sweep). This file is the ordered checklist that ties it together.
       - **Confirm with the maintainer before opening any store PR or pushing to
         the Runtipi store.** They are public actions in other projects'
         repositories.
-      - Umbrel: a PR to `getumbrel/umbrel-apps`, run through that repository's
-        own `umbrel-update-app` and `umbrel-test-app` skills.
-      - CasaOS / ZimaOS: a PR to `IceWhaleTech/CasaOS-AppStore`. Copy the whole
-        `catalogues/casaos/PrintStash/` directory to `Apps/PrintStash/`, assets
-        included: the store's build resolves each `x-casaos` asset URL by
-        filename inside the app directory, so a URL whose file is missing ships
-        an entry with no icon. The release commit already bumped the image tag
-        and `x-casaos.version`; also set `update_at` to the release date
-        (`YYYY-MM-DD`) and rewrite `release_notes` in `en_US` and `es_ES` from
-        the CHANGELOG entry. Keep `category` one of the store's fixed values and
-        `port_map` equal to the published port, and refresh the screenshots only
-        when the screens they show have changed. Validate with the store's
-        `./scripts/build_dist.sh` and require
-        `dist/apps/org.printstash.printstash/` to carry a `meta.json` with both
-        architectures, a `meta.es_ES.json` and the assets under `assets/`.
-        Field-by-field guidance: `catalogues/README.md`.
+      - Umbrel: the ordered steps below, then a PR to
+        `getumbrel/umbrel-apps` through that repository's own
+        `umbrel-update-app` and `umbrel-test-app` skills.
+      - CasaOS / ZimaOS: a PR to `IceWhaleTech/CasaOS-AppStore`, validated with
+        its `./scripts/build_dist.sh`.
       - Cosmos Cloud: a PR to `azukaar/cosmos-servapps-official`, after
         `node .github/scripts/validate-servapps.js PrintStash` passes in the fork;
         the package is `catalogues/cosmos/PrintStash/`.
@@ -101,6 +90,43 @@ sweep). This file is the ordered checklist that ties it together.
 - [ ] Announce in the public roadmap discussion. Changelog says what's
       protected; never quotes private `reports/` analysis.
 - [ ] Update the "Where we are" block in `SKILL.md` (this skill).
+
+## Umbrel App Store, every release
+
+`catalogues/umbrel/printstash/` and `printstash/` in `getumbrel/umbrel-apps` are
+the same package: the catalogue is the source, the store copy is what umbrelOS
+installs. Both move in one release, or the listing keeps serving the old image.
+`catalogues/README.md` holds the field-by-field contract; this is the order.
+
+1. Read the digest of the published image:
+   `docker buildx imagetools inspect ghcr.io/xiao-villamor/printstash:X.Y.Z`
+   must list `linux/amd64` and `linux/arm64`. Copy the digest it reports for
+   that tag; it is the multi-arch index digest, not a per-architecture one.
+2. In the release commit, bump `version` and set
+   `image: ghcr.io/xiao-villamor/printstash:X.Y.Z@sha256:<digest>`.
+   `tests/repo/test_catalogue_manifests.py` fails until the tag equals the app
+   version and the digest is a full-length one, so the two cannot drift.
+3. Replace `releaseNotes` with this release's notes from the CHANGELOG entry:
+   user-visible features, fixes, and any upgrade or backup action, plus the
+   upstream release link. Keep two blank lines between paragraphs and one
+   before and between list items; YAML folds single newlines into spaces.
+   Never leave the previous version's notes in place, and never write the
+   notes only in the store copy.
+4. Copy `catalogues/umbrel/printstash/` over `printstash/` in your fork and
+   follow `umbrel-update-app`. `submission` keeps pointing at the first PR;
+   the store does not track later ones. Leave `gallery`, `icon` and
+   `storage: dataRoot: data` as they are.
+5. `npm run lint:apps -- printstash --check-images` must pass, and its digest
+   check must resolve to the digest in the compose file, then `git diff
+   --check`.
+6. Test through `umbrel-test-app`: install on umbrelOS, sign in with the
+   credentials Umbrel shows, choose storage, upload a model, restart, and
+   confirm the library survives. A release that cannot be installed that way
+   is not ready.
+7. Open the PR, link it from the GitHub release notes, and record anything
+   the maintainers change (a reassigned port, a pinned image, edited copy)
+   back into `catalogues/umbrel/printstash/` in the same release. Otherwise
+   the next release reintroduces it.
 
 ## GitHub release format
 
@@ -116,3 +142,28 @@ Match existing releases (`v0.8.3`, `v0.8.1`):
   `**Full changelog:** https://github.com/xiao-villamor/PrintStash/compare/vPREV...vX.Y.Z`
 
 Example title: `v0.8.5 — CI/ops hardening`.
+
+## CasaOS / ZimaOS App Store, every release
+
+`catalogues/casaos/PrintStash/` is the source: it is exactly the directory the
+store takes, so a submission and every update are a copy of it.
+`catalogues/README.md` holds the field-by-field contract; this is the order.
+
+1. Copy the whole directory, assets included:
+   `cp -r catalogues/casaos/PrintStash <checkout>/Apps/PrintStash`. The store's
+   build resolves each `x-casaos` asset URL by filename inside the app
+   directory, so a URL whose file is missing ships an entry with no icon.
+2. The release commit already bumped the image tag and `x-casaos.version`; also
+   set `update_at` to the release date (`YYYY-MM-DD`) and rewrite
+   `release_notes` in `en_US` and `es_ES` from the CHANGELOG entry.
+3. Keep `category` one of the store's fixed values (`Media`, `Productivity`,
+   `Home`, `Networking`, `AI`, `Finance`, `Social`, `Developer`, `Others`), or
+   the build accepts the app and lists it under no filter. Keep `port_map`
+   equal to the published port, and refresh the screenshots only when the
+   screens they show have changed.
+4. Validate with the store's `./scripts/build_dist.sh` and require
+   `dist/apps/org.printstash.printstash/` to carry a `meta.json` with both
+   architectures, a `meta.es_ES.json` and the assets under `assets/`.
+5. Open the PR, link it from the GitHub release notes, and record anything the
+   maintainers change (a reassigned port, edited copy) back into
+   `catalogues/casaos/PrintStash/` in the same release.
