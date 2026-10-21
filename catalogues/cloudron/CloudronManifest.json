@@ -1,0 +1,36 @@
+{
+  "manifestVersion": 2,
+  "id": "org.printstash.cloudronapp",
+  "title": "PrintStash",
+  "author": "PrintStash contributors",
+  "tagline": "Self-hosted library for 3D models and the G-code that prints them",
+  "description": "file://DESCRIPTION.md",
+  "changelog": "file://CHANGELOG",
+  "postInstallMessage": "file://POSTINSTALL.md",
+  "version": "0.14.0",
+  "upstreamVersion": "0.14.0",
+  "website": "https://www.printstash.org",
+  "contactEmail": "jorgehermogonzalez@gmail.com",
+  "icon": "file://icon.png",
+  "iconUrl": "https://raw.githubusercontent.com/xiao-villamor/PrintStash/main/catalogues/cloudron/icon.png",
+  "packageUrl": "https://github.com/xiao-villamor/PrintStash/tree/main/catalogues/cloudron",
+  "documentationUrl": "https://www.printstash.org",
+  "tags": [
+    "3d-printing",
+    "files"
+  ],
+  "mediaLinks": [
+    "https://raw.githubusercontent.com/xiao-villamor/PrintStash/main/screenshots/01-vault-overview.png",
+    "https://raw.githubusercontent.com/xiao-villamor/PrintStash/main/screenshots/02-model-detail.png",
+    "https://raw.githubusercontent.com/xiao-villamor/PrintStash/main/screenshots/03-gcode-viewer.png"
+  ],
+  "packagerName": "Jorge Hermo",
+  "packagerUrl": "https://github.com/jorgehermo9",
+  "httpPort": 3000,
+  "healthCheckPath": "/api/v1/health",
+  "memoryLimit": 2147483648,
+  "minBoxVersion": "9.1.0",
+  "addons": {
+    "localstorage": {}
+  }
+}

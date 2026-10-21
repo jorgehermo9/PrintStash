@@ -1,0 +1,4 @@
+0.14.0
+- First Cloudron package. Runs the published PrintStash image with Cloudron's
+  read-only filesystem, one data directory at /app/data, and the owner
+  registered in the browser at the app's own domain.

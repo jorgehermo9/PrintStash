@@ -2,9 +2,10 @@
 
 Source manifests for the stores that list PrintStash. Each one runs the
 single-container image described by the root [`docker-compose.yml`](../docker-compose.yml)
-and is submitted to that store's own repository. The Unraid template lives in
-[`templates/printstash.xml`](../templates/printstash.xml), which Community
-Applications reads directly.
+and is submitted to that store's own repository, except Cloudron, whose package is
+built and distributed from [`cloudron/`](cloudron/) and needs no submission. The
+Unraid template lives in [`templates/printstash.xml`](../templates/printstash.xml),
+which Community Applications reads directly.
 
 | Store | Files | First administrator |
 | --- | --- | --- |
@@ -13,6 +14,7 @@ Applications reads directly.
 | Umbrel | `umbrel/printstash/` | `environment`, with Umbrel's per-app credentials (`defaultUsername`, `deterministicPassword`) shown on the app's page |
 | CasaOS / ZimaOS | `casaos/PrintStash/` | `trusted_network` by default; set `VAULT_SETUP_MODE=environment` and fill the fields to provision instead |
 | Cosmos Cloud | `cosmos/PrintStash/` | `environment`, from required install-dialog fields: Cosmos terminates TLS and proxies every app, so browser registration through it is refused |
+| Cloudron | `cloudron/` | `trusted_network`, with the app's own Cloudron domain named in `VAULT_SETUP_ALLOWED_HOSTS`: Cloudron proxies every app from a public FQDN, which the browser door refuses unless the domain is named |
 
 All of them map the store's form or credentials to `VAULT_SETUP_ADMIN_*`, which
 creates the administrator once at first start (see
@@ -24,7 +26,7 @@ and the credentials together (see
 [first use](../docs/first-run.md#an-administrator-from-the-deployment)). Where
 the store always supplies the credentials (Runtipi, Umbrel, Cosmos) the mode is
 `environment`: the owner exists before the first request and the browser has no
-door. Where the fields may be blank (CasaOS, Unraid) the default is
+door. Where the fields may be blank (CasaOS, Unraid, Cloudron) the default is
 `trusted_network`, browser registration from the local network; switching to
 `environment` makes the fields required. A combination that doesn't fit keeps
 setup closed and the setup page names what to change.
@@ -188,6 +190,40 @@ app.
 - **Once:** list the store in Runtipi's community app stores discussion
   (<https://github.com/runtipi/runtipi/discussions/categories/app-stores>) and
   link it from the PrintStash documentation.
+
+### Cloudron: a versions file, then a listing on ca.cloudron.io
+
+Cloudron is the one store whose package stays in this repository rather than being
+copied into someone else's. It builds `cloudron/` on the server and installs the
+result, but an on-server build cannot be published: a versions file records a
+registry image. So a release that should reach other Cloudrons needs the image in
+a registry first.
+
+1. Bump `version` and `upstreamVersion` in `cloudron/CloudronManifest.json` to the
+   app version, and add the `CHANGELOG` entry. The catalogue tests fail until the
+   manifest follows the image tag. Revoke an old version rather than editing it;
+   someone may already have installed it.
+2. Build the package image from `cloudron/` and push it, tagged with the app
+   version: `cloudron builder build` when the Cloudron has a container registry
+   configured, or a plain build and push to a registry you own. The Dockerfile is
+   `FROM ghcr.io/xiao-villamor/printstash:X.Y.Z`, so the image adds only the start
+   script and the settings Cloudron needs, and both architectures come from the
+   release image.
+3. `cloudron versions init` once, then `cloudron versions add --image
+   <registry>/<repo>/printstash-cloudron:X.Y.Z` for this and every later release.
+4. Commit `CloudronVersions.json` here and keep its URL stable, because it is what
+   every other Cloudron reads: the raw file from `main` in this repository, or a
+   static host.
+5. Listing on ca.cloudron.io is optional and separate: log in with a cloudron.io
+   account and point it at the versions file. `cloudron install --versions-url
+   <url>` works without the listing.
+
+The package departs from Cloudron's guidance that the final Dockerfile stage be one
+of their base images. That guidance exists so their file manager, web terminal and
+log viewer find their own tools; this image already carries bash, coreutils, gosu
+and the supervisor the app runs, and rebuilding the Python app on their base would
+duplicate a heavy multi-arch build that would then drift from the release. Say so
+when the package is submitted.
 
 ### Before a first submission
 

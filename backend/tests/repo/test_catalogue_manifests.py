@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import json
 import re
+import shlex
 from pathlib import Path
 from typing import Any
 
@@ -32,6 +33,7 @@ RUNTIPI = CATALOGUES / "runtipi" / "printstash"
 UMBREL = CATALOGUES / "umbrel" / "printstash"
 CASAOS = CATALOGUES / "casaos" / "PrintStash"
 COSMOS = CATALOGUES / "cosmos" / "PrintStash"
+CLOUDRON = CATALOGUES / "cloudron"
 
 # The service that runs PrintStash in each store's compose file. Cosmos keeps the
 # service name a template variable, so its key is the placeholder the store renders.
@@ -41,12 +43,18 @@ MAIN_SERVICES = {
     "runtipi": (RUNTIPI / "docker-compose.yml", "printstash"),
     "umbrel": (UMBREL / "docker-compose.yml", "web"),
 }
-STORES = sorted(MAIN_SERVICES)
+# Cloudron packages the image itself: a Dockerfile and a manifest that the platform
+# builds on the server. There is no compose file, and the platform owns the
+# container lifecycle, so this store is read from its Dockerfile instead.
+DOCKERFILE_STORES = {"cloudron": CLOUDRON}
+COMPOSE_STORES = sorted(MAIN_SERVICES)
+STORES = sorted([*MAIN_SERVICES, *DOCKERFILE_STORES])
 # Stores whose install always supplies VAULT_SETUP_ADMIN_* (required form fields on
 # Runtipi, Umbrel's per-app credentials, Cosmos' install dialog), and those whose
-# fields may be left blank.
+# fields may be left blank. Cloudron has no install form at all, so its owner is
+# registered in the browser at the app's own domain, exactly like CasaOS.
 ALWAYS_PROVISIONED = ["cosmos", "runtipi", "umbrel"]
-OPTIONALLY_PROVISIONED = ["casaos"]
+OPTIONALLY_PROVISIONED = ["casaos", "cloudron"]
 ADMIN_SETTINGS = ["VAULT_SETUP_ADMIN_USERNAME", "VAULT_SETUP_ADMIN_PASSWORD"]
 # The limits the browser wizard and VAULT_SETUP_ADMIN_* validation enforce.
 WIZARD_LIMITS = SetupRequest.model_json_schema()["properties"]
@@ -61,8 +69,35 @@ def _load(path: Path) -> dict[str, Any]:
 
 
 def _service(store: str) -> dict[str, Any]:
+    if store in DOCKERFILE_STORES:
+        return _dockerfile_service(DOCKERFILE_STORES[store])
+
     path, name = MAIN_SERVICES[store]
     return _load(path)["services"][name]
+
+
+def _dockerfile_service(package: Path) -> dict[str, Any]:
+    """The one service a Docker-built package describes.
+
+    A Cloudron package is a Dockerfile and ``CloudronManifest.json``. Its ``ENV``
+    instructions carry the same settings a compose file's ``environment:`` does, so
+    joining the continuations and reading them keeps one contract over every store,
+    whichever format the store consumes.
+    """
+    dockerfile = (package / "Dockerfile").read_text()
+    joined = re.sub(r"\\\n\s*", " ", dockerfile)
+
+    environment: dict[str, str] = {}
+    for declaration in re.findall(r"^ENV\s+(.+)$", joined, re.M):
+        for token in shlex.split(declaration):
+            key, _, value = token.partition("=")
+            environment[key] = value
+
+    image = re.search(r"^FROM\s+(\S+)", dockerfile, re.M)
+
+    assert image is not None, "the package has to build from an image"
+
+    return {"image": image.group(1), "environment": environment}
 
 
 def _environment(store: str) -> dict[str, str]:
@@ -88,7 +123,9 @@ class TestEveryCatalogue:
         # A new store directory is guarded the day it is added, or this fails.
         stores = {path.name for path in CATALOGUES.iterdir() if path.is_dir()}
 
-        assert stores == set(MAIN_SERVICES), "add the new store to MAIN_SERVICES"
+        assert stores == set(STORES), (
+            "add the new store to MAIN_SERVICES or DOCKERFILE_STORES"
+        )
 
     def test_classifies_every_store_by_how_it_provisions_the_owner(self) -> None:
         # Each store's setup mode follows from this, so none may be left out.
@@ -108,6 +145,12 @@ class TestEveryCatalogue:
 
     @pytest.mark.parametrize("store", STORES, ids=str)
     def test_persists_the_data_root(self, store: str) -> None:
+        if store in DOCKERFILE_STORES:
+            # The platform keeps and backs up one directory, so the app has to be
+            # told to put everything it owns there.
+            assert _environment(store)["VAULT_DATA_ROOT"] == "/app/data"
+            return
+
         targets = [
             volume["target"] if isinstance(volume, dict) else volume.split(":")[1]
             for volume in _service(store)["volumes"]
@@ -186,14 +229,17 @@ class TestEveryCatalogue:
     def test_offers_the_settings_restart(self, store: str) -> None:
         assert _environment(store)["VAULT_RESTART_ENABLED"] == "true"
 
-    @pytest.mark.parametrize("store", STORES, ids=str)
+    @pytest.mark.parametrize("store", COMPOSE_STORES, ids=str)
     def test_relaunches_after_a_graceful_exit(self, store: str) -> None:
+        # Only the stores that read a compose file carry the policy. Cloudron
+        # restarts the container itself, so the package only has to let a Settings
+        # restart through (test_offers_the_settings_restart).
         assert _service(store)["restart"] == "unless-stopped", (
             "a Settings restart is a graceful SIGTERM that can exit 0; "
             "on-failure would leave the app stopped"
         )
 
-    @pytest.mark.parametrize("store", STORES, ids=str)
+    @pytest.mark.parametrize("store", COMPOSE_STORES, ids=str)
     def test_gives_both_processes_time_to_stop(self, store: str) -> None:
         assert _service(store)["stop_grace_period"] == "60s"
 
@@ -395,3 +441,65 @@ class TestCosmos:
 
         assert icon.size == (256, 256), "the store shows icon.png at 256x256"
         assert len(sorted((COSMOS / "screenshots").glob("*.png"))) >= 1
+
+
+class TestCloudron:
+    """The Cloudron package is the published image plus a platform contract.
+
+    Unlike the compose stores, the manifest is the listing: Cloudron reads the
+    version, the port and the addons from it, and the platform supplies the
+    restart policy, the data directory and the backup for that directory.
+    """
+
+    def _manifest(self) -> dict[str, Any]:
+        return json.loads((CLOUDRON / "CloudronManifest.json").read_text())
+
+    def test_serves_http_on_the_port_the_image_listens_on(self) -> None:
+        manifest = self._manifest()
+
+        assert (manifest["httpPort"], manifest["healthCheckPath"]) == (
+            3000,
+            "/api/v1/health",
+        )
+
+    def test_declares_the_addon_that_creates_and_backs_up_the_data_root(self) -> None:
+        # Without localstorage there is no /app/data, and with no /app/data a
+        # backup captures nothing and a restore returns nothing.
+        assert "localstorage" in self._manifest()["addons"]
+
+    def test_manifest_follows_the_image_tag(self) -> None:
+        manifest = self._manifest()
+
+        assert manifest["version"] == settings.app_version
+        assert manifest["upstreamVersion"] == settings.app_version
+
+    def test_asks_for_room_for_a_library_plus_one_job(self) -> None:
+        # The platform default is 256 MB; the README asks for 1 GB to start and
+        # recommends 2 GB once thumbnails and AI search are in play.
+        assert self._manifest()["memoryLimit"] >= 2 * 1024 * 1024 * 1024
+
+    def test_names_the_app_domain_so_the_owner_can_register(self) -> None:
+        # Every Cloudron app is served from a public FQDN behind the platform
+        # proxy, which the first-run host check refuses unless the domain is named.
+        # The platform publishes that domain, so the package has to read it.
+        start = (CLOUDRON / "start.sh").read_text()
+
+        assert "VAULT_SETUP_ALLOWED_HOSTS" in start
+        assert "CLOUDRON_APP_DOMAIN" in start
+
+    def test_ships_every_setting_the_environment_route_needs(self) -> None:
+        # The documented alternative to browser registration: set the administrator
+        # variables with `cloudron env set`. They have to reach the app.
+        environment = _environment("cloudron")
+
+        assert environment["VAULT_SETUP_MODE"] == "trusted_network"
+        assert {
+            "VAULT_SETUP_ADMIN_USERNAME",
+            "VAULT_SETUP_ADMIN_PASSWORD",
+            "VAULT_SETUP_ADMIN_EMAIL",
+        } <= set(environment)
+
+    def test_ships_a_square_icon_for_the_listing(self) -> None:
+        icon = Image.open(CLOUDRON / "icon.png")
+
+        assert icon.size == (256, 256), "the store shows icon.png at 256x256"
