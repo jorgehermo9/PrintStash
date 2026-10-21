@@ -75,8 +75,20 @@ sweep). This file is the ordered checklist that ties it together.
         repositories.
       - Umbrel: a PR to `getumbrel/umbrel-apps`, run through that repository's
         own `umbrel-update-app` and `umbrel-test-app` skills.
-      - CasaOS / ZimaOS: a PR to `IceWhaleTech/CasaOS-AppStore`, validated with
-        its `./scripts/build_dist.sh`.
+      - CasaOS / ZimaOS: a PR to `IceWhaleTech/CasaOS-AppStore`. Copy the whole
+        `catalogues/casaos/PrintStash/` directory to `Apps/PrintStash/`, assets
+        included: the store's build resolves each `x-casaos` asset URL by
+        filename inside the app directory, so a URL whose file is missing ships
+        an entry with no icon. The release commit already bumped the image tag
+        and `x-casaos.version`; also set `update_at` to the release date
+        (`YYYY-MM-DD`) and rewrite `release_notes` in `en_US` and `es_ES` from
+        the CHANGELOG entry. Keep `category` one of the store's fixed values and
+        `port_map` equal to the published port, and refresh the screenshots only
+        when the screens they show have changed. Validate with the store's
+        `./scripts/build_dist.sh` and require
+        `dist/apps/org.printstash.printstash/` to carry a `meta.json` with both
+        architectures, a `meta.es_ES.json` and the assets under `assets/`.
+        Field-by-field guidance: `catalogues/README.md`.
       - Cosmos Cloud: a PR to `azukaar/cosmos-servapps-official`, after
         `node .github/scripts/validate-servapps.js PrintStash` passes in the fork;
         the package is `catalogues/cosmos/PrintStash/`.
