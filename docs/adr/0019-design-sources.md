@@ -113,10 +113,10 @@ context, is a separate follow-up.
   Ctrl+S saves a new design-source version. "Send to PrintStash" uploads exports
   with the "exported from" link set automatically. It builds on **paired apps**,
   which generalize browser pairing into kinds whose allowed actions are fixed in
-  code, and on checkouts with a base version. Every
-  uploaded version records the version it was `based_on`, so concurrent edits
-  become flagged new versions and are never overwritten. FreeCAD and OpenSCAD
-  clients can reuse the same server model later.
+  code, and on checkouts with a base version. Every uploaded version
+  records the version it was `based_on`, so concurrent edits become flagged new
+  versions and are never overwritten. FreeCAD and OpenSCAD clients can reuse
+  the same server model later.
 
 Generating printable files from design sources stays rejected (see below),
 including the narrower case of a sandboxed OpenSCAD export.
