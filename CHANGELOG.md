@@ -2,6 +2,46 @@
 
 ## Unreleased
 
+- Thumbnails drawn without a GPU take less CPU: the renderer now tests only
+  the pixels each row of a triangle covers instead of its whole bounding box,
+  most of which a long thin triangle leaves empty. The thumbnails are
+  byte-for-byte the same, so nothing is regenerated.
+
+- STEP parts in the Docker image get their exact B-rep volume and similarity
+  fingerprints again. The image lacked `libgl1`, which OpenCASCADE's binding
+  loads even without a display, so every B-rep read reported STEP as
+  unavailable. The image build now fails if that binding cannot load.
+
+- Thumbnails, measurements and previews of a ZIP's Models now start while the
+  rest of the ZIP is still being imported, instead of after its last file. The
+  import still shows every Model almost as soon as before, because the derived
+  work looks for new Models every two seconds
+  (`VAULT_JOBS_PACED_DISCOVERY_SECONDS`) rather than after each file. Search
+  indexing still waits for the import to finish.
+
+- Importing a ZIP no longer wakes the derivative passes after every file. They
+  would only wait for the import to end, so they now stay asleep until it does,
+  leaving the database to the import, so large ZIPs import and finish
+  processing sooner.
+
+- A ZIP prepared while the server's clock stepped back (an NTP or virtual
+  machine time resync) no longer stays at *Queued* forever: the Task Center
+  now offers *Choose files* as soon as the preparation ends, whatever time the
+  server stamped on it.
+
+- Administrators choose how many models are processed at once on Settings →
+  Background work → Worker settings. *Automatic* keeps the CPU-and-memory
+  default; a chosen count may go up to what the native memory pool fits,
+  overrides `VAULT_MAX_RENDER_JOBS`, and applies without a restart (separate
+  worker processes apply it when they restart). *Use default* clears it.
+
+- The default number of simultaneous mesh jobs now follows CPUs and memory:
+  one per usable CPU plus one, no more than fit the native memory pool, up to
+  eight. Two- and three-CPU installs used to process one file at a time and now
+  run three or four, so large imports finish in about half the time.
+  `VAULT_MAX_RENDER_JOBS` still overrides it; local AI inference keeps its own
+  default of one job per two CPUs unless that variable is set.
+
 - STEP measurements and previews no longer reserve the whole native memory
   pool. Each part is first admitted under 1 GiB, so STEP files are derived
   alongside other work instead of one at a time; a part that does not fit runs
