@@ -100,8 +100,24 @@ context, is a separate follow-up.
 | Search | OpenSCAD text as bounded Passages; filename for every format. |
 | Trash, backups, library transfer | Full Artifact behaviour. Included in backups. |
 | Downloads, shares | The original file, through the existing download contract. |
-| Open in slicer | Not offered: slicers do not open design sources. |
+| Open in | Slicers are never offered. The Open in registry (#547) offers the authoring app: Download and open by default, and one click through the Blender extension (#548). |
 | UI | A separate "Design" section on the Model with versions, thumbnails where they exist, and lineage. Design sources never appear as printable files. |
+
+## Follow-ups
+
+- **Open in registry (#547).** Replaces the hard-coded slicer list with
+  handlers keyed by role and file type. For design apps the default is
+  Download and open, because no URL scheme is known for Blender, FreeCAD or
+  OpenSCAD that opens a remote file.
+- **Blender round-trip (#548).** A Blender extension that turns Ctrl+S into a
+  new design-source version. It uses `load_post` and `save_post` handlers, an
+  app token limited to checkouts, and checkouts with a base version. Every
+  uploaded version records the version it was `based_on`, so concurrent edits
+  become flagged new versions and are never overwritten. FreeCAD and OpenSCAD
+  clients can reuse the same server model later.
+
+Generating printable files from design sources stays rejected (see below),
+including the narrower case of a sandboxed OpenSCAD export.
 
 ## Alternatives considered
 
