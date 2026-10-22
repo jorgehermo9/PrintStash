@@ -109,9 +109,11 @@ context, is a separate follow-up.
   handlers keyed by role and file type. For design apps the default is
   Download and open, because no URL scheme is known for Blender, FreeCAD or
   OpenSCAD that opens a remote file.
-- **Blender round-trip (#548).** A Blender extension that turns Ctrl+S into a
-  new design-source version. It uses `load_post` and `save_post` handlers, an
-  app token limited to checkouts, and checkouts with a base version. Every
+- **Blender extension (#548).** Browse, import, and a round-trip in which
+  Ctrl+S saves a new design-source version. "Send to PrintStash" uploads exports
+  with the "exported from" link set automatically. It builds on **paired apps**,
+  which generalize browser pairing into kinds whose allowed actions are fixed in
+  code, and on checkouts with a base version. Every
   uploaded version records the version it was `based_on`, so concurrent edits
   become flagged new versions and are never overwritten. FreeCAD and OpenSCAD
   clients can reuse the same server model later.
