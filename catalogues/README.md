@@ -9,7 +9,7 @@ Applications reads directly.
 | Store | Files | First administrator |
 | --- | --- | --- |
 | Unraid | `templates/printstash.xml` | **First-run setup** dropdown: `trusted_network` (default; register in the browser, fields blank) or `environment` (fields required) |
-| TrueNAS | `truenas/printstash/` | `trusted_network`; the catalog has no install-form credentials, so the first administrator registers in the browser from the local network |
+| TrueNAS | `truenas/printstash/` | `trusted_network` by default; choose **Create from this form** under First Administrator to switch to `environment`, which makes the username and password fields required |
 | Runtipi | `runtipi/printstash/` | `environment`, with required install-form fields, so the owner exists before the app serves a request |
 | Umbrel | `umbrel/printstash/` | `environment`, with Umbrel's per-app credentials (`defaultUsername`, `deterministicPassword`) shown on the app's page |
 | CasaOS / ZimaOS | `casaos/PrintStash/` | `trusted_network` by default; set `VAULT_SETUP_MODE=environment` and fill the fields to provision instead |
@@ -25,7 +25,7 @@ and the credentials together (see
 [first use](../docs/first-run.md#an-administrator-from-the-deployment)). Where
 the store always supplies the credentials (Runtipi, Umbrel, Cosmos) the mode is
 `environment`: the owner exists before the first request and the browser has no
-door. Where the fields may be blank (CasaOS, Unraid) the default is
+door. Where the fields may be blank (CasaOS, TrueNAS, Unraid) the default is
 `trusted_network`, browser registration from the local network; switching to
 `environment` makes the fields required. A combination that doesn't fit keeps
 setup closed and the setup page names what to change.

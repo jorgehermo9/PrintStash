@@ -152,7 +152,7 @@ package is copied into a fork of `truenas/apps` and opened as a PR.
    `"X.Y.Z@sha256:<index digest>"` and `app_version` in that directory's
    `app.yaml`, then bump `version` there (the catalog's own version, patch level
    per release). The catalog pins tag and digest together.
-3. After the tag, in a branch of your fork of `truenas/apps`: copy the seven files
+3. After the tag, in a branch of your fork of `truenas/apps`: copy the files
    of `catalogues/truenas/printstash/` over `ix-dev/community/printstash/`, leaving
    the vendored `templates/library/` alone, then run `devbox run copy-lib` there.
    It vendors the library named by `lib_version` and rewrites `lib_version_hash`;
