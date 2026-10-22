@@ -1,6 +1,7 @@
 # ADR-0018: Produce other formats as Renditions, never as a second source of truth
 
-Status: Proposed — design for #536; PLY sources tracked in #537.
+Status: Proposed — design for #536; new source formats tracked in #537 (PLY),
+#541 (glTF/GLB) and #542 (IGES, BREP).
 
 ## Context
 
@@ -8,7 +9,8 @@ A Model can already hold several Artifacts in different formats: an author's
 STEP, 3MF and STL sit side by side as independent uploads. What PrintStash
 cannot do is give a user a format they did not upload. The next tool in a
 printing workflow often needs one: Bambu Studio loads only 3MF from a URL,
-mesh-only tools need STL or OBJ, and PLY scans open in few slicers (#537).
+mesh-only tools need STL or OBJ, and PLY scans (#537), glTF assets (#541) and
+IGES or BREP CAD parts (#542) open in few slicers or none.
 
 Conversion is directional and usually lossy. STEP → mesh approximates exact
 surfaces; 3MF → STL drops objects, colours, plates and settings; mesh → STEP
@@ -69,6 +71,10 @@ Rows are sources and columns are targets. "—" means same format: nothing to do
 | **PLY** (#537) | attributes dropped⁵ | attributes dropped⁵ | attributes dropped⁵ | refused |
 | **DXF** | refused⁶ | refused⁶ | refused⁶ | refused⁶ |
 | **G-code / bgcode** | refused⁷ | refused⁷ | refused⁷ | refused⁷ |
+| **glTF / GLB** (#541) | attributes dropped⁸ | attributes dropped⁸ | attributes dropped⁸ | refused |
+| **IGES** (#542) | approximated⁹ | approximated⁹ | approximated⁹ | not offered¹⁰ |
+| **BREP** (#542) | approximated⁹ | approximated⁹ | approximated⁹ | not offered¹⁰ |
+| **Design sources** (SCAD, FCStd, f3d, blend) | refused¹¹ | refused¹¹ | refused¹¹ | refused¹¹ |
 
 1. STL declares no units. The 3MF states millimetres, the same assumption
    PrintStash already makes for STL metadata. Coordinates are copied from
@@ -101,8 +107,36 @@ Rows are sources and columns are targets. "—" means same format: nothing to do
 7. Mesh → G-code is slicing and needs printer, filament and profile choices.
    G-code → mesh is not recoverable. Lossless bgcode ↔ gcode repackaging is a
    possible later row, in its own class.
+8. glTF is defined in metres with +Y up (glTF 2.0 §3.4). Geometry is scaled by
+   1000 and rotated +90° about X, so it is in millimetres with +Z up. Both
+   conversions come from the specification, not from a scale hint. Node
+   transforms are applied; 3MF keeps nodes as named objects, STL merges them.
+   Triangle strips and fans are triangulated losslessly. Point and line
+   primitives are skipped, and a file with no triangles is refused. The mesh is
+   taken in its default static pose. Materials, textures, animation, skins and
+   morph targets are dropped and listed. Draco- or meshopt-compressed geometry
+   is refused until a decoder is admitted. `COLOR_0` follows the same
+   colour-preserving 3MF follow-up as PLY (footnote 5). Coordinates scaled and
+   then rounded to STL float32 are reported as precision loss.
+9. Read with OCP (`IGESControl`, `BRepTools`) and tessellated exactly as STEP
+   (footnote 4), at the same quality presets. IGES declares its units in its
+   global section and they are converted exactly. BREP declares none, so it is
+   assumed to be in millimetres (OCCT's convention) and the scale hint applies.
+   IGES often holds trimmed surfaces that were never sewn into a solid. Those
+   tessellate to open shells and are `non_conforming`. Sewing uses a tolerance
+   and changes topology, so it is not applied (decision 7).
+10. Translating IGES or BREP to STEP is a faithful B-rep → B-rep translation
+    through OCCT, unlike mesh → STEP, so it is not `refused`. It is simply not
+    offered, because no printing workflow needs it yet. Adding it later is a
+    new matrix cell, not a change of policy.
+11. A design source (OpenSCAD, FreeCAD, Fusion, Blender project) produces a
+    mesh only by running its authoring application. For OpenSCAD that means
+    executing the file's code; for the others it needs proprietary or
+    heavyweight applications. PrintStash stores design sources but never
+    converts them.
 
-PLY is not a target: no current printing workflow needs it.
+PLY, glTF, IGES and BREP are not targets: no current printing workflow needs
+them.
 
 Writers must run on every supported platform. lib3mf is installed only on
 x86_64, so the 3MF writer must not depend on it. trimesh's `export_3MF` is pure
@@ -123,8 +157,9 @@ writer. Until then, attribution lives in the UI and the derivative record.
 
 ## STEP quality
 
-STEP is the one source where the user faces a real trade-off: finer
-tessellation gives smoother curves, but more triangles and larger files. The
+B-rep sources (STEP, and IGES and BREP from #542) are where the user faces a
+real trade-off: finer tessellation gives smoother curves, but more triangles
+and larger files. The
 preview recipe (0.05 mm) is 10–17× coarser than the slicers' own STEP imports,
 so Renditions use slicer-grade presets with PrusaSlicer's values:
 
@@ -136,8 +171,8 @@ so Renditions use slicer-grade presets with PrusaSlicer's values:
 
 - An administrator picks the library preset in Settings. The `always` policy,
   Model-level downloads and Open in slicer use it.
-- "Download as…" offers a per-request Low / Medium / High override for STEP
-  sources. Each preset is a separately cached Rendition, and the preset is part
+- "Download as…" offers a per-request Low / Medium / High override for B-rep
+  sources (STEP, IGES, BREP). Each preset is a separately cached Rendition, and the preset is part
   of its identity. There are at most three variants per Artifact and target, so
   the cache stays bounded.
 - There are no free-form tolerances. They would make the number of cached
@@ -168,7 +203,7 @@ changes geometry by an amount that cannot be stated as a tolerance.
 
 ## Scale hints
 
-Unitless sources (STL, OBJ, PLY) are assumed to be in millimetres. Bambu Studio
+Unitless sources (STL, OBJ, PLY, BREP) are assumed to be in millimetres. Bambu Studio
 silently rescales small imports, treating anything under 0.008 mm³ as metres
 and under 8 mm³ as inches. PrintStash uses the same thresholds only to show a
 hint on the Model ("This looks like it may be in metres"). Choosing a scale
@@ -190,9 +225,16 @@ Model-level request, Open in slicer and the `always` policy choose one
    see, for example an author's print-ready 3MF whose orientation matters more
    than the STEP's exactness. The pin is cleared when that Artifact is trashed.
 3. **Otherwise use the source that carries the most information.** Rank formats
-   by what they hold, not by the fidelity class of one conversion step: STEP
-   (exact surfaces, declared units), then 3MF (declared units, objects and
-   placements), then OBJ, then PLY, then STL (no units, one shell).
+   by what they hold, not by the fidelity class of one conversion step:
+   - STEP: exact surfaces, declared units, names;
+   - BREP: exact solids but no units;
+   - IGES: exact geometry, often as unsewn surfaces;
+   - 3MF: declared units, objects and placements;
+   - glTF: declared units and a scene graph, but no print semantics;
+   - OBJ, then PLY;
+   - STL last: no units, one shell.
+
+   Design sources are never conversion sources (footnote 11).
 4. **Within a format, use the latest live version.** Ties at the same version go
    to the most recently uploaded Artifact.
 
