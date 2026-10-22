@@ -2,6 +2,23 @@
 
 ## Unreleased
 
+- Thumbnails drawn without a GPU take less CPU: the renderer now tests only
+  the pixels each row of a triangle covers instead of its whole bounding box,
+  most of which a long thin triangle leaves empty. The thumbnails are
+  byte-for-byte the same, so nothing is regenerated.
+
+- STEP parts in the Docker image get their exact B-rep volume and similarity
+  fingerprints again. The image lacked `libgl1`, which OpenCASCADE's binding
+  loads even without a display, so every B-rep read reported STEP as
+  unavailable. The image build now fails if that binding cannot load.
+
+- Thumbnails, measurements and previews of a ZIP's Models now start while the
+  rest of the ZIP is still being imported, instead of after its last file. The
+  import still shows every Model almost as soon as before, because the derived
+  work looks for new Models every two seconds
+  (`VAULT_JOBS_PACED_DISCOVERY_SECONDS`) rather than after each file. Search
+  indexing still waits for the import to finish.
+
 - Importing a ZIP no longer wakes the derivative passes after every file. They
   would only wait for the import to end, so they now stay asleep until it does,
   leaving the database to the import, so large ZIPs import and finish
