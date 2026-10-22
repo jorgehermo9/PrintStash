@@ -47,6 +47,10 @@ test.describe("saved views", () => {
     await page.getByText("Save current view").click();
     await page.getByPlaceholder("Ready to print").fill(viewName);
     await page.getByRole("button", { name: "Save view" }).click();
+    // The dialog closes after the server acknowledges the save. Reloading
+    // sooner can abort the request before the view is persisted.
+    await expect(page.getByRole("dialog", { name: "Save current view" })).toBeHidden();
+    await expect(page.getByText("View saved", { exact: true })).toBeVisible();
 
     // Navigate away to the canonical, filter-less URL — a full reload, so no
     // saved view is active. Applying it from the menu must restore the exact
