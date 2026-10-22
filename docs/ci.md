@@ -27,14 +27,17 @@ commit to be tagged and wait for success. Release publication requires green
 `CI` and `Deep CI` runs for that SHA. Nightly and manual `latest` publication
 require a green `CI` run for the same SHA on `main`.
 
-Backend coverage runs in twelve disjoint ordinary file partitions and five serial
+Backend coverage runs in twelve disjoint ordinary file partitions and ten serial
 resource partitions on separate runners. Ordinary partitions include slow tests
 and retain work-stealing. The resource partitions select PostgreSQL, S3,
-remote storage, BGCode and host-native tests independently. Each partition runs
+remote storage, BGCode and host-native tests independently. PostgreSQL uses six
+separate runners: three migration groups, platform, domains and contract/E2E
+flows. Each PostgreSQL runner starts its own container; fixture state is never
+shared across jobs. Each partition runs
 serially so service fixtures are shared and host-native measurements have
 exclusive resources. Marker expressions assign tests with multiple resource
 markers to the first matching group in that order. Repository tests check every
-marker combination for gaps and overlap; the local `full-resources` lane still
+file/marker combination for gaps and overlap; the local `full-resources` lane still
 runs the complete resource set unless `PRINTSTASH_TEST_RESOURCE_EXPRESSION`
 narrows it. Resource markers are excluded from every ordinary partition; each
 test executes once across the matrix. Repository tests enforce

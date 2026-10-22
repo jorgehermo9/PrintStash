@@ -234,9 +234,29 @@ jobs:
           - suite: repository
             lane: full-ordinary
             paths: tests/repo
-          - suite: services-postgres
+          - suite: services-postgres-migrations-a
             lane: full-resources
-            paths: tests
+            paths: tests/integration/db/migrations/test_[a-i]*.py
+            markers: postgres
+          - suite: services-postgres-migrations-b
+            lane: full-resources
+            paths: tests/integration/db/migrations/test_[j-m]*.py
+            markers: postgres
+          - suite: services-postgres-migrations-c
+            lane: full-resources
+            paths: tests/integration/db/migrations/test_[n-z]*.py
+            markers: postgres
+          - suite: services-postgres-platform
+            lane: full-resources
+            paths: tests/unit tests/repo tests/integration/bootstrap tests/integration/core tests/integration/db/test_*.py tests/integration/db/models tests/integration/db/derived_objects tests/integration/main tests/integration/postgres tests/integration/runtime tests/integration/scripts
+            markers: postgres
+          - suite: services-postgres-domains
+            lane: full-resources
+            paths: tests/integration/api tests/integration/modules
+            markers: postgres
+          - suite: services-postgres-flows
+            lane: full-resources
+            paths: tests/contract tests/e2e
             markers: postgres
           - suite: services-s3
             lane: full-resources

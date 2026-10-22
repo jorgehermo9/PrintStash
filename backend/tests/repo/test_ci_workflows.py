@@ -300,13 +300,20 @@ class TestDeepSuite:
         assert len({row["suite"] for row in rows}) == len(rows)
         resources = [row for row in rows if row["lane"] == "full-resources"]
         assert {row["suite"] for row in resources} == {
-            "services-postgres",
+            "services-postgres-migrations-a",
+            "services-postgres-migrations-b",
+            "services-postgres-migrations-c",
+            "services-postgres-platform",
+            "services-postgres-domains",
+            "services-postgres-flows",
             "services-s3",
             "services-remote-storage",
             "services-bgcode",
             "services-native",
         }
-        assert all(row["paths"] == "tests" for row in resources)
+        assert all(
+            row["paths"] == "tests" for row in resources if row["markers"] != "postgres"
+        )
         test_step = next(
             step for step in job["steps"] if step.get("name") == "Test backend"
         )
@@ -352,14 +359,19 @@ class TestDeepSuite:
             file: count for file, count in occurrences.items() if count != 1
         }
 
-    def test_resource_partitions_cover_every_marker_combination_once(self):
+    def test_resource_partitions_select_each_file_marker_combination_once(self):
         rows = _workflow("deep-ci.yml")["jobs"]["backend"]["strategy"]["matrix"][
             "include"
         ]
-        expressions = [
-            Expression.compile(row["markers"])
-            for row in rows
-            if row["lane"] == "full-resources"
+        resource_rows = [row for row in rows if row["lane"] == "full-resources"]
+        expressions = {
+            row["suite"]: Expression.compile(row["markers"]) for row in resource_rows
+        }
+        files = [
+            path.relative_to(REPO_ROOT / "backend")
+            for path in (REPO_ROOT / "backend/tests").rglob("test_*.py")
+            if path.relative_to(REPO_ROOT / "backend/tests").parts[0]
+            in {"unit", "integration", "contract", "e2e", "repo"}
         ]
         declaration = next(
             line
@@ -367,18 +379,30 @@ class TestDeepSuite:
             if line.startswith("resource_expression=")
         )
         markers = tuple(declaration.split("=", 1)[1].strip('"').split(" or "))
-        # Multi-marked tests belong to one resource runner, even when a new
-        # combination is introduced. Unmarked tests stay in the ordinary pass.
-        for present in product((False, True), repeat=len(markers)):
-            active = {
-                marker
-                for marker, enabled in zip(markers, present, strict=True)
-                if enabled
-            }
-            selected = sum(
-                expression.evaluate(active.__contains__) for expression in expressions
-            )
-            assert selected == int(bool(active)), active
+        # Every file and every resource-marker combination must select exactly
+        # one runner, including future multi-marked PostgreSQL tests.
+        assert files
+        for file in files:
+            matching = [
+                expressions[row["suite"]]
+                for row in resource_rows
+                if any(
+                    fnmatch(str(file), root)
+                    if "*" in root
+                    else file.is_relative_to(root)
+                    for root in row["paths"].split()
+                )
+            ]
+            for present in product((False, True), repeat=len(markers)):
+                active = {
+                    marker
+                    for marker, enabled in zip(markers, present, strict=True)
+                    if enabled
+                }
+                selected = sum(
+                    expression.evaluate(active.__contains__) for expression in matching
+                )
+                assert selected == int(bool(active)), (file, active)
 
     @pytest.mark.parametrize(
         "row",
@@ -396,8 +420,15 @@ class TestDeepSuite:
         fake_uv = tmp_path / "uv"
         fake_uv.write_text('#!/bin/sh\nprintf "%s\\n" "$@"\n')
         fake_uv.chmod(0o755)
+        backend = REPO_ROOT / "backend"
+        paths = [
+            str(path.relative_to(backend))
+            for pattern in row["paths"].split()
+            for path in sorted(backend.glob(pattern))
+        ]
+        assert paths
         result = subprocess.run(
-            ["bash", "scripts/test.sh", row["lane"], row["paths"], "-q"],
+            ["bash", "scripts/test.sh", row["lane"], *paths, "-q"],
             cwd=REPO_ROOT / "backend",
             env={
                 **os.environ,
@@ -413,7 +444,7 @@ class TestDeepSuite:
             "pytest",
             "-m",
             f"({row['markers']}) and not coverage_gate and not scale",
-            "tests",
+            *paths,
             "-q",
         ]
 
