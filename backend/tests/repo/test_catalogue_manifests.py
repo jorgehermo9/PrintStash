@@ -415,6 +415,25 @@ def _truenas_template() -> str:
     return (TRUENAS / "templates" / "docker-compose.yaml").read_text()
 
 
+def _truenas_fields() -> dict[str, dict[str, Any]]:
+    """The install form's PrintStash group, keyed by variable."""
+    questions = _load(TRUENAS / "questions.yaml")["questions"]
+    group = next(question for question in questions if question["variable"] == "printstash")
+    return {attr["variable"]: attr for attr in group["schema"]["attrs"]}
+
+
+def _truenas_environment_block() -> str:
+    """The template lines that run only when the form provisions the owner."""
+    # The branch opens and closes at column 0; anything nested inside is indented.
+    match = re.search(
+        r'^\{% if values\.printstash\.setup_mode == "environment" %\}$(.*?)^\{% endif %\}$',
+        _truenas_template(),
+        re.DOTALL | re.MULTILINE,
+    )
+    assert match, "the administrator settings must sit inside the environment-mode branch"
+    return match.group(1)
+
+
 class TestTruenas:
     def test_declares_the_app_version(self) -> None:
         assert _load(TRUENAS / "app.yaml")["app_version"] == settings.app_version
@@ -441,12 +460,73 @@ class TestTruenas:
             in _truenas_template()
         )
 
-    def test_registers_in_the_browser(self) -> None:
-        # The catalog has no install-form credentials, so an untouched install has
-        # to fall back to registration from the local network.
-        policy = setup_policy.resolve(_truenas_env()["VAULT_SETUP_MODE"], "", "", "")
+    def test_registers_in_the_browser_by_default(self) -> None:
+        # The administrator fields are hidden until the form asks for them, so an
+        # untouched install registers from the local network.
+        mode = _truenas_fields()["setup_mode"]["schema"]["default"]
+
+        policy = setup_policy.resolve(mode, "", "", "")
 
         assert isinstance(policy, setup_policy.TrustedNetwork), policy
+
+    def test_offers_both_setup_modes(self) -> None:
+        # The form is the only way past browser registration for an install first
+        # reached through a VPN or a reverse proxy, which the browser path refuses.
+        enum = _truenas_fields()["setup_mode"]["schema"]["enum"]
+
+        assert {option["value"] for option in enum} == {"trusted_network", "environment"}
+
+    def test_passes_the_setup_mode_from_the_form(self) -> None:
+        assert (
+            'add_env("VAULT_SETUP_MODE", values.printstash.setup_mode)' in _truenas_template()
+        )
+
+    @pytest.mark.parametrize(
+        ("field", "variable"),
+        [
+            pytest.param("admin_username", "VAULT_SETUP_ADMIN_USERNAME", id="username"),
+            pytest.param("admin_password", "VAULT_SETUP_ADMIN_PASSWORD", id="password"),
+            pytest.param("admin_email", "VAULT_SETUP_ADMIN_EMAIL", id="email"),
+        ],
+    )
+    def test_passes_each_form_field_only_in_environment_mode(
+        self, field: str, variable: str
+    ) -> None:
+        # Credentials alongside trusted_network are a misconfiguration that keeps
+        # setup closed, so the template passes them only with the environment mode.
+        assert (
+            f'add_env("{variable}", values.printstash.{field})' in _truenas_environment_block()
+        )
+
+    @pytest.mark.parametrize("field", ["admin_username", "admin_password"], ids=str)
+    def test_requires_the_administrator_credentials_in_environment_mode(
+        self, field: str
+    ) -> None:
+        schema = _truenas_fields()[field]["schema"]
+
+        assert (schema["required"], schema["show_if"]) == (
+            True,
+            [["setup_mode", "=", "environment"]],
+        )
+
+    @pytest.mark.parametrize(
+        ("field", "setting"),
+        [
+            pytest.param("admin_username", "username", id="username"),
+            pytest.param("admin_password", "password", id="password"),
+        ],
+    )
+    def test_enforces_the_wizard_limits(self, field: str, setting: str) -> None:
+        # A form that accepts less than startup validation leaves no administrator.
+        schema = _truenas_fields()[field]["schema"]
+
+        assert (schema["min_length"], schema["max_length"]) == (
+            WIZARD_LIMITS[setting]["minLength"],
+            WIZARD_LIMITS[setting]["maxLength"],
+        )
+
+    def test_hides_the_password(self) -> None:
+        assert _truenas_fields()["admin_password"]["schema"]["private"] is True
 
     def test_runs_as_the_user_the_install_asks_for(self) -> None:
         # The catalog's permissions container owns the dataset first, so the app
@@ -462,19 +542,17 @@ class TestTruenas:
         assert "set_user(values.run_as.user, values.run_as.group)" in _truenas_template()
         assert defaults == {"user": 568, "group": 568}
 
-    def test_ships_compute_budgets_the_settings_accept(self) -> None:
-        env = _truenas_env()
+    def test_leaves_compute_budgets_to_the_image(self) -> None:
+        # The catalog reviewers asked for the image defaults; anyone can still set
+        # the budgets through Additional Environment Variables.
+        budgets = {
+            "VAULT_COMPUTE_MODE",
+            "VAULT_COMPUTE_MEMORY_MB",
+            "VAULT_MESH_MEMORY_BUDGET_FRACTION",
+            "VAULT_EMBEDDING_MEMORY_BUDGET_FRACTION",
+        }
 
-        resolved = Settings(
-            compute_mode=env["VAULT_COMPUTE_MODE"],
-            compute_memory_mb=int(env["VAULT_COMPUTE_MEMORY_MB"]),
-            mesh_memory_budget_fraction=float(env["VAULT_MESH_MEMORY_BUDGET_FRACTION"]),
-            embedding_memory_budget_fraction=float(
-                env["VAULT_EMBEDDING_MEMORY_BUDGET_FRACTION"]
-            ),
-        )
-
-        assert resolved.compute_mode == "auto"
+        assert not budgets & set(_truenas_env())
 
     def test_never_passes_a_jwt_secret(self) -> None:
         assert "VAULT_JWT_SECRET" not in _truenas_env(), (
