@@ -51,10 +51,7 @@ upload.
    inverted. Hole filling, nearby-vertex merging and unit guesses change the
    geometry, so they are never applied silently. A suspicious scale produces a
    hint; a scale the user chooses is a separate recipe.
-8. **Renditions are byte-deterministic.** The same source bytes and recipe
-   always produce the same file, so the representation validator and the
-   Rendition hash survive eviction and regeneration.
-9. **Conversion settings are library-wide, never prompted.** Renditions are
+8. **Conversion settings are library-wide, never prompted.** Renditions are
    cached, shared between users and produced in the background, so nothing asks
    the user for settings at conversion time. The one setting with real
    trade-offs, STEP quality, is a bounded set of presets (see "STEP quality").
@@ -108,17 +105,21 @@ Rows are sources and columns are targets. "—" means same format: nothing to do
 PLY is not a target: no current printing workflow needs it.
 
 Writers must run on every supported platform. lib3mf is installed only on
-x86_64, so the 3MF writer must not depend on it. trimesh's `export_3MF` is not
-enough either: it writes random UUIDs and current zip timestamps, so its output
-changes on every run, and it writes no metadata. PrintStash therefore owns a
-small streaming 3MF writer with:
+x86_64, so the 3MF writer must not depend on it. trimesh's `export_3MF` is pure
+Python, streams vertices and triangles in batches, and writes components and
+build transforms, so PrintStash uses it.
 
-- UUIDs derived as UUIDv5 from the source SHA-256, the recipe and the object
-  index;
-- fixed zip entry timestamps and order;
-- core metadata (see "Attribution").
+Its output is not byte-identical between runs, because it writes random UUIDs
+and current zip timestamps. That is acceptable. A Rendition only changes bytes
+when it is regenerated after eviction or a recipe bump, and then it gets a new
+representation validator. The Rendition hash ledger records every hash ever
+produced rather than assuming one per recipe. Tests compare parsed geometry and
+metadata, not bytes.
 
-STL and OBJ output is already deterministic.
+trimesh writes no `<metadata>` elements. In-file 3MF attribution (see
+"Attribution") therefore follows once `export_3MF` accepts metadata, ideally
+through an upstream trimesh contribution rather than a PrintStash fork of the
+writer. Until then, attribution lives in the UI and the derivative record.
 
 ## STEP quality
 
@@ -238,7 +239,7 @@ The UI shows this as "Converted from `bracket.step` · v3 · approximated at
 `bracket.3mf`), and the file records where it came from wherever the format
 allows:
 
-- **3MF:** core-specification metadata. `Application` names PrintStash. `Title`,
+- **3MF** (follow-up, once trimesh writes metadata; see "Conversion matrix"): core-specification metadata. `Application` names PrintStash. `Title`,
   `Designer`, `Description`, `Copyright` and `LicenseTerms` come from the Model
   and its import provenance when known, so a scan or download from a model site
   keeps its author and licence when shared. Bambu Studio reads `Designer`,
@@ -257,7 +258,7 @@ left out rather than filled with a placeholder.
 
 | Subsystem | Behaviour |
 |---|---|
-| Model identity, ingestion dedup | A Rendition never contributes. Its SHA-256 goes into a durable ledger that eviction does not touch. Re-uploading a downloaded Rendition attaches it to its source Model as an Artifact instead of creating a new Model. |
+| Model identity, ingestion dedup | A Rendition never contributes. Every SHA-256 it is ever produced with goes into a durable ledger that eviction does not touch; regeneration adds a hash rather than replacing one. Re-uploading a downloaded Rendition attaches it to its source Model as an Artifact instead of creating a new Model. |
 | Versions, new uploads | A Rendition belongs to one Artifact version. A new version, or a new Artifact that becomes the conversion source, supersedes it (see "When the source changes"). |
 | Recipe bump | The derivative source finds Renditions missing at the new recipe. `always` targets are reconverted at backfill priority, `on_demand` ones on their next request. |
 | Trash | A Rendition follows its source Artifact or Model into and out of the trash and is deleted with it. |
@@ -266,7 +267,7 @@ left out rather than filled with a placeholder.
 | Similarity, AI search | Excluded. A Rendition would match its own source and adds no text. |
 | Revisions | Not applicable. A Rendition is never G-code. |
 | Metadata, thumbnails | Not derived again. A Rendition shows its source's metadata and preview. |
-| Downloads | Served through the existing download contract: current access check, `private` caching, its own representation validator (stable because output is deterministic), and API delivery as for generated previews. |
+| Downloads | Served through the existing download contract: current access check, `private` caching, its own representation validator (renewed when the Rendition is regenerated), and API delivery as for generated previews. |
 | Open in slicer | A slicer that opens the source format receives the source. OrcaSlicer and PrusaSlicer open STEP themselves and apply their own import quality. Only when the slicer cannot open the source does the handoff serve a Rendition at the library preset (Bambu Studio → 3MF). A Rendition that is still pending shows as pending, not as an error. |
 | Printers | Unchanged. Printers receive only G-code. |
 | Public shares | Serve the original only, at first. |
@@ -288,7 +289,7 @@ left out rather than filled with a placeholder.
 - **Asking for settings at conversion time, as slicer import dialogs do.**
   Rejected. A slicer converts once for the person in front of it. A Rendition
   is cached, shared, and may be produced with nobody present. Presets
-  (decision 9) give the same control without blocking one-click actions.
+  (decision 8) give the same control without blocking one-click actions.
 - **Repairing meshes so every 3MF conforms.** Rejected. Repair changes geometry
   by an amount that cannot be stated, and slicers repair on import anyway.
 - **Recording conversions as linked files, as Manyfold does.** Manyfold, a
