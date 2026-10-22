@@ -446,12 +446,33 @@ jobs:
           if-no-files-found: ignore
 
   browser-real:
-    name: Real-backend browser (${{ matrix.suite }})
+    name: Real-backend browser (${{ matrix.suite }}, ${{ matrix.shard }}/${{ matrix.shards }})
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
-        suite: [main, onboarding, environment, storage]
+        include:
+          - suite: main
+            shard: 1
+            shards: 4
+          - suite: main
+            shard: 2
+            shards: 4
+          - suite: main
+            shard: 3
+            shards: 4
+          - suite: main
+            shard: 4
+            shards: 4
+          - suite: onboarding
+            shard: 1
+            shards: 1
+          - suite: environment
+            shard: 1
+            shards: 1
+          - suite: storage
+            shard: 1
+            shards: 1
     steps:
       - uses: actions/checkout@v6
       - uses: astral-sh/setup-uv@v8.1.0
@@ -481,11 +502,12 @@ jobs:
         working-directory: frontend
         env:
           SUITE: ${{ matrix.suite }}
+          SHARD: ${{ matrix.shard }}/${{ matrix.shards }}
         run: |
           case "$SUITE" in
             main)
               export PLAYWRIGHT_EXTERNAL_LIBRARY_ROOT="$(mktemp -d "${RUNNER_TEMP}/printstash-mounted.XXXXXX")"
-              pnpm exec playwright test --config=playwright.real.config.ts --fail-on-flaky-tests
+              pnpm exec playwright test --config=playwright.real.config.ts --shard="$SHARD" --fail-on-flaky-tests
               ;;
             onboarding)
               pnpm exec playwright test --config=playwright.onboarding.config.ts --fail-on-flaky-tests
@@ -508,7 +530,7 @@ jobs:
         if: ${{ !cancelled() }}
         uses: actions/upload-artifact@v4
         with:
-          name: playwright-report-real-${{ matrix.suite }}
+          name: playwright-report-real-${{ matrix.suite }}-${{ matrix.shard }}
           path: |
             frontend/playwright-report/
             frontend/test-results/

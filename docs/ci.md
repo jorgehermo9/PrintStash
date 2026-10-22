@@ -16,8 +16,12 @@ test suite checks that every backend test file belongs to exactly one shard.
 area/module floors, the `scale` lane (library reads timed at 25,000
 collections and 100,000 Models in four 13-case jobs, each capped at 30 minutes), external provider
 contracts, Python/native compatibility, the full browser configurations and the
-extension's real backend and ChromeDriver flows. Browser retries retain diagnostic
-traces, and every Deep CI Playwright command fails when a case passes only after a
+extension's real backend and ChromeDriver flows. The main real-backend browser
+suite uses four Playwright shards on separate runners. Each shard owns a fresh
+backend, database, Vite server and printer emulator; tests remain serial within
+it. Onboarding, environment and storage configurations keep their own jobs.
+Each real-browser job uploads a report named for its suite and shard. Browser
+retries retain diagnostic traces, and every Deep CI Playwright command fails when a case passes only after a
 retry. Before tagging a release, dispatch it on the exact `main`
 commit to be tagged and wait for success. Release publication requires green
 `CI` and `Deep CI` runs for that SHA. Nightly and manual `latest` publication

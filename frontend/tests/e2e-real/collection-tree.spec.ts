@@ -10,6 +10,7 @@ test.describe("collection tree", () => {
     const model = `e2e-tree-model-${stamp}`;
     let parentId: number | null = null;
     let childId: number | null = null;
+    let modelId: string | null = null;
 
     try {
       // Create the hierarchy through the real API so the browser starts with an
@@ -25,6 +26,10 @@ test.describe("collection tree", () => {
       expect(childResponse.status()).toBe(201);
       childId = (await childResponse.json()).id;
       await uploadModel(page, model);
+      const href = await modelCard(page, model).getAttribute("href");
+      const id = href?.match(/\/models\/(\d+)/)?.[1];
+      if (!id) throw new Error("Missing Model card destination");
+      modelId = id;
 
       // The first visit fetches only the root level. Expanding the parent must
       // reveal its child without requesting the deprecated whole-tree endpoint.
@@ -54,19 +59,16 @@ test.describe("collection tree", () => {
 
       await childRow.click();
       await expect(modelCard(page, model)).toBeVisible();
-      const models = await (await page.request.get(`/api/v1/models?q=${model}`)).json();
-      expect(models.find((item: { name: string }) => item.name === model)?.collection).toBe(
-        `${parent}/${child}`,
-      );
+      const moved = await page.request.get(`/api/v1/models/${modelId}`);
+      expect(moved.status()).toBe(200);
+      expect((await moved.json()).collection).toBe(`${parent}/${child}`);
       expect(wholeTreeRequests).toEqual([]);
     } finally {
-      const models = await (await page.request.get(`/api/v1/models?q=${model}`)).json();
-      const created = models.find((item: { name: string }) => item.name === model);
-      if (created) {
-        expect((await page.request.delete(`/api/v1/models/${created.id}`)).status()).toBe(204);
-        expect((await page.request.delete(`/api/v1/models/${created.id}/purge`)).status()).toBe(
-          200,
-        );
+      // A search result is not an ownership record. Clean up the exact Model
+      // we created, even if a later name-filtered search omits it.
+      if (modelId !== null) {
+        expect((await page.request.delete(`/api/v1/models/${modelId}`)).status()).toBe(204);
+        expect((await page.request.delete(`/api/v1/models/${modelId}/purge`)).status()).toBe(200);
       }
       if (childId !== null) {
         expect((await page.request.delete(`/api/v1/collections/${childId}`)).status()).toBe(204);

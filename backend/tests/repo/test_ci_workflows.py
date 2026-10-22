@@ -229,6 +229,51 @@ class TestDeepSuite:
         assert invocations
         assert all("--fail-on-flaky-tests" in command for command in invocations)
 
+    def test_main_browser_partitions_cover_every_shard_once(self):
+        job = _workflow("deep-ci.yml")["jobs"]["browser-real"]
+        rows = job["strategy"]["matrix"]["include"]
+        main = [row for row in rows if row["suite"] == "main"]
+        assert main == [
+            dict(suite="main", shard=index, shards=4) for index in range(1, 5)
+        ]
+        assert [row for row in rows if row["suite"] != "main"] == [
+            dict(suite=suite, shard=1, shards=1)
+            for suite in ("onboarding", "environment", "storage")
+        ]
+        step = next(
+            step
+            for step in job["steps"]
+            if step.get("name") == "Run isolated browser suite"
+        )
+        assert step["env"]["SHARD"] == "${{ matrix.shard }}/${{ matrix.shards }}"
+        assert (
+            '--config=playwright.real.config.ts --shard="$SHARD" --fail-on-flaky-tests'
+            in step["run"]
+        )
+        assert job["strategy"]["fail-fast"] is False
+        config = (REPO_ROOT / "frontend/playwright.real.config.ts").read_text()
+        assert "workers: 1" in config
+        assert "fullyParallel: false" in config
+
+    def test_browser_shards_publish_distinct_reports(self):
+        job = _workflow("deep-ci.yml")["jobs"]["browser-real"]
+        rows = job["strategy"]["matrix"]["include"]
+        reports = next(
+            step
+            for step in job["steps"]
+            if step.get("name") == "Upload Playwright report"
+        )
+        template = reports["with"]["name"]
+        names = [
+            template.replace("${{ matrix.suite }}", row["suite"]).replace(
+                "${{ matrix.shard }}", str(row["shard"])
+            )
+            for row in rows
+        ]
+        assert len(set(names)) == len(rows)
+        assert all("${{" not in name for name in names)
+        assert reports["if"] == "${{ !cancelled() }}"
+
     def test_provisions_a_disposable_root_for_mounted_browser_contracts(self):
         commands = _commands(_workflow("deep-ci.yml")["jobs"]["browser-real"])
 
