@@ -587,7 +587,7 @@ expects (Compose, Unraid, CasaOS and Umbrel examples are in
 [compute deployment](compute.md) and the catalogue templates):
 
 - NVIDIA: the NVIDIA Container Toolkit with `NVIDIA_DRIVER_CAPABILITIES=all`.
-- Intel and AMD on Linux: `/dev/dri` and the render group.
+- Intel and AMD on Linux: `/dev/dri`; the entrypoint joins its render group.
 - WSL2: `/dev/dxg` and `/usr/lib/wsl`; the image sets the Mesa D3D12 variables.
 
 Two budgets keep the GPU and the machine from being overcommitted, and both can

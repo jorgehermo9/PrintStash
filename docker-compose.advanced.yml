@@ -81,8 +81,7 @@ services:
     # Intel / AMD on Linux:
     # devices:
     #   - /dev/dri:/dev/dri
-    # group_add:
-    #   - "${RENDER_GID:-105}"   # getent group render | cut -d: -f3
+    # (the entrypoint joins the group that owns /dev/dri; no group_add needed)
     # NVIDIA (NVIDIA Container Toolkit):
     # deploy:
     #   resources:

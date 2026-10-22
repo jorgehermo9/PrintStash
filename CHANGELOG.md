@@ -2,6 +2,22 @@
 
 ## Unreleased
 
+- **The Unraid template starts again with the GPU field left blank.** Unraid
+  passes an empty Device field to Docker as `--device=''`, which stopped every
+  install without a GPU before it started. The Intel or AMD GPU is now an
+  optional **GPU: Intel or AMD (optional)** field shown with the main
+  settings: enter `/dev/dri` or leave it blank for the CPU. Existing installs
+  that entered `/dev/dri` in the old field keep working; to switch to the new
+  field, update the template, enter `/dev/dri` there and remove the old
+  Device entry.
+
+- A GPU mapped as `/dev/dri` is now usable without naming its group. The
+  container used to drop every supplementary group when it switched to
+  `PUID`/`PGID`, including the host's render group and any `--group-add`, so
+  Intel and AMD GPUs were visible but could not be opened and work stayed on
+  the CPU. It now runs in the group that owns each `/dev/dri` node and keeps
+  groups granted with `--group-add`.
+
 - Thumbnails drawn without a GPU take less CPU: the renderer now tests only
   the pixels each row of a triangle covers instead of its whole bounding box,
   most of which a long thin triangle leaves empty. The thumbnails are
