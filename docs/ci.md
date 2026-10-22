@@ -23,12 +23,17 @@ commit to be tagged and wait for success. Release publication requires green
 `CI` and `Deep CI` runs for that SHA. Nightly and manual `latest` publication
 require a green `CI` run for the same SHA on `main`.
 
-Backend coverage runs in twelve disjoint ordinary file partitions and one serial
-resource partition on separate runners. Ordinary partitions include slow tests
-and retain work-stealing. The resource lane selects only container-backed and
-`native_host` tests, so each real service starts once and host-native measurements
-have exclusive resources. Resource markers are excluded from every ordinary
-partition; each test executes once across the matrix. Repository tests enforce
+Backend coverage runs in twelve disjoint ordinary file partitions and five serial
+resource partitions on separate runners. Ordinary partitions include slow tests
+and retain work-stealing. The resource partitions select PostgreSQL, S3,
+remote storage, BGCode and host-native tests independently. Each partition runs
+serially so service fixtures are shared and host-native measurements have
+exclusive resources. Marker expressions assign tests with multiple resource
+markers to the first matching group in that order. Repository tests check every
+marker combination for gaps and overlap; the local `full-resources` lane still
+runs the complete resource set unless `PRINTSTASH_TEST_RESOURCE_EXPRESSION`
+narrows it. Resource markers are excluded from every ordinary partition; each
+test executes once across the matrix. Repository tests enforce
 that every ordinary test file belongs to exactly one partition. The twelve
 ordinary partitions reuse the required CI file sets: unit, contract, E2E, two
 API groups, three migration groups, platform, two domain groups and repository

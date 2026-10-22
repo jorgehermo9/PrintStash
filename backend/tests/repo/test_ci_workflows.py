@@ -11,10 +11,12 @@ import sys
 import tomllib
 from fnmatch import fnmatch
 from io import BytesIO
+from itertools import product
 from pathlib import Path
 
 import pytest
 import yaml
+from _pytest.mark.expression import Expression
 
 from tests.paths import REPO_ROOT
 
@@ -252,9 +254,21 @@ class TestDeepSuite:
         assert ordinary == [dict(row, lane="full-ordinary") for row in quick_rows]
         assert len({row["suite"] for row in rows}) == len(rows)
         resources = [row for row in rows if row["lane"] == "full-resources"]
-        assert resources == [
-            {"suite": "services", "lane": "full-resources", "paths": "tests"}
-        ]
+        assert {row["suite"] for row in resources} == {
+            "services-postgres",
+            "services-s3",
+            "services-remote-storage",
+            "services-bgcode",
+            "services-native",
+        }
+        assert all(row["paths"] == "tests" for row in resources)
+        test_step = next(
+            step for step in job["steps"] if step.get("name") == "Test backend"
+        )
+        assert (
+            test_step["env"]["PRINTSTASH_TEST_RESOURCE_EXPRESSION"]
+            == "${{ matrix.markers }}"
+        )
         assert all(row["lane"] in {"full-ordinary", "full-resources"} for row in rows)
         assert job["strategy"]["fail-fast"] is False
         assert job["env"]["COVERAGE_FILE"] == ".coverage.${{ matrix.suite }}"
@@ -292,6 +306,71 @@ class TestDeepSuite:
         assert set(occurrences.values()) == {1}, {
             file: count for file, count in occurrences.items() if count != 1
         }
+
+    def test_resource_partitions_cover_every_marker_combination_once(self):
+        rows = _workflow("deep-ci.yml")["jobs"]["backend"]["strategy"]["matrix"][
+            "include"
+        ]
+        expressions = [
+            Expression.compile(row["markers"])
+            for row in rows
+            if row["lane"] == "full-resources"
+        ]
+        declaration = next(
+            line
+            for line in (REPO_ROOT / "backend/scripts/test.sh").read_text().splitlines()
+            if line.startswith("resource_expression=")
+        )
+        markers = tuple(declaration.split("=", 1)[1].strip('"').split(" or "))
+        # Multi-marked tests belong to one resource runner, even when a new
+        # combination is introduced. Unmarked tests stay in the ordinary pass.
+        for present in product((False, True), repeat=len(markers)):
+            active = {
+                marker
+                for marker, enabled in zip(markers, present, strict=True)
+                if enabled
+            }
+            selected = sum(
+                expression.evaluate(active.__contains__) for expression in expressions
+            )
+            assert selected == int(bool(active)), active
+
+    @pytest.mark.parametrize(
+        "row",
+        [
+            pytest.param(row, id=row["suite"])
+            for row in _workflow("deep-ci.yml")["jobs"]["backend"]["strategy"][
+                "matrix"
+            ]["include"]
+            if row["lane"] == "full-resources"
+        ],
+    )
+    def test_resource_partition_runs_serially_with_its_marker_selection(
+        self, tmp_path, row
+    ):
+        fake_uv = tmp_path / "uv"
+        fake_uv.write_text('#!/bin/sh\nprintf "%s\\n" "$@"\n')
+        fake_uv.chmod(0o755)
+        result = subprocess.run(
+            ["bash", "scripts/test.sh", row["lane"], row["paths"], "-q"],
+            cwd=REPO_ROOT / "backend",
+            env={
+                **os.environ,
+                "PATH": f"{tmp_path}{os.pathsep}{os.environ['PATH']}",
+                "PRINTSTASH_TEST_RESOURCE_EXPRESSION": row["markers"],
+            },
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        assert result.stdout.splitlines() == [
+            "run",
+            "pytest",
+            "-m",
+            f"({row['markers']}) and not coverage_gate and not scale",
+            "tests",
+            "-q",
+        ]
 
     def test_requires_raw_data_from_every_successful_shard(self):
         jobs = _workflow("deep-ci.yml")["jobs"]

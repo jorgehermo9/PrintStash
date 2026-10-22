@@ -234,9 +234,26 @@ jobs:
           - suite: repository
             lane: full-ordinary
             paths: tests/repo
-          - suite: services
+          - suite: services-postgres
             lane: full-resources
             paths: tests
+            markers: postgres
+          - suite: services-s3
+            lane: full-resources
+            paths: tests
+            markers: s3 and not postgres
+          - suite: services-remote-storage
+            lane: full-resources
+            paths: tests
+            markers: remote_storage and not postgres and not s3
+          - suite: services-bgcode
+            lane: full-resources
+            paths: tests
+            markers: bgcode and not postgres and not s3 and not remote_storage
+          - suite: services-native
+            lane: full-resources
+            paths: tests
+            markers: native_host and not postgres and not s3 and not remote_storage and not bgcode
     defaults:
       run:
         working-directory: backend
@@ -259,8 +276,10 @@ jobs:
         run: bash ../scripts/prepare-ci-pid-namespace.sh prepare
       - name: Test backend
         # The ordinary file partitions are exhaustive and disjoint. Resource
-        # markers select a separate serial pass, including host-native tests.
+        # markers select disjoint serial passes on separate runners.
         # Only the combined report is meaningful against the global floors.
+        env:
+          PRINTSTASH_TEST_RESOURCE_EXPRESSION: ${{ matrix.markers }}
         run: >-
           ./scripts/test.sh ${{ matrix.lane }} ${{ matrix.paths }} -q
           --cov --cov-report=
