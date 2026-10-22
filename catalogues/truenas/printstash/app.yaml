@@ -1,4 +1,4 @@
-app_version: 0.14.0
+app_version: 0.15.0
 capabilities: []
 categories:
 - productivity
@@ -34,4 +34,4 @@ sources:
 - https://github.com/xiao-villamor/PrintStash/pkgs/container/printstash
 title: PrintStash
 train: community
-version: 1.0.0
+version: 1.0.1

@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+## 0.15.0
+
+**Back up before upgrading to 0.15.0. Every model file will be re-derived in
+the background; a large library on a 4 GB NAS can keep the CPU busy for hours.
+DBOS 3.3.0 and application database migrations require restoring the pre-upgrade
+backup to roll back.**
+
+Stop all API and worker processes before upgrading them together. Source
+installations require Python 3.14 or newer; Docker images include the runtime.
+See [0.15.0 upgrade notes](UPGRADE.md#0150-notes).
+
 - **The Unraid template starts again with the GPU field left blank.** Unraid
   passes an empty Device field to Docker as `--device=''`, which stopped every
   install without a GPU before it started. The Intel or AMD GPU is now an
@@ -139,8 +150,8 @@
 - Interactive background work can prepare its next queued job while the
   current job runs, using the existing queue and admission limits.
 
-- Search projection waits for an import to finish, like thumbnails do. Its
-  writes competed with the import for SQLite's single writer. A 300-file ZIP
+- Search projection waits for an import to finish while previews can start
+  during the import. Its writes competed with the import for SQLite's single writer. A 300-file ZIP
   import on a 4-core test server took 60 s instead of 121 s (0.14.0: 55–67 s).
   Library browsing and filters do not depend on it.
 
@@ -288,8 +299,8 @@
   The check that waits for old derivation work to drain read the previous
   version's engine database with a client that expects the new schema, so it
   failed on every existing install, even with nothing queued. It now reads only
-  the columns every version has; a queue that really still holds old work is
-  still refused.
+  the columns every version has; waiting work from the old ordering is
+  re-ranked on startup.
 
 - Adding a G-code revision to a Model that comes from a remote Library source no
   longer ends in "[500] internal_server_error". PrintStash never writes back to a
@@ -802,7 +813,7 @@
 
 - Local ONNX models reserve a shared, bounded memory partition across API and worker processes, retain warm reuse, retire idle residents under pressure, and release their credits after guarded process-tree termination.
 
-**Source installs require Python 3.14 or newer.** See [the upgrade guide](UPGRADE.md#unreleased-python-314).
+**Source installs require Python 3.14 or newer.** See [the upgrade guide](UPGRADE.md#0150-python-314).
 
 - Coordinate mesh CPU/RAM credits across local API and worker processes. Bound
   source preparation separately by bytes and I/O slots, retain native credits
@@ -861,13 +872,11 @@
   failures for unchanged input, and backfill accurate metadata with recipe 3 (#259).
 
 
-**Upgrade note:** The background engine now uses DBOS 3.0. Stop all API and
-worker processes before upgrading together. Engine state migrates on startup.
-Rolling back means restoring the application database and managed files from
-the copy taken before the upgrade: 0.14.0 does not start on the migrated
-database, so discarding the engine state alone is not enough. Every model file
-is re-derived in the background after the upgrade.
-See [the upgrade guide](UPGRADE.md#unreleased-dbos-30).
+**Upgrade note:** The background engine now uses DBOS 3.3.0. Stop all API and
+worker processes before upgrading together. Restore the pre-upgrade application
+database and managed files to roll back; discarding the DBOS engine state alone
+is insufficient. Every model file is re-derived in the background after upgrading.
+See [the upgrade guide](UPGRADE.md#0150-dbos-30).
 
 ### Added
 
@@ -984,7 +993,7 @@ See [the upgrade guide](UPGRADE.md#unreleased-dbos-30).
 
 - Keep native STEP/STP conversion within small worker memory budgets by using serial tessellation, and classify B-rep allocation failures as resource refusals.
 
-- Background work starts on DBOS 3.0, with a persistent reconciler schedule
+- Background work starts on DBOS 3.3.0, with a persistent reconciler schedule
   that survives process restarts and is recreated after restore.
 
 - Late derivative results can no longer overwrite cancellation, retries, regeneration, trashed Artifacts or replaced source bytes. Stale Job executions also cannot settle a newer attempt or reclaim its staging files.

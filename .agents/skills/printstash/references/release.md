@@ -24,6 +24,13 @@ sweep). This file is the ordered checklist that ties it together.
       `CHANGELOG[0]` entry to `frontend/src/lib/changelog.ts` (its own test,
       `changelog.test.ts`, checks this against `package.json` and fails CI on
       its own if skipped) — one commit: `chore(release): bump to X.Y.Z`.
+- [ ] Before publication, use the new version tag without a digest in the Umbrel
+      and TrueNAS source packages. Their new image digest does not exist yet.
+      Never reuse the previous version's digest with the new tag. After publication,
+      pin the verified index digest in both sources before copying to store forks.
+      Run `PRINTSTASH_STORE_SUBMISSION=1 uv run pytest
+      tests/repo/test_catalogue_manifests.py -q` from `backend/`; this strict gate
+      rejects unpinned packages even though preparation checks accept bare tags.
 - [ ] Bump the app-store manifests under `catalogues/` to the new version in
       the same commit (`tests/repo/test_catalogue_manifests.py` fails until
       they match). The stores themselves are updated after publishing (below).
@@ -108,10 +115,12 @@ installs. Both move in one release, or the listing keeps serving the old image.
    `docker buildx imagetools inspect ghcr.io/xiao-villamor/printstash:X.Y.Z`
    must list `linux/amd64` and `linux/arm64`. Copy the digest it reports for
    that tag; it is the multi-arch index digest, not a per-architecture one.
-2. In the release commit, bump `version` and set
-   `image: ghcr.io/xiao-villamor/printstash:X.Y.Z@sha256:<digest>`.
-   `tests/repo/test_catalogue_manifests.py` fails until the tag equals the app
-   version and the digest is a full-length one, so the two cannot drift.
+2. The release commit bumps `version` and the image tag. After publication,
+   replace that bare tag with
+   `image: ghcr.io/xiao-villamor/printstash:X.Y.Z@sha256:<digest>` in the source
+   package and commit it before store submission. Source tests require the app
+   version and validate digest syntax when present; store validation requires the
+   published digest and verifies it against the registry.
 3. Replace `releaseNotes` with this release's notes from the CHANGELOG entry:
    user-visible features, fixes, and any upgrade or backup action, plus the
    upstream release link. Keep two blank lines between paragraphs and one
@@ -147,11 +156,12 @@ package is copied into a fork of `truenas/apps` and opened as a PR.
 1. Wait for the image, as for the other stores:
    `docker buildx imagetools inspect ghcr.io/xiao-villamor/printstash:X.Y.Z`
    must list `linux/amd64` and `linux/arm64`. TrueNAS hosts are `linux/amd64`.
-2. In the release commit, set `images.image.tag` in
-   `catalogues/truenas/printstash/ix_values.yaml` to
-   `"X.Y.Z@sha256:<index digest>"` and `app_version` in that directory's
-   `app.yaml`, then bump `version` there (the catalog's own version, patch level
-   per release). The catalog pins tag and digest together.
+2. The release commit sets `images.image.tag` in
+   `catalogues/truenas/printstash/ix_values.yaml` to `"X.Y.Z"`, updates
+   `app_version` in that directory's `app.yaml`, and bumps `version` there
+   (the catalog's own version, patch level per release). After publication,
+   append `@sha256:<index digest>` to that image tag in the source and commit
+   it before store submission. The submitted catalog pins tag and digest together.
 3. After the tag, in a branch of your fork of `truenas/apps`: copy the files
    of `catalogues/truenas/printstash/` over `ix-dev/community/printstash/`, leaving
    the vendored `templates/library/` alone, then run `devbox run copy-lib` there.

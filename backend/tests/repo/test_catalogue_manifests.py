@@ -13,6 +13,7 @@ manifest follows.
 from __future__ import annotations
 
 import json
+import os
 import re
 from pathlib import Path
 from typing import Any
@@ -123,9 +124,7 @@ class TestEveryCatalogue:
         assert "/data" in targets, "without /data every restart starts empty"
 
     @pytest.mark.parametrize("store", STORES, ids=str)
-    def test_ships_compute_budgets_the_settings_accept(
-        self, store: str
-    ) -> None:
+    def test_ships_compute_budgets_the_settings_accept(self, store: str) -> None:
         env = _environment(store)
 
         resolved = Settings(
@@ -268,16 +267,18 @@ class TestRuntipi:
 
 
 class TestUmbrel:
-    def test_pins_the_image_with_the_store_digest(self) -> None:
-        # The store rejects a tag without its digest, and the digest is what keeps
-        # the listing on the release that was tested. It must be the multi-arch
-        # index digest, so the tag resolves to the same image on both platforms.
+    def test_uses_a_versioned_release_source_reference(self) -> None:
+        # The source package moves before publication, when no digest exists yet.
+        # Submitted packages must add the published index digest; see the release
+        # procedure. Never carry the previous release's digest to a new tag.
         image = _service("umbrel")["image"]
 
         assert re.fullmatch(
-            rf"{re.escape(IMAGE)}:{re.escape(settings.app_version)}@sha256:[0-9a-f]{{64}}",
+            rf"{re.escape(IMAGE)}:{re.escape(settings.app_version)}(?:@sha256:[0-9a-f]{{64}})?",
             image,
-        ), "pin ghcr.io/xiao-villamor/printstash:X.Y.Z@sha256:<index digest>"
+        ), "use the app version, with a full SHA-256 digest when published"
+        if os.environ.get("PRINTSTASH_STORE_SUBMISSION") == "1":
+            assert "@sha256:" in image, "store submission requires the published digest"
 
     def test_declares_the_data_root_the_store_moves(self) -> None:
         # umbrelOS 2.0 moves this folder when a user relocates app data. Without
@@ -418,7 +419,9 @@ def _truenas_template() -> str:
 def _truenas_fields() -> dict[str, dict[str, Any]]:
     """The install form's PrintStash group, keyed by variable."""
     questions = _load(TRUENAS / "questions.yaml")["questions"]
-    group = next(question for question in questions if question["variable"] == "printstash")
+    group = next(
+        question for question in questions if question["variable"] == "printstash"
+    )
     return {attr["variable"]: attr for attr in group["schema"]["attrs"]}
 
 
@@ -430,7 +433,9 @@ def _truenas_environment_block() -> str:
         _truenas_template(),
         re.DOTALL | re.MULTILINE,
     )
-    assert match, "the administrator settings must sit inside the environment-mode branch"
+    assert match, (
+        "the administrator settings must sit inside the environment-mode branch"
+    )
     return match.group(1)
 
 
@@ -438,14 +443,16 @@ class TestTruenas:
     def test_declares_the_app_version(self) -> None:
         assert _load(TRUENAS / "app.yaml")["app_version"] == settings.app_version
 
-    def test_pins_the_image_with_its_digest(self) -> None:
-        # The catalog pins tag and digest together: the tag ties the package to the
-        # release, the digest is the multi-arch index the catalog actually installs.
+    def test_uses_a_versioned_release_source_reference(self) -> None:
+        # Source metadata is prepared before the image is published. A submitted
+        # package adds that release's multi-arch index digest after publication.
         tag = _load(TRUENAS / "ix_values.yaml")["images"]["image"]["tag"]
 
         assert re.fullmatch(
-            rf"{re.escape(settings.app_version)}@sha256:[0-9a-f]{{64}}", tag
-        ), "pin ghcr.io/xiao-villamor/printstash:X.Y.Z@sha256:<index digest>"
+            rf"{re.escape(settings.app_version)}(?:@sha256:[0-9a-f]{{64}})?", tag
+        ), "use the app version, with a full SHA-256 digest when published"
+        if os.environ.get("PRINTSTASH_STORE_SUBMISSION") == "1":
+            assert "@sha256:" in tag, "store submission requires the published digest"
 
     def test_persists_the_data_root(self) -> None:
         assert 'add_storage("/data"' in _truenas_template(), (
@@ -474,11 +481,15 @@ class TestTruenas:
         # reached through a VPN or a reverse proxy, which the browser path refuses.
         enum = _truenas_fields()["setup_mode"]["schema"]["enum"]
 
-        assert {option["value"] for option in enum} == {"trusted_network", "environment"}
+        assert {option["value"] for option in enum} == {
+            "trusted_network",
+            "environment",
+        }
 
     def test_passes_the_setup_mode_from_the_form(self) -> None:
         assert (
-            'add_env("VAULT_SETUP_MODE", values.printstash.setup_mode)' in _truenas_template()
+            'add_env("VAULT_SETUP_MODE", values.printstash.setup_mode)'
+            in _truenas_template()
         )
 
     @pytest.mark.parametrize(
@@ -495,7 +506,8 @@ class TestTruenas:
         # Credentials alongside trusted_network are a misconfiguration that keeps
         # setup closed, so the template passes them only with the environment mode.
         assert (
-            f'add_env("{variable}", values.printstash.{field})' in _truenas_environment_block()
+            f'add_env("{variable}", values.printstash.{field})'
+            in _truenas_environment_block()
         )
 
     @pytest.mark.parametrize("field", ["admin_username", "admin_password"], ids=str)
@@ -533,13 +545,18 @@ class TestTruenas:
         # never has to start as root to repair ownership itself.
         questions = _load(TRUENAS / "questions.yaml")
         run_as = next(
-            question for question in questions["questions"] if question["variable"] == "run_as"
+            question
+            for question in questions["questions"]
+            if question["variable"] == "run_as"
         )
         defaults = {
-            attr["variable"]: attr["schema"]["default"] for attr in run_as["schema"]["attrs"]
+            attr["variable"]: attr["schema"]["default"]
+            for attr in run_as["schema"]["attrs"]
         }
 
-        assert "set_user(values.run_as.user, values.run_as.group)" in _truenas_template()
+        assert (
+            "set_user(values.run_as.user, values.run_as.group)" in _truenas_template()
+        )
         assert defaults == {"user": 568, "group": 568}
 
     def test_leaves_compute_budgets_to_the_image(self) -> None:

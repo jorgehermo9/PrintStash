@@ -14,8 +14,8 @@ manufacturing platform.
 - Bambu LAN remote-file inventory, deletion, raw G-code controls, and measured
   filament consumption are not implemented.
 - Multipart Models reference existing Models as named pieces and alternatives.
-  `Unreleased` adds quantities and [manufacturing builds](multipart-builds.md)
-  with selected Revisions and confirmed physical output. Compatibility rules
+  Quantities and [manufacturing builds](multipart-builds.md) track selected
+  Revisions and confirmed physical output. Compatibility rules
   between pieces, mixed-piece plates and automatic physical reprints remain
   outside this workflow. Models and their files remain in the main Models view;
   deleting a Multipart Model removes only the grouping.
@@ -46,6 +46,12 @@ manufacturing platform.
   is unconfirmed entirely.
 
 ## Deployment
+
+- Connection-pool exhaustion reported in [#495](https://github.com/xiao-villamor/PrintStash/issues/495)
+  has not been reproduced. The 0.15.0 import scheduling and SQLite pool changes
+  mitigate likely contention, but do not establish a confirmed fix. Confirmation
+  requires the affected user's workload after upgrading; PostgreSQL keeps its
+  separate pool defaults.
 
 - Docker Compose is the recommended install path.
 - SQLite and local disk are the default path and the best-tested path for home

@@ -520,7 +520,7 @@ class Settings(BaseSettings):
     backup_s3_secret_key: str = ""
 
     app_name: str = "PrintStash"
-    app_version: str = "0.14.0"
+    app_version: str = "0.15.0"
 
     @field_validator("max_render_jobs", mode="before")
     @classmethod

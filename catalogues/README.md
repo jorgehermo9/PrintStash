@@ -51,7 +51,31 @@ Check the image before touching any store:
 docker buildx imagetools inspect ghcr.io/xiao-villamor/printstash:X.Y.Z
 ```
 
-The digest it prints (`sha256:…`) is what Umbrel pins.
+The digest it prints (`sha256:…`) is what Umbrel and TrueNAS pin. Before
+publication, this repository's source packages use the new version tag without a
+digest. After publication, add the verified multi-arch index digest to both
+source packages, commit it back here, then copy them to the store forks. Never
+retain a previous release's digest beside the new tag: Docker would run the old
+image. A source package with a bare tag is not ready for store submission.
+
+After adding the digests, run the strict submission gate from `backend/`:
+
+```bash
+PRINTSTASH_STORE_SUBMISSION=1 uv run pytest tests/repo/test_catalogue_manifests.py -q
+```
+
+This deliberately fails for unpinned source packages. Before copying either
+package, also verify both references against the registry:
+
+```bash
+docker buildx imagetools inspect ghcr.io/xiao-villamor/printstash:X.Y.Z
+# Both the tag and tag@sha256:<index digest> must resolve to that same index.
+docker buildx imagetools inspect ghcr.io/xiao-villamor/printstash:X.Y.Z@sha256:<index digest>
+```
+
+Umbrel's `lint:apps --check-images` and the TrueNAS app test still run on the
+copied, digest-pinned packages. Source-package version tests do not establish
+that a submitted package has been published or installed.
 
 ### Unraid
 
