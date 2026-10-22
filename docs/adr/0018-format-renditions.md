@@ -38,12 +38,26 @@ upload.
    `persist_artifact`, with provenance naming the source Artifact and recipe.
    The result is an ordinary upload with the full Artifact lifecycle and is no
    longer tied to the source.
-5. **Fidelity is a closed classification.** Every matrix cell is `exact`,
-   `attributes_dropped`, `approximated` or `refused`. The Rendition records its
-   class, what it dropped and any tolerance, and the UI shows them.
+5. **Fidelity and conformance are closed classifications.** Every matrix cell is
+   `exact`, `attributes_dropped`, `approximated` or `refused`. Every produced
+   Rendition is also `conforming` or `non_conforming` to its target format's
+   rules (see "Mesh conformance"). The Rendition records both, what it dropped
+   and any tolerance, and the UI shows them.
 6. **Refuse instead of fabricating.** Conversions with no faithful result are not
    offered: mesh → STEP, DXF → anything, mesh ↔ G-code (slicing is not
    conversion). Requests for them fail validation; they never enqueue work.
+7. **Never repair, never rescale.** Only lossless fixes are applied: welding
+   exactly equal vertices and flipping a surface whose winding is consistent but
+   inverted. Hole filling, nearby-vertex merging and unit guesses change the
+   geometry, so they are never applied silently. A suspicious scale produces a
+   hint; a scale the user chooses is a separate recipe.
+8. **Renditions are byte-deterministic.** The same source bytes and recipe
+   always produce the same file, so the representation validator and the
+   Rendition hash survive eviction and regeneration.
+9. **Conversion settings are library-wide, never prompted.** Renditions are
+   cached, shared between users and produced in the background, so nothing asks
+   the user for settings at conversion time. The one setting with real
+   trade-offs, STEP quality, is a bounded set of presets (see "STEP quality").
 
 ## Conversion matrix
 
@@ -61,20 +75,30 @@ Rows are sources and columns are targets. "—" means same format: nothing to do
 
 1. STL declares no units. The 3MF states millimetres, the same assumption
    PrintStash already makes for STL metadata. Coordinates are copied from
-   float32 without loss.
+   float32 without loss. STL shares no vertices between triangles, so exactly
+   equal vertices are welded to give the indexed mesh 3MF requires. An open or
+   non-manifold STL still converts exactly but is `non_conforming`.
 2. Build items and components are flattened into world coordinates and merged
    into one mesh. Object names survive as OBJ groups. Colours, paint, materials,
    modifiers, plates, print settings and embedded thumbnails are dropped and
    listed. 3MF coordinates rounded to STL float32 are reported as precision loss.
 3. Polygons are triangulated. Non-planar faces with more than three vertices are
    ambiguous, so the Rendition is reported as `approximated` when it has any.
-   UVs, normals and MTL materials are dropped. Groups become 3MF objects.
-4. Tessellated by the existing STEP reader (OCP) at its recorded linear and
-   angular deflection, converted to millimetres from the units the STEP file
-   declares. Metadata, preview and Rendition therefore describe the same mesh.
-   Assemblies become named 3MF objects; for STL they are merged.
+   UVs, normals and MTL materials are dropped. Groups become 3MF objects. A
+   later 3MF recipe can keep MTL colours (see footnote 5).
+4. Tessellated with OCP at the library's STEP quality preset (see "STEP
+   quality") and converted to millimetres from the units the STEP file declares.
+   This is a separate tessellation from metadata and preview, which keep their
+   coarser preview recipe; the Rendition is the mesh meant for slicing. Faces
+   with reversed orientation have their triangles flipped, as the slicers'
+   own STEP importers do. Named solids become named 3MF objects; for STL they
+   are merged.
 5. Faces are kept and vertex colours dropped. A face-less PLY (point cloud) is
-   rejected at ingestion and never reaches this matrix.
+   rejected at ingestion and never reaches this matrix. A later 3MF recipe can
+   keep colour by writing per-triangle `m:colorgroup` colours from the
+   Materials extension: Bambu Studio maps standard 3MF colour groups to the
+   loaded filaments on import. PrintStash does not reduce colours to a filament
+   count itself, because only the slicer knows which filaments are loaded.
 6. A 2D drawing needs an extrusion the user has to choose; that is modelling,
    not conversion.
 7. Mesh → G-code is slicing and needs printer, filament and profile choices.
@@ -84,7 +108,72 @@ Rows are sources and columns are targets. "—" means same format: nothing to do
 PLY is not a target: no current printing workflow needs it.
 
 Writers must run on every supported platform. lib3mf is installed only on
-x86_64, so the 3MF writer must not depend on it.
+x86_64, so the 3MF writer must not depend on it. trimesh's `export_3MF` is not
+enough either: it writes random UUIDs and current zip timestamps, so its output
+changes on every run, and it writes no metadata. PrintStash therefore owns a
+small streaming 3MF writer with:
+
+- UUIDs derived as UUIDv5 from the source SHA-256, the recipe and the object
+  index;
+- fixed zip entry timestamps and order;
+- core metadata (see "Attribution").
+
+STL and OBJ output is already deterministic.
+
+## STEP quality
+
+STEP is the one source where the user faces a real trade-off: finer
+tessellation gives smoother curves, but more triangles and larger files. The
+preview recipe (0.05 mm) is 10–17× coarser than the slicers' own STEP imports,
+so Renditions use slicer-grade presets with PrusaSlicer's values:
+
+| Preset | Linear deflection | Angular deflection |
+|---|---|---|
+| Low | 0.005 mm | 1.0 rad |
+| Medium (default) | 0.003 mm | 0.5 rad |
+| High | 0.001 mm | 0.25 rad |
+
+- An administrator picks the library preset in Settings. The `always` policy,
+  Model-level downloads and Open in slicer use it.
+- "Download as…" offers a per-request Low / Medium / High override for STEP
+  sources. Each preset is a separately cached Rendition, and the preset is part
+  of its identity. There are at most three variants per Artifact and target, so
+  the cache stays bounded.
+- There are no free-form tolerances. They would make the number of cached
+  variants unbounded for little practical gain. They can be added later if
+  asked for.
+- Each Rendition shows the triangle count and size it actually produced. Other
+  presets show "not generated yet". Unlike Bambu Studio's live import dialog,
+  PrintStash cannot know a count without doing the tessellation.
+
+Even Low is well below the accuracy of FDM and resin printers. The presets
+exist for file size (a large assembly at Low) and for precision parts (High),
+not to make an ordinary print acceptable.
+
+## Mesh conformance
+
+3MF requires meshes of printable objects (`model`, `solidsupport`) to have
+manifold edges defined by vertex index, consistent winding and outward normals.
+STL and many OBJ and PLY files (scans especially) do not meet this. Slicers
+repair meshes on import anyway: PrusaSlicer matches near vertices, fills holes
+and fixes normals on every load.
+
+PrintStash applies only the lossless fixes from decision 7, then checks the
+result. A mesh that still fails is written as it is and marked
+`non_conforming`. The UI says "This mesh is not watertight; slicers will repair
+it when it is imported". It is never written as a `surface` object, which
+slicers would not print as a solid, and it is never repaired, because repairing
+changes geometry by an amount that cannot be stated as a tolerance.
+
+## Scale hints
+
+Unitless sources (STL, OBJ, PLY) are assumed to be in millimetres. Bambu Studio
+silently rescales small imports, treating anything under 0.008 mm³ as metres
+and under 8 mm³ as inches. PrintStash uses the same thresholds only to show a
+hint on the Model ("This looks like it may be in metres"). Choosing a scale
+from the hint creates a Rendition at that scale, which is a separate recipe
+recorded in its attribution. Nothing is rescaled without that choice. This
+matters most for photogrammetry PLY (#537).
 
 ## Choosing a source
 
@@ -137,20 +226,25 @@ format alone is ambiguous. The derivative record and the UI carry:
 
 - the source's original filename, version and SHA-256, plus a link to that
   Artifact;
-- the source format, the fidelity class, what was dropped, and the tolerance
-  where there is one;
+- the source format, the fidelity and conformance classes, what was dropped,
+  and the tolerance or preset where there is one;
+- any user-chosen scale;
+- the triangle count and size;
 - the recipe identity, and why this source was chosen (`target_upload`,
   `pinned`, `ranked`, `requested`).
 
 The UI shows this as "Converted from `bracket.step` · v3 · approximated at
-0.05 mm". The downloaded file is named after the source (`bracket.step` →
+0.003 mm (Medium)". The downloaded file is named after the source (`bracket.step` →
 `bracket.3mf`), and the file records where it came from wherever the format
 allows:
 
 - **3MF:** core-specification metadata. `Application` names PrintStash. `Title`,
   `Designer`, `Description`, `Copyright` and `LicenseTerms` come from the Model
   and its import provenance when known, so a scan or download from a model site
-  keeps its author and licence when shared.
+  keeps its author and licence when shared. Bambu Studio reads `Designer`,
+  `Copyright` and `Application`. For the licence it uses its own unprefixed
+  `License` name, which the core specification does not allow, so PrintStash
+  writes only the conforming `LicenseTerms`.
 - **OBJ:** a leading comment block with the same facts.
 - **STL:** the 80-byte header carries a short source note. It must never begin
   with `solid`, which marks ASCII STL and would break readers, including
@@ -172,8 +266,8 @@ left out rather than filled with a placeholder.
 | Similarity, AI search | Excluded. A Rendition would match its own source and adds no text. |
 | Revisions | Not applicable. A Rendition is never G-code. |
 | Metadata, thumbnails | Not derived again. A Rendition shows its source's metadata and preview. |
-| Downloads | Served through the existing download contract: current access check, `private` caching, its own representation validator, and API delivery as for generated previews. |
-| Open in slicer | When the slicer cannot open the source format, the handoff serves a Rendition in a format it can (Bambu Studio → 3MF). A Rendition that is still pending shows as pending, not as an error. |
+| Downloads | Served through the existing download contract: current access check, `private` caching, its own representation validator (stable because output is deterministic), and API delivery as for generated previews. |
+| Open in slicer | A slicer that opens the source format receives the source. OrcaSlicer and PrusaSlicer open STEP themselves and apply their own import quality. Only when the slicer cannot open the source does the handoff serve a Rendition at the library preset (Bambu Studio → 3MF). A Rendition that is still pending shows as pending, not as an error. |
 | Printers | Unchanged. Printers receive only G-code. |
 | Public shares | Serve the original only, at first. |
 | Vault stats | Report a separate "Converted files" size, so cached bytes are not counted as library growth. |
@@ -191,14 +285,30 @@ left out rather than filled with a placeholder.
   remains available per target as the `always` policy.
 - **Uploads overriding derivatives.** Not needed once resolution prefers
   uploads (decision 2).
+- **Asking for settings at conversion time, as slicer import dialogs do.**
+  Rejected. A slicer converts once for the person in front of it. A Rendition
+  is cached, shared, and may be produced with nobody present. Presets
+  (decision 9) give the same control without blocking one-click actions.
+- **Repairing meshes so every 3MF conforms.** Rejected. Repair changes geometry
+  by an amount that cannot be stated, and slicers repair on import anyway.
+- **Recording conversions as linked files, as Manyfold does.** Manyfold, a
+  self-hosted 3D print library, converts through assimp into a new permanent
+  file related to its source as an `alternative_format_of`, and analyses it like
+  any upload. This is the first alternative above, and it carries the same
+  costs.
 
 ## Consequences
 
 - `CONTEXT.md` gains **Rendition** when this is implemented (avoid: export, which
   already means library export; derived Artifact; copy).
-- A new demand record per Artifact and target holds the request time and last
-  access, which on-demand production and eviction need.
-- A setting holds the per-target policy and eviction budget.
+- A new demand record per Artifact, target and variant (STEP preset or chosen
+  scale) holds the request time and last access, which on-demand production
+  and eviction need. The derivative key must likewise include the variant.
+- Settings hold the per-target policy, the eviction budget and the STEP
+  quality preset.
+- Promoting an ASCII STL's 3MF Rendition with Keep as Artifact, then trashing
+  the original, saves storage. This is always the user's explicit choice and is
+  never automated.
 - A Model gains an optional pinned conversion source, an Artifact of that Model.
 - Conversion is bounded by the same native admission and mesh-density limits as
   metadata. A source over the ceiling is refused with `geometry_work_limit`, so
