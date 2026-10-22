@@ -88,24 +88,83 @@ x86_64, so the 3MF writer must not depend on it.
 
 ## Choosing a source
 
-A request on one Artifact converts that Artifact. A Model-level request, and the
-`always` policy, choose one source per Model and target. The rule is:
+A Model can hold several uploaded Artifacts, and the source changes what a
+Rendition can carry. A request on one Artifact converts that Artifact. A
+Model-level request, Open in slicer and the `always` policy choose one
+**conversion source** per Model and target:
 
-1. If the Model has a live uploaded Artifact in the target format, use that and
-   convert nothing.
-2. Otherwise choose the most exact source by fidelity class. Ties go to STEP,
-   then 3MF, then OBJ, then PLY, then STL.
-3. Within a format, use the latest live version.
+1. **An upload in the target format wins.** Use the Model's live uploaded
+   Artifact in that format and convert nothing.
+2. **A pinned source wins next.** A user can pin one of the Model's mesh
+   Artifacts as its conversion source. This is for the case the ranking cannot
+   see, for example an author's print-ready 3MF whose orientation matters more
+   than the STEP's exactness. The pin is cleared when that Artifact is trashed.
+3. **Otherwise use the source that carries the most information.** Rank formats
+   by what they hold, not by the fidelity class of one conversion step: STEP
+   (exact surfaces, declared units), then 3MF (declared units, objects and
+   placements), then OBJ, then PLY, then STL (no units, one shell).
+4. **Within a format, use the latest live version.** Ties at the same version go
+   to the most recently uploaded Artifact.
 
-The Rendition records which source was chosen. Users can still convert any other
-Artifact on request.
+The choice is computed whenever it is needed, never stored as a separate
+decision. Each Rendition belongs to one source Artifact version, because a
+derivative row is keyed by `file_id`, so the Rendition itself records which
+source it came from. Users can still convert any other Artifact on request.
+
+### When the source changes
+
+Uploading, trashing, restoring or pinning can change the conversion source. A
+Rendition made from an Artifact that is no longer the conversion source is
+**superseded**:
+
+- Model-level requests and Open in slicer stop serving it straight away.
+- Under `always`, the source query finds the Model missing its Rendition from
+  the new source and produces one at interactive priority. The superseded
+  Rendition keeps being shown until the new one is ready, as other derivative
+  outputs already are.
+- Under `on_demand`, the next request produces it from the new source.
+- The superseded Rendition can be evicted at once, whatever its last access.
+  Until then it still serves explicit requests on its own Artifact.
+
+An upload in the target format supersedes every Rendition of that target on the
+Model (rule 1), so the user's own file always replaces a converted one.
+
+## Attribution
+
+A Rendition names the **specific Artifact** it was made from, not only its
+format. A Model can hold two STEP files, or several versions of one, so the
+format alone is ambiguous. The derivative record and the UI carry:
+
+- the source's original filename, version and SHA-256, plus a link to that
+  Artifact;
+- the source format, the fidelity class, what was dropped, and the tolerance
+  where there is one;
+- the recipe identity, and why this source was chosen (`target_upload`,
+  `pinned`, `ranked`, `requested`).
+
+The UI shows this as "Converted from `bracket.step` · v3 · approximated at
+0.05 mm". The downloaded file is named after the source (`bracket.step` →
+`bracket.3mf`), and the file records where it came from wherever the format
+allows:
+
+- **3MF:** core-specification metadata. `Application` names PrintStash. `Title`,
+  `Designer`, `Description`, `Copyright` and `LicenseTerms` come from the Model
+  and its import provenance when known, so a scan or download from a model site
+  keeps its author and licence when shared.
+- **OBJ:** a leading comment block with the same facts.
+- **STL:** the 80-byte header carries a short source note. It must never begin
+  with `solid`, which marks ASCII STL and would break readers, including
+  PrintStash's own density estimator.
+
+Provenance is copied, never invented. A field the Model does not record is
+left out rather than filled with a placeholder.
 
 ## Integration
 
 | Subsystem | Behaviour |
 |---|---|
 | Model identity, ingestion dedup | A Rendition never contributes. Its SHA-256 goes into a durable ledger that eviction does not touch. Re-uploading a downloaded Rendition attaches it to its source Model as an Artifact instead of creating a new Model. |
-| Versions | A Rendition belongs to one Artifact version. A new version gets its own; the old one stays valid for the old version. |
+| Versions, new uploads | A Rendition belongs to one Artifact version. A new version, or a new Artifact that becomes the conversion source, supersedes it (see "When the source changes"). |
 | Recipe bump | The derivative source finds Renditions missing at the new recipe. `always` targets are reconverted at backfill priority, `on_demand` ones on their next request. |
 | Trash | A Rendition follows its source Artifact or Model into and out of the trash and is deleted with it. |
 | Backups, library transfer | Excluded, because they can be regenerated. Restore brings them back through the policy. |
@@ -140,6 +199,7 @@ Artifact on request.
 - A new demand record per Artifact and target holds the request time and last
   access, which on-demand production and eviction need.
 - A setting holds the per-target policy and eviction budget.
+- A Model gains an optional pinned conversion source, an Artifact of that Model.
 - Conversion is bounded by the same native admission and mesh-density limits as
   metadata. A source over the ceiling is refused with `geometry_work_limit`, so
   the densest meshes cannot be converted until those limits change.
