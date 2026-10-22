@@ -104,24 +104,21 @@ class TestPythonRuntime:
             CURRENT_PYTHON
         ]
         assert f"uv venv --python {CURRENT_PYTHON}" in normal_source
-        compatibility_steps = deep["jobs"]["backend-python314"]["steps"]
+        backend_steps = deep["jobs"]["backend"]["steps"]
         suites = [
             (index, step)
-            for index, step in enumerate(compatibility_steps)
-            if step.get("name") == "Run backend compatibility suite"
+            for index, step in enumerate(backend_steps)
+            if step.get("name") == "Test backend"
         ]
         cleanups = [
             (index, step)
-            for index, step in enumerate(compatibility_steps)
+            for index, step in enumerate(backend_steps)
             if step.get("name") == "Remove PID namespace qualification"
         ]
         assert len(suites) == len(cleanups) == 1
         suite_index, suite = suites[0]
         cleanup_index, cleanup = cleanups[0]
-        assert (
-            suite["run"]
-            == "./scripts/test.sh ${{ matrix.phase }} ${{ matrix.paths }} -q"
-        )
+        assert suite["run"] == "./scripts/test.sh coverage -q"
         assert cleanup_index > suite_index
         assert cleanup["if"] == "always()"
         assert cleanup["run"] == "bash ../scripts/prepare-ci-pid-namespace.sh cleanup"

@@ -240,53 +240,19 @@ class TestDeepSuite:
             "pnpm exec playwright test --config=playwright.real.config.ts"
         )
 
-    def test_runs_compatibility_phases_independently(self) -> None:
-        job = _workflow("deep-ci.yml")["jobs"]["backend-python314"]
-
-        rows = job["strategy"]["matrix"]["include"]
-        assert [row["phase"] for row in rows] == [
-            "full-ordinary",
-            "full-ordinary",
-            "full-resources",
+    def test_runs_the_full_backend_once_under_coverage(self) -> None:
+        jobs = _workflow("deep-ci.yml")["jobs"]
+        full_jobs = [
+            name
+            for name, job in jobs.items()
+            if "./scripts/test.sh coverage" in _commands(job)
+            or "./scripts/test.sh full" in _commands(job)
+            or "matrix.phase" in _commands(job)
         ]
-        assert [row["shard"] for row in rows] == ["a", "b", "services"]
-        assert rows[2]["paths"] == "tests"
-        assert job["strategy"]["fail-fast"] is False
-        assert job["timeout-minutes"] == 60
-        assert (
-            "./scripts/test.sh ${{ matrix.phase }} ${{ matrix.paths }} -q"
-            in _commands(job)
-        )
-        assert not job.get("continue-on-error", False)
 
-    def test_ordinary_shards_cover_every_test_file_once(self):
-        rows = _workflow("deep-ci.yml")["jobs"]["backend-python314"]["strategy"][
-            "matrix"
-        ]["include"]
-        roots = [
-            path
-            for row in rows
-            if row["phase"] == "full-ordinary"
-            for path in row["paths"].split()
-        ]
-        files = [
-            path.relative_to(REPO_ROOT / "backend")
-            for path in (REPO_ROOT / "backend/tests").rglob("test_*.py")
-            if path.relative_to(REPO_ROOT / "backend/tests").parts[0]
-            in {"unit", "integration", "contract", "e2e", "repo"}
-        ]
-        occurrences = {
-            str(file): sum(
-                fnmatch(str(file), root) if "*" in root else file.is_relative_to(root)
-                for root in roots
-            )
-            for file in files
-        }
-
-        assert occurrences
-        assert set(occurrences.values()) == {1}, {
-            file: count for file, count in occurrences.items() if count != 1
-        }
+        assert full_jobs == ["backend"]
+        assert "./scripts/test.sh coverage -q" in _commands(jobs["backend"])
+        assert not jobs["backend"].get("continue-on-error", False)
 
     @pytest.mark.parametrize(
         ("lane", "expected_parallel", "expression"),
@@ -393,16 +359,8 @@ class TestDeepSuite:
         )
         assert "2 tests collected" in result.stdout
 
-    @pytest.mark.parametrize(
-        ("job_name", "suite_name"),
-        [
-            ("backend", "Test backend"),
-            ("backend-python314", "Run backend compatibility suite"),
-        ],
-    )
-    def test_provisions_real_pid_namespaces_for_each_full_suite(
-        self, job_name: str, suite_name: str
-    ) -> None:
+    def test_provisions_real_pid_namespaces_for_the_full_suite(self) -> None:
+        job_name, suite_name = "backend", "Test backend"
         job = _workflow("deep-ci.yml")["jobs"][job_name]
         steps = job["steps"]
         prepare = next(
@@ -455,24 +413,39 @@ class TestDeepSuite:
     def test_gates_mesh_resources_on_both_native_architectures(self):
         job = _workflow("deep-ci.yml")["jobs"]["mesh-resources"]
         rows = job["strategy"]["matrix"]["include"]
-        assert {(row["arch"], row["memory"]) for row in rows} == {
-            ("amd64", 1),
-            ("amd64", 4),
-            ("arm64", 1),
-            ("arm64", 4),
-        }
+        assert rows == [
+            {"arch": "amd64", "runner": "ubuntu-latest"},
+            {"arch": "arm64", "runner": "ubuntu-24.04-arm"},
+        ]
         assert job.get("continue-on-error") is not True
-        build = next(
+        builds = [
             step
             for step in job["steps"]
-            if step.get("name") == "Build the production backend image"
-        )
+            if step.get("uses", "").startswith("docker/build-push-action@")
+        ]
+        assert len(builds) == 1
+        build = builds[0]
+        assert build["id"] == "image"
         assert build["with"]["context"] == "backend"
         assert build["with"]["build-args"] == "PRINTSTASH_VARIANT=full"
-        commands = _commands(job)
-        assert "scripts/mesh_resource_gate.py" in commands
-        assert "--memory-gib ${{ matrix.memory }}" in commands
-        assert "github.com/user-attachments" not in commands
+        checks = [
+            step
+            for step in job["steps"]
+            if "scripts/mesh_resource_gate.py" in step.get("run", "")
+        ]
+        assert len(checks) == 2
+        for step, memory in zip(checks, (1, 4), strict=True):
+            assert "--image printstash:mesh-resources" in step["run"]
+            assert f"--memory-gib {memory}" in step["run"]
+            assert (
+                f"--report ${{{{ runner.temp }}}}/mesh-resources-{memory}g.json"
+                in step["run"]
+            )
+            assert not step.get("continue-on-error", False)
+        assert "if" not in checks[0]
+        assert (
+            checks[1]["if"] == "${{ !cancelled() && steps.image.outcome == 'success' }}"
+        )
         evidence = next(
             step
             for step in job["steps"]
@@ -480,6 +453,32 @@ class TestDeepSuite:
         )
         assert evidence["if"] == "always()"
         assert evidence["with"]["if-no-files-found"] == "error"
+        assert evidence["with"]["path"] == "${{ runner.temp }}/mesh-resources-*g.json"
+
+    def test_keeps_full_startup_sampling_opt_in(self):
+        workflow = _workflow("deep-ci.yml")
+        option = workflow[True]["workflow_dispatch"]["inputs"]["startup_benchmark"]
+        assert option["type"] == "boolean"
+        assert option["default"] is False
+        job = workflow["jobs"]["library-startup"]
+        assert job["strategy"]["matrix"]["distribution"] == ["distributed", "dense"]
+        step = next(
+            step
+            for step in job["steps"]
+            if step.get("name") == "Check production startup"
+        )
+        for variable, full, brief in (
+            ("STARTUP_WARM_RUNS", 30, 3),
+            ("STARTUP_COLD_RUNS", 20, 2),
+        ):
+            assert step["env"][variable] == (
+                "${{ github.event_name == 'workflow_dispatch' && inputs.startup_benchmark "
+                f"&& '{full}' || '{brief}' " + "}}"
+            )
+        assert step["run"] == "pnpm test:startup --fail-on-flaky-tests"
+        assert "if" not in job
+        assert "if" not in step
+        assert not step.get("continue-on-error", False)
 
     def test_covers_every_critical_browser_configuration(self) -> None:
         workflow = _workflow("deep-ci.yml")

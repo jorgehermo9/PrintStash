@@ -23,26 +23,26 @@ commit to be tagged and wait for success. Release publication requires green
 `CI` and `Deep CI` runs for that SHA. Nightly and manual `latest` publication
 require a green `CI` run for the same SHA on `main`.
 
-Python compatibility runs two disjoint file partitions of `full-ordinary` and
-the serial `full-resources` lane in independent jobs. The ordinary partitions
-include slow tests and retain work-stealing;
-the resource phase runs serially so each real service starts once. Tests marked
-`native_host` also run in that mandatory phase: independent test vaults have
-independent admission pools, so an xdist companion would consume CPU/RAM outside
-the pool whose wall-clock bounds are being measured. Fairness still runs real
-DBOS/native workers with the same budgets, six arrivals and 110/130-second limits.
-Coverage appends that serial phase before evaluating its unchanged floors. Their marker
-sets are disjoint and together cover the full lane, excluding the separately
-measured scale and coverage gates. Both phases must succeed; fail-fast is disabled
-so one failure preserves the other result. Each retains the 60-minute limit.
-The `full` lane and backend branch-coverage job keep their existing composition.
+The backend runs once on the supported Python runtime under branch coverage.
+This covers slow tests as well as the quick-gate tests; a second same-runtime
+compatibility suite would duplicate that work. Ordinary tests retain
+work-stealing, then container-backed and `native_host` tests run serially so each
+real service starts once and host-native measurements have exclusive resources.
+Coverage appends that serial phase before evaluating its unchanged aggregate and
+module floors. The phases exclude the separately measured scale and coverage
+gates. The job fails if either phase fails.
 
 Deep CI also measures production library startup against real disposable SQLite
 corpora: 91 Models in 27 collections and a 90-Model collection. Both jobs build
 production assets and use the production nginx template, an active service
-worker, 30 warm reloads and 20 fresh authenticated profiles in English/Spanish.
-Individual JSON samples and browser evidence are uploaded. Hosted runners record
-trends; `STARTUP_ENFORCE_BUDGET=1` enforces the 500 ms median / 800 ms p95 warm
+worker, three warm reloads and two fresh authenticated profiles per language
+(English/Spanish). This short sample checks startup behaviour on every nightly
+and manual run. For performance investigations, dispatch Deep CI with
+`startup_benchmark: true` to collect the full 30 warm reloads and 20 fresh
+profiles per language; local benchmark defaults remain unchanged. Small CI
+samples establish functionality, not statistically comparable timing trends.
+Individual JSON samples and browser evidence are uploaded. Full benchmark runs
+on hosted runners record trends; `STARTUP_ENFORCE_BUDGET=1` enforces the 500 ms median / 800 ms p95 warm
 budget and 1 s fresh-profile median on the reference machine. Tracing is disabled
 for timing samples. Keep local measurements and acceptance reports in the
 ignored `reports/` directory.
@@ -93,7 +93,12 @@ new workflow, then compare subsequent hot-cache runs using the same timestamps.
 ## Mesh resource gate
 
 Deep CI builds the actual full production image on amd64 and arm64 and runs
-the real API and DBOS engine with 1 GiB and 4 GiB cgroup ceilings. The gate
+the real API and DBOS engine with 1 GiB and 4 GiB cgroup ceilings. Each native
+architecture builds its image once, then tests both ceilings in separate fresh
+containers. The 4 GiB check still runs after a 1 GiB failure; either failure
+fails the job. Both JSON reports are uploaded together. This reduces image builds
+from four to two; the memory checks run sequentially within each architecture,
+so elapsed-time savings depend on build and test durations. The gate
 fails on OOM kills, unresponsive API, renewed terminal work, leaked workers,
 unexplained staging/capacity reservations, or parent RSS growth after warm-up.
 It exercises synthetic nested 3MF expansion, malformed packages, sudden
