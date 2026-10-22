@@ -32,6 +32,11 @@ RUNTIPI = CATALOGUES / "runtipi" / "printstash"
 UMBREL = CATALOGUES / "umbrel" / "printstash"
 CASAOS = CATALOGUES / "casaos" / "PrintStash"
 COSMOS = CATALOGUES / "cosmos" / "PrintStash"
+TRUENAS = CATALOGUES / "truenas" / "printstash"
+# TrueNAS takes a package (a Jinja template plus the app metadata around it)
+# rather than a compose document, so it has its own class instead of a
+# MAIN_SERVICES entry.
+TEMPLATED = {"truenas"}
 
 # The service that runs PrintStash in each store's compose file. Cosmos keeps the
 # service name a template variable, so its key is the placeholder the store renders.
@@ -88,7 +93,9 @@ class TestEveryCatalogue:
         # A new store directory is guarded the day it is added, or this fails.
         stores = {path.name for path in CATALOGUES.iterdir() if path.is_dir()}
 
-        assert stores == set(MAIN_SERVICES), "add the new store to MAIN_SERVICES"
+        assert stores == set(MAIN_SERVICES) | TEMPLATED, (
+            "add the new store to MAIN_SERVICES, or to TEMPLATED when it ships a template"
+        )
 
     def test_classifies_every_store_by_how_it_provisions_the_owner(self) -> None:
         # Each store's setup mode follows from this, so none may be left out.
@@ -395,3 +402,92 @@ class TestCosmos:
 
         assert icon.size == (256, 256), "the store shows icon.png at 256x256"
         assert len(sorted((COSMOS / "screenshots").glob("*.png"))) >= 1
+
+
+def _truenas_env() -> dict[str, str]:
+    """The variables the TrueNAS template sets itself, read from its source."""
+    template = (TRUENAS / "templates" / "docker-compose.yaml").read_text()
+
+    return dict(re.findall(r'add_env\("([A-Z0-9_]+)", "([^"]*)"\)', template))
+
+
+def _truenas_template() -> str:
+    return (TRUENAS / "templates" / "docker-compose.yaml").read_text()
+
+
+class TestTruenas:
+    def test_declares_the_app_version(self) -> None:
+        assert _load(TRUENAS / "app.yaml")["app_version"] == settings.app_version
+
+    def test_pins_the_image_with_its_digest(self) -> None:
+        # The catalog pins tag and digest together: the tag ties the package to the
+        # release, the digest is the multi-arch index the catalog actually installs.
+        tag = _load(TRUENAS / "ix_values.yaml")["images"]["image"]["tag"]
+
+        assert re.fullmatch(
+            rf"{re.escape(settings.app_version)}@sha256:[0-9a-f]{{64}}", tag
+        ), "pin ghcr.io/xiao-villamor/printstash:X.Y.Z@sha256:<index digest>"
+
+    def test_persists_the_data_root(self) -> None:
+        assert 'add_storage("/data"' in _truenas_template(), (
+            "without /data every restart starts empty"
+        )
+
+    def test_maps_the_published_port_onto_the_fixed_container_port(self) -> None:
+        # The image's nginx listens on 3000 and cannot be moved, so the published
+        # port is mapped onto it instead of assuming the two match.
+        assert (
+            'add_port(values.network.web_port, {"container_port": 3000})'
+            in _truenas_template()
+        )
+
+    def test_registers_in_the_browser(self) -> None:
+        # The catalog has no install-form credentials, so an untouched install has
+        # to fall back to registration from the local network.
+        policy = setup_policy.resolve(_truenas_env()["VAULT_SETUP_MODE"], "", "", "")
+
+        assert isinstance(policy, setup_policy.TrustedNetwork), policy
+
+    def test_runs_as_the_user_the_install_asks_for(self) -> None:
+        # The catalog's permissions container owns the dataset first, so the app
+        # never has to start as root to repair ownership itself.
+        questions = _load(TRUENAS / "questions.yaml")
+        run_as = next(
+            question for question in questions["questions"] if question["variable"] == "run_as"
+        )
+        defaults = {
+            attr["variable"]: attr["schema"]["default"] for attr in run_as["schema"]["attrs"]
+        }
+
+        assert "set_user(values.run_as.user, values.run_as.group)" in _truenas_template()
+        assert defaults == {"user": 568, "group": 568}
+
+    def test_ships_compute_budgets_the_settings_accept(self) -> None:
+        env = _truenas_env()
+
+        resolved = Settings(
+            compute_mode=env["VAULT_COMPUTE_MODE"],
+            compute_memory_mb=int(env["VAULT_COMPUTE_MEMORY_MB"]),
+            mesh_memory_budget_fraction=float(env["VAULT_MESH_MEMORY_BUDGET_FRACTION"]),
+            embedding_memory_budget_fraction=float(
+                env["VAULT_EMBEDDING_MEMORY_BUDGET_FRACTION"]
+            ),
+        )
+
+        assert resolved.compute_mode == "auto"
+
+    def test_never_passes_a_jwt_secret(self) -> None:
+        assert "VAULT_JWT_SECRET" not in _truenas_env(), (
+            "an empty value is read as a deliberate choice and skips the generated one"
+        )
+
+    def test_offers_the_settings_restart(self) -> None:
+        assert _truenas_env()["VAULT_RESTART_ENABLED"] == "true"
+
+    def test_relaunches_after_a_graceful_exit(self) -> None:
+        # The catalog library restarts unless-stopped; a Settings restart is a
+        # graceful SIGTERM, and running jobs get the image's 60s to finish.
+        template = _truenas_template()
+
+        assert "on-failure" not in template
+        assert "set_grace_period(60)" in template

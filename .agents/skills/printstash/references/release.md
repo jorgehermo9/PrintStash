@@ -27,6 +27,9 @@ sweep). This file is the ordered checklist that ties it together.
 - [ ] Bump the app-store manifests under `catalogues/` to the new version in
       the same commit (`tests/repo/test_catalogue_manifests.py` fails until
       they match). The stores themselves are updated after publishing (below).
+      The TrueNAS package's source is here too, in `catalogues/truenas/printstash/`,
+      so it is bumped in the same commit like the rest and copied to `truenas/apps`
+      after the tag (TrueNAS section below).
 - [ ] Promote the accumulated `CHANGELOG.md` `## Unreleased` contents to
       `## X.Y.Z`, restore an empty `## Unreleased`, and verify the entry matches
       the condensed in-app changelog (format in
@@ -83,6 +86,9 @@ sweep). This file is the ordered checklist that ties it together.
         the package is `catalogues/cosmos/PrintStash/`.
       - Runtipi: push the updated app to the PrintStash Runtipi app store
         (`xiao-villamor/printstash-runtipi`) with `tipi_version` incremented.
+      - TrueNAS: copy `catalogues/truenas/printstash/` into a branch of your fork
+        of `truenas/apps` and open the PR; the ordered steps are in the TrueNAS
+        section below.
       - Unraid: nothing to do; Community Applications re-reads the template.
       - Link each store PR from the GitHub release notes, and record anything a
         store reviewer changed (for example a reassigned port) back in
@@ -127,6 +133,55 @@ installs. Both move in one release, or the listing keeps serving the old image.
    the maintainers change (a reassigned port, a pinned image, edited copy)
    back into `catalogues/umbrel/printstash/` in the same release. Otherwise
    the next release reintroduces it.
+
+## TrueNAS community catalog, every release
+
+The TrueNAS package is submitted to `truenas/apps`, and its source sits here with
+the other manifests, in `catalogues/truenas/printstash/`: the same `app.yaml`,
+`ix_values.yaml`, `questions.yaml`, `item.yaml`, README, template and test values
+that the catalog reads. The release commit bumps it like every other listing, and
+`tests/repo/test_catalogue_manifests.py` holds the fields that matter, so a drifted
+copy fails in this repository rather than on a user's server. After the tag, the
+package is copied into a fork of `truenas/apps` and opened as a PR.
+
+1. Wait for the image, as for the other stores:
+   `docker buildx imagetools inspect ghcr.io/xiao-villamor/printstash:X.Y.Z`
+   must list `linux/amd64` and `linux/arm64`. TrueNAS hosts are `linux/amd64`.
+2. In the release commit, set `images.image.tag` in
+   `catalogues/truenas/printstash/ix_values.yaml` to
+   `"X.Y.Z@sha256:<index digest>"` and `app_version` in that directory's
+   `app.yaml`, then bump `version` there (the catalog's own version, patch level
+   per release). The catalog pins tag and digest together.
+3. After the tag, in a branch of your fork of `truenas/apps`: copy the seven files
+   of `catalogues/truenas/printstash/` over `ix-dev/community/printstash/`, leaving
+   the vendored `templates/library/` alone, then run `devbox run copy-lib` there.
+   It vendors the library named by `lib_version` and rewrites `lib_version_hash`;
+   the generated library is committed with the app.
+4. Regenerate the derived metadata in that checkout:
+   `python3 ./.github/scripts/generate_metadata.py --train community --app
+   printstash`. It needs Docker, because it renders through the validation image,
+   and it rewrites `app.yaml` and `item.yaml`. Commit what it writes: the catalog's
+   `check_metadata` job fails when the committed files differ from its output.
+5. Run the app test before opening the PR:
+   `./.github/scripts/ci.py --app printstash --train community --test-file
+   basic-values.yaml --wait=true`. The catalog's `app-test-suite` workflow runs the
+   same deploy on the PR, but a release that cannot start is worth finding first.
+6. Open the PR from the fork with the repository's `app_addition.md` template for
+   the first submission and its default template afterwards, stating that it is an
+   update, the app version, and what was tested. Link it from the GitHub release
+   notes like the other stores.
+7. Copy anything the maintainers change (a reassigned default port, edited install
+   notes or question descriptions) back into `catalogues/truenas/printstash/` in the
+   same release, so the next one does not reintroduce it.
+
+Two things the package pins, so a release that changes either needs the catalogue
+changed with it: the container port `3000` (the template maps the published port
+onto it, because the image's nginx config fixes it) and the `PUID`/`PGID` runtime
+identity (the template sets the container user, and the catalog library passes both
+variables from that answer). A release that moves the data root out of `/data`, or
+that stops reading `PUID`/`PGID`, breaks the listing until the template follows.
+Everything else, including a new environment variable, needs no TrueNAS change: the
+install form carries an Additional Environment Variables group.
 
 ## App-store packages ship the tagged release
 
