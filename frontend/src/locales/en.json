@@ -1,4 +1,6 @@
 {
+  "library.collectionEmpty": "This collection is empty",
+  "library.collectionEmptyHelp": "Upload files or import a Model from a URL into this collection.",
   "materials.loadFailed": "Could not load printer materials. Retry to recover.",
   "tags.reviewError": "Could not load the current tags. Try again.",
   "savedView.loading": "Loading saved views…",

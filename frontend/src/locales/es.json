@@ -1,4 +1,6 @@
 {
+  "library.collectionEmpty": "Esta colección está vacía",
+  "library.collectionEmptyHelp": "Sube archivos o importa un modelo desde una URL a esta colección.",
   "materials.loadFailed": "No se pudieron cargar los materiales de la impresora. Reintenta para recuperarlos.",
   "tags.reviewError": "No se han podido cargar las etiquetas actuales. Vuelve a intentarlo.",
   "savedView.loading": "Cargando vistas guardadas…",

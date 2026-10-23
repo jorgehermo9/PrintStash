@@ -4,8 +4,9 @@
 
 ### Fixed
 
+- Empty collections offer an upload into the current folder; active filters offer filter recovery.
+
 - Keep multipart set names and counts readable on narrow screens by placing header actions below the title.
-- Member Settings explain administrator-only remote storage access, omit unavailable version information, and disable update checks that require an administrator.
 - Member Settings explain administrator-only remote storage access, omit unavailable version information, disable update checks that require an administrator, and explain why backup controls are unavailable.
 - Collection history and Recent folders follow stable identities after heading or bulk renames. Unavailable destinations offer explicit recovery instead of showing an empty library or unrelated results.
 
@@ -28,7 +29,8 @@
 - G-code layer controls remain usable across the full slider on phones. Mesh-only zoom, reset and dimensions overlays now appear only in the 3D model view.
 
 - Completed uploads identify whether they created a Model or saved to an existing
-  one, with an Open Model link that remains available after reloading.
+  one, with a visible completion notice and Open Model action. The result link
+  remains available in Notifications after reloading.
 
 ## 0.15.0
 

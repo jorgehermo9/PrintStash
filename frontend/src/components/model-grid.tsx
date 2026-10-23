@@ -1749,7 +1749,6 @@ export function ModelBrowser({ initial }: { initial?: BrowserInitialData }) {
     }
   }
   const hasActiveFilters =
-    !!selectedCollection ||
     favoritesOnly ||
     selectedTags.length > 0 ||
     selectedPrinterId !== null ||
@@ -2128,7 +2127,22 @@ export function ModelBrowser({ initial }: { initial?: BrowserInitialData }) {
               setDropPreload(null);
               setDropCollection(null);
             }}
-            onUploaded={refreshVaultAfterIngest}
+            onUploaded={async (result) => {
+              const session = getSessionVersion();
+              await refreshVaultAfterIngest();
+              if (session !== getSessionVersion() || !result) return;
+              toast.successAction(
+                uiText(
+                  result.created
+                    ? "Created a new Model."
+                    : "Saved to an existing Model. Open it to review files and revisions.",
+                ),
+                uiText("Open Model"),
+                () => {
+                  if (session === getSessionVersion()) router.push(`/models/${result.id}`);
+                },
+              );
+            }}
             defaultCollection={dropCollection ?? uploadDefaultCollection}
             preloadFiles={dropPreload?.files ?? null}
             preloadItems={dropPreload?.items ?? null}
@@ -3001,17 +3015,19 @@ export function ModelBrowser({ initial }: { initial?: BrowserInitialData }) {
                 visibleCollections.length === 0 &&
                 !hasMore ? (
                 <EmptyState
-                  title={uiText("No models found")}
+                  title={uiText(
+                    selectedCollection && !hasActiveFilters
+                      ? "library.collectionEmpty"
+                      : "No models found",
+                  )}
                   description={
-                    query ||
-                    selectedCollection ||
-                    selectedTags.length ||
-                    selectedPrinterId ||
-                    selectedPrinterPresence
+                    hasActiveFilters
                       ? uiText("Try clearing some filters.")
-                      : uiText(
-                          "Upload a model when you're ready, or skim the wiki first if this is a new install.",
-                        )
+                      : selectedCollection
+                        ? uiText("library.collectionEmptyHelp")
+                        : uiText(
+                            "Upload a model when you're ready, or skim the wiki first if this is a new install.",
+                          )
                   }
                   action={
                     hasActiveFilters ? (
