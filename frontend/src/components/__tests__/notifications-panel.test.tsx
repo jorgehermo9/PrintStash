@@ -40,6 +40,7 @@ import type {
   NotificationDelivery,
   NotificationsSettings,
   NotificationTestResult,
+  NotificationTarget,
   PrinterRead,
 } from "@/types";
 
@@ -164,7 +165,56 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
+const targetLabels = {
+  webhook: ["Webhook URL", "Signing secret (optional)"],
+  discord: ["Discord webhook URL"],
+  telegram: ["Bot token", "Chat ID"],
+  ntfy: ["Server URL", "Topic", "Access token (optional)"],
+} satisfies Record<NotificationTarget, string[]>;
+
+const targetLabelCases = Object.entries(targetLabels).flatMap(([target, labels]) =>
+  labels.map((label) => ({ target, label })),
+);
+
 describe("NotificationsPanel", () => {
+  describe("field labels", () => {
+    it.each(["Name", "Type"])("focuses %s from its visible label", async (label) => {
+      const user = userEvent.setup();
+      renderPanel();
+      await openDraft(user);
+
+      const control = screen.getByLabelText(label, { exact: true });
+      await user.click(screen.getByText(label, { selector: "label", exact: true }));
+
+      expect(control).toHaveFocus();
+      expect(control).toHaveAccessibleName(label);
+    });
+
+    it.each(targetLabelCases)(
+      "focuses $target field $label from its visible label",
+      async ({ target, label }) => {
+        const user = userEvent.setup();
+        renderPanel();
+        await openDraft(user);
+        await user.selectOptions(screen.getByRole("combobox", { name: "Type" }), target);
+
+        const control = screen.getByLabelText(label, { exact: true });
+        await user.click(screen.getByText(label, { selector: "label", exact: true }));
+
+        expect(control).toHaveFocus();
+        expect(control).toHaveAccessibleName(label);
+      },
+    );
+
+    it.each(["Events", "Printers"])("names the %s option group", async (name) => {
+      const user = userEvent.setup();
+      renderPanel();
+      await openDraft(user);
+
+      expect(screen.getByRole("group", { name })).toBeVisible();
+    });
+  });
+
   it("retries unavailable notification settings", async () => {
     const read = vi
       .fn<NotificationsPanelDeps["getNotificationsSettings"]>()
