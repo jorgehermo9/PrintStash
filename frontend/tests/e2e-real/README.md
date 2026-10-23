@@ -126,7 +126,7 @@ export (JSON/CSV) · manual and uploaded backups · reusable remote storage
 connection for backups and Library sources · notification channels (add webhook + delete; competing channel drafts and master-switch intents with explicit review/revised save) ·
 remote storage loading layout and provider choice at desktop and mobile widths ·
 About (running version + changelog) · design customization (metadata visibility,
-card-metric slots + reset) · printer add/remove · cross-cutting (theme
+card-metric slots + reset) · printer add/remove and short-screen provider setup (320px, 390px and landscape; accessible dialog name, reachable actions and keyboard cancellation) · cross-cutting (theme
 persistence, health version, routes free of uncaught errors).
 
 The mock-API browser suite also exercises operator recovery for an active fleet
