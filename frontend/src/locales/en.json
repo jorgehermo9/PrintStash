@@ -1925,7 +1925,7 @@
   "settings.backupReplicaInterrupted": "Publication was interrupted. Retry will check for an existing copy first.",
   "settings.backupRunRefresh": "Refresh backup runs",
   "settings.backupUploadTitle": "Upload backup archive",
-  "settings.backupUploadDescription": "The archive is fully validated before it is registered or offered for restore.",
+  "settings.backupUploadDescription": "Keep the original filename. PrintStash checks the archive before making it available to restore.",
   "settings.backupUploading": "Uploading…",
   "settings.backupUploadAction": "Upload backup",
   "settings.backupRetentionTitle": "Backup retention",
@@ -4497,5 +4497,8 @@
   "library.collectionUnavailable": "Collection unavailable",
   "library.collectionUnavailableHelp": "This collection may have moved, been deleted, or become unavailable to your account.",
   "Created a new Model.": "Created a new Model.",
-  "Saved to an existing Model. Open it to review files and revisions.": "Saved to an existing Model. Open it to review files and revisions."
+  "Saved to an existing Model. Open it to review files and revisions.": "Saved to an existing Model. Open it to review files and revisions.",
+  "settings.backupFilenameInvalid": "Use the original PrintStash backup filename. Download the backup again if it was renamed.",
+  "settings.backupArchiveInvalid": "This file is not a valid PrintStash backup. Download or create a new backup, then upload it.",
+  "settings.backupAlreadyExists": "This backup copy already exists. Use the listed backup or choose a different archive."
 }

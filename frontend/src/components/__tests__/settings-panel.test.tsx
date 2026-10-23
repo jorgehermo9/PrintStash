@@ -1790,6 +1790,55 @@ describe("SettingsPanel", () => {
       ).toBeVisible();
     });
 
+    it.each([
+      [
+        "backup_filename_invalid",
+        "Use the original PrintStash backup filename. Download the backup again if it was renamed.",
+      ],
+      [
+        "backup_archive_invalid",
+        "This file is not a valid PrintStash backup. Download or create a new backup, then upload it.",
+      ],
+      [
+        "backup_manifest_invalid",
+        "This file is not a valid PrintStash backup. Download or create a new backup, then upload it.",
+      ],
+      [
+        "backup_already_exists",
+        "This backup copy already exists. Use the listed backup or choose a different archive.",
+      ],
+    ])("recovers from rejected backup upload %s", async (code, message) => {
+      const user = userEvent.setup();
+      const app = renderSettings({
+        at: "/settings?section=backup",
+        routes: { "POST /api/v1/backups/upload": json({ detail: code }, 409) },
+      });
+      const upload = await screen.findByLabelText("Upload backup archive");
+      await user.upload(
+        upload,
+        new File(["rejected"], "printstash-backup-rejected.tar.gz", {
+          type: "application/gzip",
+        }),
+      );
+
+      expect(await screen.findByText(message)).toBeVisible();
+      expect(upload).toBeEnabled();
+      app.route({
+        "POST /api/v1/backups/upload": json(BACKUP, 201),
+        "GET /api/v1/backups/sources": json([BACKUP]),
+      });
+      await user.upload(
+        upload,
+        new File(["valid"], "printstash-backup-corrected.tar.gz", {
+          type: "application/gzip",
+        }),
+      );
+      expect(await screen.findByText(BACKUP.backup_id)).toBeVisible();
+      expect(
+        app.requestsWithMethod("POST").filter((request) => request.url.endsWith("/backups/upload")),
+      ).toHaveLength(2);
+    });
+
     it("uploads the selected backup archive", async () => {
       const user = userEvent.setup();
       let uploaded: FormDataEntryValue | null = null;

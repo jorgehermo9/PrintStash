@@ -274,11 +274,21 @@ class TestUploadBackup:
         assert response.status_code == 201, response.text
         assert response.json()["backup_id"] == original.id
 
+    @pytest.mark.parametrize(
+        "payload",
+        [
+            b"not an archive",
+            b"\x1f\x8b\x08",
+            b"\x1f\x8b\x08\x00" + b"\x00" * 6 + b"\x07" + b"\x00" * 8,
+        ],
+        ids=["not-gzip", "truncated-gzip", "invalid-deflate"],
+    )
     def test_rejects_an_invalid_archive_without_publishing_it(
         self,
         client: TestClient,
         backup_env: BackupEnv,
         admin_headers: dict[str, str],
+        payload: bytes,
     ) -> None:
         response = client.post(
             "/api/v1/backups/upload",
@@ -286,13 +296,14 @@ class TestUploadBackup:
             files={
                 "file": (
                     "printstash-backup-20260101-000000-invalid.tar.gz",
-                    b"not an archive",
+                    payload,
                     "application/gzip",
                 )
             },
         )
 
         assert response.status_code == 409, response.text
+        assert response.json()["detail"] == "backup_archive_invalid"
         assert list(backup_env.backup_dir.glob("*.tar.gz")) == []
 
     def test_rejects_an_oversized_archive(

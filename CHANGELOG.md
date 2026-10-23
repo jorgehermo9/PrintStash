@@ -10,6 +10,8 @@
 - Collection delete confirmations explain that folders cannot be restored and their Models recover from Trash into All Models.
 
 - Keep multipart set names and counts readable on narrow screens by placing header actions below the title.
+- Backup uploads explain invalid filenames, damaged archives, and existing copies so operators can correct the file and retry.
+
 - Member Settings explain administrator-only remote storage access, omit unavailable version information, disable update checks that require an administrator, and explain why backup controls are unavailable.
 - Canceling a new filament or printer preset discards its draft and returns keyboard focus to the New button. Collapsing the form still preserves a draft for later.
 - Collection history and Recent folders follow stable identities after heading or bulk renames. Unavailable destinations offer explicit recovery instead of showing an empty library or unrelated results.
