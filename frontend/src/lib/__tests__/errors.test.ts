@@ -33,6 +33,42 @@ describe("ApiError", () => {
 });
 
 describe("getErrorMessage", () => {
+  it.each([
+    ["en", "Enter a valid http(s) URL for a model page or file."],
+    ["es", "Introduce una URL http(s) válida de una página de modelo o un archivo."],
+  ])("explains rejected input without blaming connectivity in %s", (locale, expected) => {
+    localStorage.setItem("printstash.locale", locale);
+    try {
+      expect(userMessage(new ApiError(400, "url_invalid", ""))).toBe(expected);
+    } finally {
+      localStorage.removeItem("printstash.locale");
+    }
+  });
+
+  it.each([
+    [
+      "en",
+      "Could not connect to the printer. Check its address and network connection, then retry.",
+    ],
+    [
+      "es",
+      "No se pudo conectar con la impresora. Comprueba su dirección y conexión de red e inténtalo de nuevo.",
+    ],
+  ])("identifies a printer connection failure in %s", (locale, expected) => {
+    localStorage.setItem("printstash.locale", locale);
+    try {
+      expect(userMessage(new ApiError(502, "provider_transport_error", ""))).toBe(expected);
+    } finally {
+      localStorage.removeItem("printstash.locale");
+    }
+  });
+
+  it("gives unknown codes neutral recovery guidance", () => {
+    expect(getErrorMessage("future_error_code")).toBe(
+      "This request could not be completed. Try again.",
+    );
+  });
+
   it("explains an unreadable mounted library folder", () => {
     expect(getErrorMessage("root_path_unreadable")).toMatch(/container mount and permissions/i);
   });
@@ -193,7 +229,7 @@ describe("localized error recovery", () => {
       expect(getErrorMessage("storage_ownership_unverified")).toMatch(/almacenamiento/);
       expect(getErrorMessage("storage_risk_confirmation_required")).toMatch(/confirmar/);
       expect(getErrorMessage("future_backend_code")).toBe(
-        "Se ha producido un error al conectar con el servidor. Comprueba que PrintStash esté funcionando e inténtalo de nuevo.",
+        "No se pudo completar esta solicitud. Inténtalo de nuevo.",
       );
     } finally {
       localStorage.removeItem("printstash.locale");

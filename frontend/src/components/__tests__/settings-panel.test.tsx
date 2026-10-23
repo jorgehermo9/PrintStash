@@ -1975,7 +1975,7 @@ describe("SettingsPanel", () => {
         expect(screen.getByRole("button", { name: "Save backup settings" })).toBeDisabled();
         await userEvent.click(screen.getByRole("button", { name: "Review latest version" }));
         const latest = await screen.findByRole("region", { name: "Latest saved version" });
-        expect(within(latest).getByText("06:45")).toBeVisible();
+        expect(await within(latest).findByText("06:45")).toBeVisible();
         expect(screen.getByLabelText("Daily time (UTC)")).toHaveValue("02:00");
         await userEvent.click(
           screen.getByRole("button", { name: "Save my draft against this version" }),
@@ -2337,9 +2337,7 @@ describe("SettingsPanel", () => {
       await user.click(screen.getByRole("button", { name: "Create preview" }));
 
       expect(
-        await screen.findByText(
-          "Something went wrong reaching the server. Check that PrintStash is running and try again.",
-        ),
+        await screen.findByText("This request could not be completed. Try again."),
       ).toBeVisible();
       expect(screen.queryByText("GC plan #12 · preview")).not.toBeInTheDocument();
     });
@@ -3282,9 +3280,7 @@ describe("Settings account intent", () => {
     });
     await userEvent.click(screen.getByRole("button", { name: "Create" }));
     expect(
-      await screen.findByText(
-        "Something went wrong reaching the server. Check that PrintStash is running and try again.",
-      ),
+      await screen.findByText("This request could not be completed. Try again."),
     ).toBeVisible();
     expect(username).toHaveValue("retry-maker");
     expect(screen.getByLabelText("Initial password")).toHaveValue("FakePassword123");
@@ -3576,9 +3572,7 @@ describe("Settings resource access recovery", () => {
     await userEvent.selectOptions(within(card).getByLabelText("Role"), "edit");
     await userEvent.click(within(card).getByRole("button", { name: "Grant" }));
     expect(
-      await screen.findByText(
-        "Something went wrong reaching the server. Check that PrintStash is running and try again.",
-      ),
+      await screen.findByText("This request could not be completed. Try again."),
     ).toBeVisible();
     expect(within(card).getByLabelText("User")).toHaveValue("2");
     expect(within(card).getByLabelText("Role")).toHaveValue("edit");

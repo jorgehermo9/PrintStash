@@ -169,7 +169,7 @@ describe("MaintenancePanel", () => {
       },
     });
     await userEvent.click(await screen.findByRole("button", { name: "Cancel" }));
-    expect(await screen.findByText(/Something went wrong reaching the server/)).toBeVisible();
+    expect(await screen.findByText(/This request could not be completed/)).toBeVisible();
   });
   it("keeps failed repair confirmation open", async () => {
     renderPanel({
@@ -181,7 +181,7 @@ describe("MaintenancePanel", () => {
     await userEvent.click(await screen.findByRole("button", { name: "Repair" }));
     const dialog = await screen.findByRole("dialog");
     await userEvent.click(within(dialog).getByRole("button", { name: "Repair" }));
-    expect(await screen.findByText(/Something went wrong reaching the server/)).toBeVisible();
+    expect(await screen.findByText(/This request could not be completed/)).toBeVisible();
     expect(dialog).toBeVisible();
   });
   it("groups the maintenance heading with its check controls", async () => {

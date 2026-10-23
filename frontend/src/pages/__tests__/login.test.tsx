@@ -169,7 +169,7 @@ describe("LoginPage", () => {
       await user.click(screen.getByRole("button", { name: "Sign in" }));
 
       expect(await screen.findByRole("alert")).toHaveTextContent(
-        "Something went wrong reaching the server. Check that PrintStash is running and try again.",
+        "This request could not be completed. Try again.",
       );
     });
 

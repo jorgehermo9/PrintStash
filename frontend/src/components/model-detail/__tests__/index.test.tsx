@@ -915,9 +915,7 @@ describe("ModelDetail", () => {
       );
 
       expect(
-        await screen.findByText(
-          "Something went wrong reaching the server. Check that PrintStash is running and try again.",
-        ),
+        await screen.findByText("This request could not be completed. Try again."),
       ).toBeInTheDocument();
       expect(screen.getByLabelText("Current detail location").textContent).toBe("/models/1");
     });

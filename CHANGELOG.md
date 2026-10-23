@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- URL capture now explains invalid links, and offline printer errors identify the printer connection instead of blaming the PrintStash server. Offline controls explain their connection requirement; transport details remain in Diagnostics.
+
 ## 0.15.0
 
 **Back up before upgrading to 0.15.0. Every model file will be re-derived in

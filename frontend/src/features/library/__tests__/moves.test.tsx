@@ -356,9 +356,7 @@ describe("useModelMoves", () => {
     });
     await user.click(screen.getByRole("button", { name: "Move" }));
     expect(
-      await screen.findByText(
-        "Something went wrong reaching the server. Check that PrintStash is running and try again.",
-      ),
+      await screen.findByText("This request could not be completed. Try again."),
     ).toBeVisible();
     expect(screen.getByText("Confirmed: 0")).toBeVisible();
     expect(view.client.getQueryData(queryKeys.model(1))).toBeUndefined();
