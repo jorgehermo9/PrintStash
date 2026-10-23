@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+### Fixed
+
+- Members no longer see a permanently loading server version in Settings; storage settings explain when administrator access is required.
+
 ## 0.15.0
 
 **Back up before upgrading to 0.15.0. Every model file will be re-derived in
