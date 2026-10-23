@@ -4,7 +4,7 @@
 
 ### Fixed
 
-- Empty collections offer an upload into the current folder; active filters offer filter recovery.
+- Empty collections offer an upload into the current folder; read-only members see permission guidance, and active filters offer filter recovery.
 - Multipart member cards keep Model names readable when file badges wrap on desktop.
 
 - Builds and Pending Imports now provide visible starting links and guidance for creating a build or capturing a model URL.

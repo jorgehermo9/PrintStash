@@ -362,6 +362,57 @@ describe("ModelBrowser", () => {
       expect(await within(dialog).findByRole("button", { name: "Parts" })).toBeVisible();
     });
 
+    it.each([false, true])(
+      "explains an empty read-only collection (%s)",
+      async (writableElsewhere) => {
+        const user = userEvent.setup();
+        const { requestsWithMethod } = renderVault({
+          at: "/?c=parts&cid=1",
+          auth: memberSession(),
+          historyProbe: true,
+          collections: [
+            aCollection({ model_count: 0, effective_role: "view" }),
+            ...(writableElsewhere
+              ? [
+                  aCollection({
+                    id: 2,
+                    name: "Writable",
+                    path: "writable",
+                    slug: "writable",
+                    model_count: 0,
+                    effective_role: "edit",
+                  }),
+                ]
+              : []),
+          ],
+        });
+        expect(
+          await screen.findByText(
+            "You have view-only access to this collection. Ask an administrator for edit access to add Models.",
+          ),
+        ).toBeVisible();
+        expect(screen.queryByRole("button", { name: "Upload files" })).not.toBeInTheDocument();
+        expect(screen.queryByRole("button", { name: "Import from URL" })).not.toBeInTheDocument();
+        await user.click(screen.getByRole("button", { name: "Back to library" }));
+        await waitFor(() => {
+          const location = new URL(
+            screen.getByTestId("vault-location").textContent!,
+            "http://test",
+          );
+          expect(location.pathname).toBe("/");
+          expect(location.searchParams.has("c")).toBe(false);
+          expect(location.searchParams.has("cid")).toBe(false);
+        });
+        expect(
+          requestsWithMethod("POST").filter(
+            (request) =>
+              request.url.startsWith("/api/v1/artifact-uploads") ||
+              request.url.startsWith("/api/v1/inbox"),
+          ),
+        ).toHaveLength(0);
+      },
+    );
+
     it.each(["favorites=true", "material_type=PLA"])(
       "offers filter recovery for an empty filtered collection (%s)",
       async (filter) => {

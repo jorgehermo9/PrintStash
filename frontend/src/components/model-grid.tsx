@@ -1807,6 +1807,10 @@ export function ModelBrowser({ initial }: { initial?: BrowserInitialData }) {
   const canUploadToVault =
     auth.isAuthenticated &&
     (user?.is_superuser || canWriteCollection(selectedCollectionRow) || hasWritableCollection);
+  const canUploadHere =
+    selectedCollection === null
+      ? canUploadToVault
+      : !!(user?.is_superuser || canWriteCollection(selectedCollectionRow));
   const uploadDefaultCollection =
     user?.is_superuser || canWriteCollection(selectedCollectionRow) ? selectedCollection : null;
 
@@ -3024,7 +3028,11 @@ export function ModelBrowser({ initial }: { initial?: BrowserInitialData }) {
                     hasActiveFilters
                       ? uiText("Try clearing some filters.")
                       : selectedCollection
-                        ? uiText("library.collectionEmptyHelp")
+                        ? uiText(
+                            canUploadHere
+                              ? "library.collectionEmptyHelp"
+                              : "library.collectionReadOnlyEmptyHelp",
+                          )
                         : uiText(
                             "Upload a model when you're ready, or skim the wiki first if this is a new install.",
                           )
@@ -3033,6 +3041,15 @@ export function ModelBrowser({ initial }: { initial?: BrowserInitialData }) {
                     hasActiveFilters ? (
                       <Button type="button" variant="outline" size="xs" onClick={clearAllFilters}>
                         {uiText("Clear all filters")}
+                      </Button>
+                    ) : selectedCollection && !canUploadHere ? (
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        onClick={() => handleCollectionChange(null)}
+                      >
+                        {uiText("aiSearch.backToLibrary")}
                       </Button>
                     ) : (
                       <div className="flex flex-wrap items-center justify-center gap-2">
