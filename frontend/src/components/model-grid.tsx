@@ -2159,6 +2159,7 @@ export function ModelBrowser({ initial }: { initial?: BrowserInitialData }) {
           tags={tags}
           printers={printers}
           selectedCollection={selectedCollection}
+          selectedCollectionId={selectedCollectionId}
           selectedTags={selectedTags}
           selectedPrinterId={selectedPrinterId}
           selectedPrinterPresence={selectedPrinterPresence}
@@ -2198,6 +2199,7 @@ export function ModelBrowser({ initial }: { initial?: BrowserInitialData }) {
           tags={tags}
           printers={printers}
           selectedCollection={selectedCollection}
+          selectedCollectionId={selectedCollectionId}
           selectedTags={selectedTags}
           selectedPrinterId={selectedPrinterId}
           selectedPrinterPresence={selectedPrinterPresence}
