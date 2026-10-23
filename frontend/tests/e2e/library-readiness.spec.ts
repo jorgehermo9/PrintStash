@@ -477,8 +477,12 @@ test.describe("Library readiness", () => {
         }),
       );
       await page.route("**/api/v1/collections/lookup?**", (route) => {
-        const path = new URL(route.request().url()).searchParams.get("path");
-        const collection = nodes.find((node) => node.path === path)!;
+        const params = new URL(route.request().url()).searchParams;
+        const collection = nodes.find((node) =>
+          params.has("id")
+            ? node.id === Number(params.get("id"))
+            : node.path === params.get("path"),
+        )!;
         return route.fulfill({
           json: {
             collection,

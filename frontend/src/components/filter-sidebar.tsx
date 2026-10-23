@@ -715,6 +715,17 @@ export function FilterSidebarContent({
   const requestSecondary = startup.request;
   const { ref: filtersRef, admitted: filtersVisible } = useViewportAdmission();
   const contentRef = useRef<HTMLDivElement>(null);
+  const filtersRegionRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    // Canonical URL replacement creates a new startup generation while an
+    // already focused filter remains the reader's explicit priority.
+    if (
+      readinessEnabled &&
+      filtersOpen &&
+      filtersRegionRef.current?.contains(document.activeElement)
+    )
+      requestSecondary("filters");
+  }, [readinessEnabled, filtersOpen, requestSecondary]);
   useEffect(() => {
     if (!readinessEnabled) return;
     settleStartup("tree", "pending");
@@ -753,6 +764,18 @@ export function FilterSidebarContent({
     !restoring &&
     levels.size > 0 &&
     [...levels.values()].every((state) => state === "ready");
+  const attachFiltersRegion = useCallback(
+    (node: HTMLDivElement | null) => {
+      filtersRegionRef.current = node;
+      const detach = treeLayoutReady ? filtersRef(node) : undefined;
+      return () => {
+        detach?.();
+        filtersRegionRef.current = null;
+      };
+    },
+    [treeLayoutReady, filtersRef],
+  );
+
   useEffect(() => {
     // A short loading placeholder can temporarily expose controls that the
     // restored tree will push below the viewport. Observe the settled layout.
@@ -1055,7 +1078,7 @@ export function FilterSidebarContent({
 
           {filtersOpen && (
             <div
-              ref={treeLayoutReady ? filtersRef : undefined}
+              ref={attachFiltersRegion}
               onFocusCapture={() => requestSecondary("filters")}
               onPointerDownCapture={() => requestSecondary("filters")}
               className="space-y-6"

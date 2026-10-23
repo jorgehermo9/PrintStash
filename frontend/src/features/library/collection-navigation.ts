@@ -139,7 +139,6 @@ export function useRecentFolders(current: CollectionLookupRead | undefined, open
         ? { id: collection.id, path: collection.path, label: collection.display_path }
         : folder),
       unavailable: query.isError,
-      pending: open && query.isFetching,
     };
   });
   // Persist only server-confirmed paths. IDs survive parent renames, moves and reloads.

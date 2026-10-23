@@ -590,11 +590,24 @@ export function ModelBrowser({ initial }: { initial?: BrowserInitialData }) {
     [libraryLocation, canViewPrinters],
   );
   const { filters: currentFilters, structured, baseFilters } = libraryFilters;
+  const selectedCollection = currentFilters.collection;
+  const selectedCollectionId = collectionIdentity(searchParams);
+  const selectedLookup = useCollectionDestination(selectedCollection, selectedCollectionId);
+  const destinationSettled = !selectedLookup.isFetching && !selectedLookup.error;
+  const destinationCollection = destinationSettled ? selectedLookup.data?.collection : undefined;
   const selectedTags = currentFilters.tag;
   const selectedPrinterId = currentFilters.printer_id;
   const selectedPrinterPresence = currentFilters.printer_presence;
   const favoritesOnly = currentFilters.favorites;
-  const canonicalLibraryHref = `/?${libraryFilters.params}`;
+  const canonicalParams = new URLSearchParams(libraryFilters.params);
+  if (destinationCollection && selectedCollection !== null) {
+    canonicalParams.set("c", destinationCollection.path);
+    // Identity has one canonical position, including logo returns that begin
+    // with preferences only. One replacement owns filters and collection alike.
+    canonicalParams.delete("cid");
+    canonicalParams.set("cid", String(destinationCollection.id));
+  }
+  const canonicalLibraryHref = `/?${canonicalParams}`;
   const currentLocationHref = searchParams.size ? `/?${searchParams}` : "/";
   useEffect(() => {
     if (currentLocationHref !== canonicalLibraryHref) router.replace(canonicalLibraryHref);
@@ -718,9 +731,6 @@ export function ModelBrowser({ initial }: { initial?: BrowserInitialData }) {
   // mirroring into state) means a folder switch just re-keys the model query;
   // `keepPreviousData` holds the old cards on screen until the new page lands, so
   // there's no manual clearing or loading flash.
-  const selectedCollection = currentFilters.collection;
-  const selectedCollectionId = collectionIdentity(searchParams);
-  const selectedLookup = useCollectionDestination(selectedCollection, selectedCollectionId);
   useEffect(() => {
     // Remember the folder we're in so the logo / post-delete nav can return
     // here instead of resetting to the root once the `?c=` param is dropped.
@@ -888,24 +898,10 @@ export function ModelBrowser({ initial }: { initial?: BrowserInitialData }) {
     limit: PAGE_SIZE,
     sort: sortKey,
   };
-  const destinationSettled = !selectedLookup.isFetching && !selectedLookup.error;
-  const destinationCollection = destinationSettled ? selectedLookup.data?.collection : undefined;
   const modelQuery = useLibraryBrowse(
     browseParams,
     selectedCollectionId === null || destinationCollection?.path === selectedCollection,
   );
-  useEffect(() => {
-    if (!destinationCollection || selectedCollection === null) return;
-    if (
-      selectedCollectionId === destinationCollection.id &&
-      selectedCollection === destinationCollection.path
-    )
-      return;
-    const params = new URLSearchParams(searchParams.toString());
-    params.set("c", destinationCollection.path);
-    params.set("cid", String(destinationCollection.id));
-    router.replace(`/?${params}`);
-  }, [destinationCollection, selectedCollection, selectedCollectionId, searchParams, router]);
   const recent = useRecentFolders(
     destinationSettled ? selectedLookup.data : undefined,
     recentFoldersOpen,
@@ -2314,7 +2310,7 @@ export function ModelBrowser({ initial }: { initial?: BrowserInitialData }) {
                   <button
                     key={folder.id ?? folder.path}
                     title={folder.label}
-                    disabled={folder.unavailable || folder.pending}
+                    disabled={folder.unavailable}
                     role="menuitem"
                     type="button"
                     onClick={() => {
