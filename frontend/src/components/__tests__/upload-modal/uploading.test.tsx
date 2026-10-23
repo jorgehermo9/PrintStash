@@ -552,9 +552,7 @@ describe("UploadModal ingestion", () => {
       ]);
       await user.click(await screen.findByRole("button", { name: /Upload 2 models/ }));
       expect(
-        await screen.findByText(
-          "Something went wrong reaching the server. Check that PrintStash is running and try again.",
-        ),
+        await screen.findByText("This request could not be completed. Try again."),
       ).toBeInTheDocument();
       expect(onUploaded).toHaveBeenCalledTimes(1);
     });

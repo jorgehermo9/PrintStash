@@ -4480,5 +4480,9 @@
   "Worker settings let administrators choose model processing concurrency, with Automatic following available CPUs and memory": "Worker settings let administrators choose model processing concurrency, with Automatic following available CPUs and memory",
   "3MF processing uses lib3mf on supported amd64 packages with XML fallback, STEP previews use coarser tessellation, and CPU thumbnails render faster": "3MF processing uses lib3mf on supported amd64 packages with XML fallback, STEP previews use coarser tessellation, and CPU thumbnails render faster",
   "Unraid starts with the optional GPU field blank, GPU device groups survive startup, and Docker images include the library needed for exact STEP measurements": "Unraid starts with the optional GPU field blank, GPU device groups survive startup, and Docker images include the library needed for exact STEP measurements",
-  "Cosmos Cloud and TrueNAS catalogue sources join the existing store packages; store submissions follow image publication": "Cosmos Cloud and TrueNAS catalogue sources join the existing store packages; store submissions follow image publication"
+  "Cosmos Cloud and TrueNAS catalogue sources join the existing store packages; store submissions follow image publication": "Cosmos Cloud and TrueNAS catalogue sources join the existing store packages; store submissions follow image publication",
+  "Could not connect to the printer. Check its address and network connection, then retry.": "Could not connect to the printer. Check its address and network connection, then retry.",
+  "Enter a valid http(s) URL for a model page or file.": "Enter a valid http(s) URL for a model page or file.",
+  "This request could not be completed. Try again.": "This request could not be completed. Try again.",
+  "Printer is offline. Check its address and connection before sending commands.": "Printer is offline. Check its address and connection before sending commands."
 }

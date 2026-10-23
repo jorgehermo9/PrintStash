@@ -1316,7 +1316,7 @@ describe("ExternalLibrariesPanel", () => {
 
       await waitFor(() =>
         expect(screen.getByRole("dialog")).toHaveTextContent(
-          "Something went wrong reaching the server.",
+          "This request could not be completed.",
         ),
       );
       expect(screen.getByText("NAS models")).toBeVisible();

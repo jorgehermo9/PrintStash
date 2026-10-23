@@ -10,6 +10,7 @@
   for renaming, while respecting editing permissions.
 - Backup settings keep titles and translated action labels readable on narrow screens.
 - Members no longer see a permanently loading server version in Settings; storage settings explain when administrator access is required.
+- URL capture now explains invalid links, and offline printer errors identify the printer connection instead of blaming the PrintStash server. Offline controls explain their connection requirement; transport details remain in Diagnostics.
 
 ## 0.15.0
 

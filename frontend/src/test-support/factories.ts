@@ -52,6 +52,7 @@ import type {
   OutlinerModelRead,
   PrinterAccess,
   PrinterCapabilities,
+  PrinterDiagnostics,
   PrinterRead,
   PrintJobRead,
   StorageConnection,
@@ -99,6 +100,21 @@ export function printerCapabilities(override?: Partial<PrinterCapabilities>): Pr
     support_notes: [],
     unsupported_actions: [],
     accepted_print_formats: ["gcode_text"],
+    ...override,
+  };
+}
+
+/** A successful Moonraker connection diagnostic. */
+export function aPrinterDiagnostics(override?: Partial<PrinterDiagnostics>): PrinterDiagnostics {
+  return {
+    printer_id: 4,
+    provider: "moonraker",
+    support_level: "stable",
+    capabilities: printerCapabilities(),
+    unsupported_actions: [],
+    notes: [],
+    checks: [],
+    ok: true,
     ...override,
   };
 }
