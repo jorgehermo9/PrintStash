@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Dropdown menus stay on screen on narrow and short displays, including Statistics customization and Model actions.
 ### Fixed
 
 - Notification channel and Spoolman form fields expose their visible labels to assistive technology and focus correctly when their labels are clicked.

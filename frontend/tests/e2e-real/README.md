@@ -88,6 +88,10 @@ Requires the backend dev venv (`backend/.venv`); falls back to `uv run`.
 
 ## Coverage
 
+Dropdown placement covers Statistics customization at phone width, an open-menu
+resize, a short viewport, and member Model actions. Checkbox choices survive a
+reload; Escape returns focus to the Model action trigger.
+
 First-run onboarding (`playwright.onboarding.config.ts`) checks centered desktop
 and mobile layouts in Spanish, inline password visibility, immediately visible
 server folders, keyboard step navigation, and the account → first Model flow.
