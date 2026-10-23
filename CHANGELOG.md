@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+### Fixed
+
+- Backup settings keep titles and translated action labels readable on narrow screens.
+
 ## 0.15.0
 
 **Back up before upgrading to 0.15.0. Every model file will be re-derived in
