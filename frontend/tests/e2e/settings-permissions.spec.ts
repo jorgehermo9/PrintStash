@@ -65,6 +65,26 @@ test.describe("Member Settings presentation", () => {
         expect(box!.x + box!.width).toBeLessThanOrEqual(390);
       });
 
+      test("explains unavailable backup controls to a member", async ({ page }) => {
+        await page.setViewportSize({ width: 1440, height: 1000 });
+        await page.goto("/settings?section=backup");
+
+        await expect(
+          page.getByText(definition.messages["settings.backupAdministratorRequired"], {
+            exact: true,
+          }),
+        ).toBeVisible();
+        const upload = page.getByLabel(definition.messages["settings.backupUploadTitle"], {
+          exact: true,
+        });
+        await expect(upload).toBeDisabled();
+        const label = upload.locator("..");
+        await label.scrollIntoViewIfNeeded();
+        expect(
+          await label.evaluate((element) => Number(getComputedStyle(element).opacity)),
+        ).toBeLessThan(1);
+      });
+
       test("omits an unreported member version", async ({ page }) => {
         await page.goto("/settings?section=about");
 

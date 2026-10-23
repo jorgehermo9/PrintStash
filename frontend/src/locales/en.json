@@ -4315,6 +4315,7 @@
   "Could not load backup sources.": "Could not load backup sources.",
   "Some backup sources could not be loaded.": "Some backup sources could not be loaded.",
   "Could not load backup settings.": "Could not load backup settings.",
+  "settings.backupAdministratorRequired": "Only an administrator can manage backups.",
   "settings.storageAdministratorRequired": "Only an administrator can modify storage configuration.",
   "settings.storageReadFailed": "Storage configuration could not be read. Retry before making changes.",
   "settings.storageRetry": "Retry storage configuration",

@@ -3310,6 +3310,11 @@ export function SettingsPanel() {
 
             {activeSection === "backup" && (
               <div className="space-y-6 animate-panel-in">
+                {!user?.is_superuser && (
+                  <p className="text-sm text-muted-foreground">
+                    {t("settings.backupAdministratorRequired")}
+                  </p>
+                )}
                 <StorageConnectionReview
                   review={backupConnectionCommand.review}
                   busy={backupConnectionCommand.isPending}
@@ -3750,7 +3755,8 @@ export function SettingsPanel() {
                       className={cn(
                         BTN_SECONDARY,
                         "cursor-pointer",
-                        uploadingBackup && "pointer-events-none opacity-50",
+                        (!user?.is_superuser || uploadingBackup) &&
+                          "pointer-events-none opacity-50",
                       )}
                     >
                       {uploadingBackup ? (

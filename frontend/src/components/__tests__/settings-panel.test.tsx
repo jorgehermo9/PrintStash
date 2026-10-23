@@ -1924,6 +1924,8 @@ describe("SettingsPanel", () => {
     it("tells a non-admin they cannot see the backups", async () => {
       renderSettings({ at: "/settings?section=backup", auth: memberSession() });
 
+      expect(await screen.findByText("Only an administrator can manage backups.")).toBeVisible();
+      expect(screen.getByLabelText("Upload backup archive")).toBeDisabled();
       expect(await screen.findByText("Superuser access is required.")).toBeInTheDocument();
     });
   });
