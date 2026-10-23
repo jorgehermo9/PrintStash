@@ -43,6 +43,43 @@ test.describe("Member Settings presentation", () => {
         ).toHaveCount(0);
       });
 
+      test("explains remote storage permissions in the selected language", async ({ page }) => {
+        await page.goto("/settings?section=remote-storage");
+
+        const message = page.getByText(
+          definition.messages["storage.connectionsAdministratorRequired"],
+          { exact: true },
+        );
+        await expect(message).toBeVisible();
+        await expect(
+          page.getByText(definition.messages["storage.connectionsLoadFailed"], {
+            exact: true,
+          }),
+        ).toHaveCount(0);
+        await expect(
+          page.getByRole("button", { name: definition.messages["Retry"], exact: true }),
+        ).toHaveCount(0);
+        const box = await message.boundingBox();
+        expect(box).not.toBeNull();
+        expect(box!.x).toBeGreaterThanOrEqual(0);
+        expect(box!.x + box!.width).toBeLessThanOrEqual(390);
+      });
+
+      test("omits an unreported member version", async ({ page }) => {
+        await page.goto("/settings?section=about");
+
+        await expect(
+          page.getByText(definition.messages["Latest changes"], { exact: true }),
+        ).toBeVisible();
+        await expect(page.getByText("v0.2.0", { exact: true })).toHaveCount(0);
+        await expect(
+          page.getByRole("button", {
+            name: definition.messages["Check for updates"],
+            exact: true,
+          }),
+        ).toBeDisabled();
+      });
+
       test("explains member storage permissions in the selected language", async ({ page }) => {
         await page.goto("/settings?section=storage");
 

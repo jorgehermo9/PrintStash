@@ -5044,10 +5044,12 @@ export function SettingsPanel() {
                         <h3 className="text-lg font-bold text-foreground tracking-tight">
                           PrintStash
                         </h3>
-                        <span className="rounded-full bg-muted px-2 py-0.5 text-3xs font-semibold text-muted-foreground">
-                          {uiText("v")}
-                          {health?.version ?? "0.2.0"}
-                        </span>
+                        {health?.version && (
+                          <span className="rounded-full bg-muted px-2 py-0.5 text-3xs font-semibold text-muted-foreground">
+                            {uiText("v")}
+                            {health.version}
+                          </span>
+                        )}
                       </div>
                       <p className="text-xs text-muted-foreground mt-0.5">
                         {uiText("Self-hosted asset management for 3D printing workflows.")}
@@ -5057,7 +5059,7 @@ export function SettingsPanel() {
                       <button
                         type="button"
                         onClick={() => void checkForUpdates(true)}
-                        disabled={releaseChecking}
+                        disabled={!user?.is_superuser || releaseChecking}
                         className={BTN_SECONDARY}
                       >
                         <RefreshCw

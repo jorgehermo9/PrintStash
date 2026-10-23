@@ -2595,6 +2595,17 @@ describe("SettingsPanel", () => {
   });
 
   describe("about", () => {
+    it("omits unavailable member version information", async () => {
+      const app = renderSettings({ at: "/settings?section=about", auth: memberSession() });
+
+      expect(await screen.findByText("Latest changes")).toBeVisible();
+      expect(screen.queryByText("v0.2.0")).not.toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Check for updates" })).toBeDisabled();
+      expect(
+        app.requestsWithMethod("GET").filter((request) => request.url.includes("/health/")),
+      ).toHaveLength(0);
+    });
+
     it("shows the version running", async () => {
       renderSettings({ at: "/settings?section=about" });
 
@@ -3768,6 +3779,7 @@ describe("Settings remote read recovery", () => {
       },
     });
     expect(await screen.findByText("System health could not be loaded.")).toBeVisible();
+    expect(screen.queryByText("v0.2.0")).not.toBeInTheDocument();
     app.route({ "GET /api/v1/health/details": json(HEALTH) });
     await userEvent.click(screen.getByRole("button", { name: "Retry health check" }));
     await waitFor(() =>
