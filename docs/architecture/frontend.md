@@ -371,9 +371,10 @@ external return targets. Replace invalid/retired query values canonically withou
 adding a history entry. Route navigation remains unanimated under DESIGN.md.
 
 Collection destinations retain a `cid` identity beside the readable `c` path.
-`features/library/collection-navigation.ts` resolves that identity through the
-authorized bounded lookup before publishing a destination, replacing renamed or
-moved paths in place. Legacy path-only links acquire an identity after lookup;
+The public `features/library/collection-navigation.ts` interface exposes
+`collectionIdentity`, `useCollectionDestination` and `useRecentFolders`. It resolves
+that identity through the authorized bounded lookup before publishing a
+destination, replacing renamed or moved paths in place. Legacy path-only links acquire an identity after lookup;
 unrecoverable links show an unavailable collection with recovery to the library.
 Recent keeps at most six identities and revalidates them when its menu opens,
 so persisted entries follow ancestor mutations without guessing path prefixes.

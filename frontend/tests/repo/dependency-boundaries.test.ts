@@ -69,7 +69,8 @@ describe("inspectDependencies", () => {
     "src/features/printers/settings-edit.ts",
     "src/features/printers/settings-review.tsx",
     "src/features/library/builds.ts",
-  ])("accepts published editing and Build interfaces: %s", (target) => {
+    "src/features/library/collection-navigation.ts",
+  ])("accepts published feature interfaces: %s", (target) => {
     const result = edge(
       "src/components/consumer.tsx",
       target,
