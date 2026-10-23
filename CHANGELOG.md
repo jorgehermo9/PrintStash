@@ -3,6 +3,8 @@
 ## Unreleased
 
 ### Fixed
+
+- Keep multipart set names and counts readable on narrow screens by placing header actions below the title.
 - Collection history and Recent folders follow stable identities after heading or bulk renames. Unavailable destinations offer explicit recovery instead of showing an empty library or unrelated results.
 
 - Recent folders now opens inside the screen edge, and long collection paths
