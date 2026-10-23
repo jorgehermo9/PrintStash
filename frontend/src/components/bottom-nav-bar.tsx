@@ -314,7 +314,9 @@ function MoreSheet({
               : tasks.length}
           </span>
         </button>
-        {tasksOpen && <TaskList tasks={tasks} onClear={onClearTasks} compact />}
+        {tasksOpen && (
+          <TaskList tasks={tasks} onClear={onClearTasks} onNavigate={onClose} compact />
+        )}
       </div>
 
       {onLogout && (

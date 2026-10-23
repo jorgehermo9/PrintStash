@@ -4487,5 +4487,7 @@
   "Printer is offline. Check its address and connection before sending commands.": "Printer is offline. Check its address and connection before sending commands.",
   "nav.gettingStarted": "Getting started",
   "library.collectionUnavailable": "Collection unavailable",
-  "library.collectionUnavailableHelp": "This collection may have moved, been deleted, or become unavailable to your account."
+  "library.collectionUnavailableHelp": "This collection may have moved, been deleted, or become unavailable to your account.",
+  "Created a new Model.": "Created a new Model.",
+  "Saved to an existing Model. Open it to review files and revisions.": "Saved to an existing Model. Open it to review files and revisions."
 }

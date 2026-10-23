@@ -145,6 +145,7 @@ export function TopBar() {
           }
         >
           <TaskList
+            onNavigate={() => setTasksOpen(false)}
             tasks={tasks}
             onClear={() => {
               clearCompletedTasks();

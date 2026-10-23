@@ -362,3 +362,30 @@ describe("policy-cancelled Tasks", () => {
     expect(screen.queryByRole("progressbar")).toBeNull();
   });
 });
+
+describe("upload outcomes", () => {
+  it.each([true, false])("explains completed new and existing Model uploads (%s)", (created) => {
+    renderTaskList([task({ status: "completed", uploadedModel: { id: 42, created } })]);
+    expect(
+      screen.getByText(
+        created
+          ? "Created a new Model."
+          : "Saved to an existing Model. Open it to review files and revisions.",
+      ),
+    ).toBeVisible();
+    expect(screen.getByRole("link", { name: "Open Model" })).toHaveAttribute("href", "/models/42");
+    act(() => setLocale("es"));
+    expect(
+      screen.getByText(
+        created
+          ? "Se ha creado un nuevo Modelo."
+          : "Se ha guardado en un Modelo existente. Ábrelo para revisar los archivos y las revisiones.",
+      ),
+    ).toBeVisible();
+  });
+  it.each(["running", "failed"] as const)("hides unconfirmed upload results (%s)", (status) => {
+    renderTaskList([task({ status, uploadedModel: { id: 42, created: true } })]);
+    expect(screen.queryByRole("link", { name: "Open Model" })).not.toBeInTheDocument();
+    expect(screen.queryByText("Created a new Model.")).not.toBeInTheDocument();
+  });
+});

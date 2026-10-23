@@ -4487,5 +4487,7 @@
   "Printer is offline. Check its address and connection before sending commands.": "La impresora está desconectada. Comprueba su dirección y conexión antes de enviar comandos.",
   "nav.gettingStarted": "Primeros pasos",
   "library.collectionUnavailable": "Colección no disponible",
-  "library.collectionUnavailableHelp": "Esta colección puede haberse movido, eliminado o dejado de estar disponible para tu cuenta."
+  "library.collectionUnavailableHelp": "Esta colección puede haberse movido, eliminado o dejado de estar disponible para tu cuenta.",
+  "Created a new Model.": "Se ha creado un nuevo Modelo.",
+  "Saved to an existing Model. Open it to review files and revisions.": "Se ha guardado en un Modelo existente. Ábrelo para revisar los archivos y las revisiones."
 }

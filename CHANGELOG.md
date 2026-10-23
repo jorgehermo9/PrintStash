@@ -23,6 +23,9 @@
 - Saved-view naming dialogs focus the name field immediately; renaming has a visible accessible label and selects the existing name for keyboard replacement.
 - G-code layer controls remain usable across the full slider on phones. Mesh-only zoom, reset and dimensions overlays now appear only in the 3D model view.
 
+- Completed uploads identify whether they created a Model or saved to an existing
+  one, with an Open Model link that remains available after reloading.
+
 ## 0.15.0
 
 **Back up before upgrading to 0.15.0. Every model file will be re-derived in

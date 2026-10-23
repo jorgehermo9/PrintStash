@@ -1,3 +1,4 @@
+import { uploadedModelForJobs } from "@/lib/model-upload-result";
 /** Session-bound execution of accepted model uploads; modal disposal does not own this work. */
 import { getModel } from "@/lib/api/models";
 import { uploadArtifact, type ArtifactUploadProgress } from "@/lib/artifact-upload";
@@ -121,6 +122,8 @@ export async function runModelUpload(
         completeTask: !gcode,
       });
 
+      updateTask(taskId, { uploadedModel: uploadedModelForJobs([meshStatus]) });
+
       if (!gcode) {
         requireSessionVersion(session);
         if (refreshAfter) await onUploaded();
@@ -143,12 +146,13 @@ export async function runModelUpload(
       requireSessionVersion(session);
       if (!gcodeRes.job_id) throw new Error("Upload completed without an ingestion job");
       linkTaskToJob(taskId, gcodeRes.job_id);
-      await waitForJob(session, gcodeRes.job_id, taskId, {
+      const gcodeStatus = await waitForJob(session, gcodeRes.job_id, taskId, {
         progressEnd: 100,
         completedDetail: "Upload processed",
         completeTask: true,
       });
       requireSessionVersion(session);
+      updateTask(taskId, { uploadedModel: uploadedModelForJobs([meshStatus, gcodeStatus]) });
       if (refreshAfter) await onUploaded();
       return;
     }
@@ -163,12 +167,13 @@ export async function runModelUpload(
       requireSessionVersion(session);
       if (!res.job_id) throw new Error("Upload completed without an ingestion job");
       linkTaskToJob(taskId, res.job_id);
-      await waitForJob(session, res.job_id, taskId, {
+      const status = await waitForJob(session, res.job_id, taskId, {
         progressEnd: 100,
         completedDetail: "Upload processed",
         completeTask: true,
       });
       requireSessionVersion(session);
+      updateTask(taskId, { uploadedModel: uploadedModelForJobs([status]) });
       if (refreshAfter) await onUploaded();
     }
   } catch (err: unknown) {

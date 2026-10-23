@@ -2058,3 +2058,92 @@ describe("task snapshot recovery", () => {
     expect(tc.listTasks()).toEqual([]);
   });
 });
+
+describe("confirmed upload destinations", () => {
+  it.each([true, false])(
+    "retains the confirmed upload destination across reload (%s)",
+    async (created) => {
+      const id = tc.createTask({
+        title: "Upload a requested name",
+        status: "running",
+        expectedJobCount: 1,
+      });
+      tc.linkTaskToJob(id, "confirmed-upload");
+      listJobs.mockResolvedValue([
+        aJob({
+          job_id: "confirmed-upload",
+          kind: "ingestion.artifact_upload",
+          state: "completed",
+          model_id: 42,
+          result: { created },
+        }),
+      ]);
+      await tc.syncImportJobs();
+      expect(tc.listTasks()[0]).toMatchObject({
+        status: "completed",
+        uploadedModel: { id: 42, created },
+      });
+      vi.resetModules();
+      tc = await loadTaskCenter();
+      expect(tc.listTasks()[0]).toMatchObject({ uploadedModel: { id: 42, created } });
+    },
+  );
+
+  it("keeps a new mesh and linked slice classified as new", async () => {
+    const id = tc.createTask({ title: "Upload pair", status: "running", expectedJobCount: 2 });
+    tc.linkTaskToJob(id, "mesh");
+    tc.linkTaskToJob(id, "slice");
+    listJobs.mockResolvedValue(
+      [true, false].map((created, i) =>
+        aJob({
+          job_id: i ? "slice" : "mesh",
+          kind: "ingestion.artifact_upload",
+          state: "completed",
+          model_id: 42,
+          result: { created },
+        }),
+      ),
+    );
+    await tc.syncImportJobs();
+    expect(tc.listTasks()[0]).toMatchObject({
+      status: "completed",
+      uploadedModel: { id: 42, created: true },
+    });
+  });
+
+  it.each(["missing", "unrelated", "multiple"] as const)(
+    "does not invent an upload destination (%s)",
+    async (mode) => {
+      const id = tc.createTask({
+        title: "Upload",
+        status: "running",
+        expectedJobCount: mode === "multiple" ? 2 : 1,
+      });
+      tc.linkTaskToJob(id, "mesh");
+      const jobs = [
+        aJob({
+          job_id: "mesh",
+          kind: mode === "unrelated" ? "search.index" : "ingestion.artifact_upload",
+          state: "completed",
+          model_id: 42,
+          result: mode === "missing" ? null : { created: false },
+        }),
+      ];
+      if (mode === "multiple") {
+        tc.linkTaskToJob(id, "other");
+        jobs.push(
+          aJob({
+            job_id: "other",
+            kind: "ingestion.artifact_upload",
+            state: "completed",
+            model_id: 43,
+            result: { created: true },
+          }),
+        );
+      }
+      listJobs.mockResolvedValue(jobs);
+      await tc.syncImportJobs();
+      expect(tc.listTasks()[0].uploadedModel).toBeUndefined();
+    },
+  );
+});
