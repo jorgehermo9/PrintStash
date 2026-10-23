@@ -990,34 +990,36 @@ function ModelDetailPresentation({
             )}
 
             {/* 3D Viewer Controls */}
-            <div className="absolute bottom-4 right-4 flex flex-col gap-1 z-10">
-              <div className="flex bg-surface-container-lowest/90 backdrop-blur border border-outline-variant rounded overflow-hidden shadow-sm">
+            {viewerMode === "model" && meshFile && (
+              <div className="absolute bottom-4 right-4 flex flex-col gap-1 z-10">
+                <div className="flex bg-surface-container-lowest/90 backdrop-blur border border-outline-variant rounded overflow-hidden shadow-sm">
+                  <button
+                    onClick={() => viewerControls.current?.zoomIn()}
+                    className="flex h-11 w-11 items-center justify-center border-r border-outline-variant text-on-surface-variant transition-colors hover:bg-surface-container-high hover:text-primary sm:h-9 sm:w-9"
+                    title={uiText("Zoom in")}
+                  >
+                    <Plus className="h-4 w-4" />
+                  </button>
+                  <button
+                    onClick={() => viewerControls.current?.zoomOut()}
+                    className="flex h-11 w-11 items-center justify-center text-on-surface-variant transition-colors hover:bg-surface-container-high hover:text-primary sm:h-9 sm:w-9"
+                    title={uiText("Zoom out")}
+                  >
+                    <Minus className="h-4 w-4" />
+                  </button>
+                </div>
                 <button
-                  onClick={() => viewerControls.current?.zoomIn()}
-                  className="flex h-11 w-11 items-center justify-center border-r border-outline-variant text-on-surface-variant transition-colors hover:bg-surface-container-high hover:text-primary sm:h-9 sm:w-9"
-                  title={uiText("Zoom in")}
+                  onClick={() => viewerControls.current?.resetView()}
+                  className="flex h-11 items-center justify-center rounded border border-outline-variant bg-surface-container-lowest/90 px-3 text-on-surface-variant shadow-sm backdrop-blur transition-colors hover:bg-surface-container-high hover:text-primary sm:h-9"
+                  title={uiText("Reset view")}
                 >
-                  <Plus className="h-4 w-4" />
-                </button>
-                <button
-                  onClick={() => viewerControls.current?.zoomOut()}
-                  className="flex h-11 w-11 items-center justify-center text-on-surface-variant transition-colors hover:bg-surface-container-high hover:text-primary sm:h-9 sm:w-9"
-                  title={uiText("Zoom out")}
-                >
-                  <Minus className="h-4 w-4" />
+                  <RotateCcw className="h-4 w-4" />
                 </button>
               </div>
-              <button
-                onClick={() => viewerControls.current?.resetView()}
-                className="flex h-11 items-center justify-center rounded border border-outline-variant bg-surface-container-lowest/90 px-3 text-on-surface-variant shadow-sm backdrop-blur transition-colors hover:bg-surface-container-high hover:text-primary sm:h-9"
-                title={uiText("Reset view")}
-              >
-                <RotateCcw className="h-4 w-4" />
-              </button>
-            </div>
+            )}
 
             {/* Dimensions overlay (bottom-left) */}
-            {meta?.bbox_x_mm && meta?.bbox_y_mm && meta?.bbox_z_mm && (
+            {viewerMode === "model" && meta?.bbox_x_mm && meta?.bbox_y_mm && meta?.bbox_z_mm && (
               <div className="absolute bottom-4 left-4 z-10">
                 <div className="bg-surface-container-lowest/90 backdrop-blur border border-outline-variant rounded px-2 py-1 flex items-center gap-2">
                   <span className="w-2 h-2 rounded-full bg-emerald-500" />

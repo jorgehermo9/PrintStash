@@ -25,7 +25,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { ModelDetail } from "@/components/model-detail";
 import { queryKeys } from "@/lib/query-client";
-import { aCollection } from "@/test-support/factories";
+import { aCollection, aMetadata } from "@/test-support/factories";
 import { collectionTreeRoutes } from "@/test-support/collection-tree";
 import { json, memberSession, renderApp, type RenderAppOptions } from "@/test-support/render";
 import type { FileRead, ModelRead } from "@/types";
@@ -179,6 +179,44 @@ describe("ModelDetail", () => {
       expect(screen.queryByRole("button", { name: "Rename Benchy" })).toBeNull();
       expect(screen.queryByPlaceholderText("Model name")).toBeNull();
     });
+  });
+
+  it("shows mesh overlays only in 3D mode", async () => {
+    const user = userEvent.setup();
+    renderDetail({
+      model: aModel({
+        files: [
+          aFile(),
+          aFile({
+            id: 11,
+            file_type: "gcode",
+            original_filename: "cube.gcode",
+            metadata: aMetadata({ bbox_x_mm: 10, bbox_y_mm: 20, bbox_z_mm: 30 }),
+          }),
+        ],
+      }),
+      routes: {
+        "GET /api/v1/files/11/toolpath": json({ state: "queued" }, 202),
+      },
+    });
+    expect(await screen.findByRole("button", { name: "Reset view" })).toBeVisible();
+    expect(screen.getByText("10×20×30 mm")).toBeVisible();
+    await user.click(screen.getByRole("button", { name: "GCode" }));
+    expect(screen.queryByRole("button", { name: "Reset view" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Zoom in" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Zoom out" })).not.toBeInTheDocument();
+    expect(screen.queryByText("10×20×30 mm")).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "3D" }));
+    expect(screen.getByRole("button", { name: "Reset view" })).toBeVisible();
+    expect(screen.getByText("10×20×30 mm")).toBeVisible();
+  });
+
+  it("omits mesh camera controls without a mesh", async () => {
+    renderDetail({ model: aModel({ files: [] }) });
+    await screen.findByRole("heading", { name: "Benchy" });
+    expect(screen.queryByRole("button", { name: "Reset view" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Zoom in" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Zoom out" })).not.toBeInTheDocument();
   });
 
   describe("remote Model ownership", () => {

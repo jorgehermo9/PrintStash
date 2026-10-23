@@ -21,6 +21,7 @@
 - Add printer setup scrolls within short screens so every field and action remains reachable. Its dialog is announced by its title to assistive technology.
 
 - Saved-view naming dialogs focus the name field immediately; renaming has a visible accessible label and selects the existing name for keyboard replacement.
+- G-code layer controls remain usable across the full slider on phones. Mesh-only zoom, reset and dimensions overlays now appear only in the 3D model view.
 
 ## 0.15.0
 

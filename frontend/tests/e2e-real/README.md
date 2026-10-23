@@ -92,6 +92,10 @@ Dropdown placement covers Statistics customization at phone width, an open-menu
 resize, a short viewport, and member Model actions. Checkbox choices survive a
 reload; Escape returns focus to the Model action trigger.
 
+G-code layer controls use a real 31-layer PrusaSlicer file at 320px, 390px and
+desktop widths. Pointer hit tests and actual layer changes cover both ends of the
+slider; switching back to 3D restores the mesh camera controls.
+
 First-run onboarding (`playwright.onboarding.config.ts`) checks centered desktop
 and mobile layouts in Spanish, inline password visibility, immediately visible
 server folders, keyboard step navigation, and the account → first Model flow.
