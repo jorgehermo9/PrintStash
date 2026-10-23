@@ -3433,6 +3433,7 @@ export function SettingsPanel() {
                   icon={RefreshCw}
                   title={t("settings.backupRetentionTitle")}
                   description={t("settings.backupRetentionDescription")}
+                  stackActionOnMobile
                   action={
                     <button
                       type="button"
@@ -3445,7 +3446,10 @@ export function SettingsPanel() {
                         preferenceCommand.blocked ||
                         backupPolicy.isPending
                       }
-                      className={BTN_PRIMARY}
+                      className={cn(
+                        BTN_PRIMARY,
+                        "h-auto min-h-8 w-full whitespace-normal py-2 sm:w-auto",
+                      )}
                     >
                       {backupRetentionBusy ? (
                         <Loader2 className="h-3.5 w-3.5 animate-spin" />
@@ -3512,7 +3516,10 @@ export function SettingsPanel() {
                         backupConnectionRead.isError ||
                         !backupConnectionRead.data
                       }
-                      className={cn(BTN_PRIMARY, "w-full sm:w-auto")}
+                      className={cn(
+                        BTN_PRIMARY,
+                        "h-auto min-h-8 w-full whitespace-normal py-2 sm:w-auto",
+                      )}
                     >
                       {backupPolicyBusy ? (
                         <Loader2 className="h-3.5 w-3.5 animate-spin" />
@@ -3704,12 +3711,16 @@ export function SettingsPanel() {
                   icon={HardDrive}
                   title={uiText("Manual backup")}
                   description={t("settings.backupManualDescription")}
+                  stackActionOnMobile
                   action={
                     <button
                       type="button"
                       onClick={handleBackupNow}
                       disabled={!user?.is_superuser || backingUp}
-                      className={BTN_PRIMARY}
+                      className={cn(
+                        BTN_PRIMARY,
+                        "h-auto min-h-8 w-full whitespace-normal py-2 sm:w-auto",
+                      )}
                     >
                       {backingUp ? (
                         <>
