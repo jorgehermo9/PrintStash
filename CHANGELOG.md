@@ -9,6 +9,7 @@
 - Collection and Model headings offer a pen button and double-click shortcut
   for renaming, while respecting editing permissions.
 - Backup settings keep titles and translated action labels readable on narrow screens.
+- Members no longer see a permanently loading server version in Settings; storage settings explain when administrator access is required.
 
 ## 0.15.0
 

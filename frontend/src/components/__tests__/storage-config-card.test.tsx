@@ -31,7 +31,13 @@ import { vaultConfigOptions } from "@/lib/queries/settings-config";
 import { StorageConfigCard } from "@/components/storage-config-card";
 import { VaultMigrationPanel } from "@/components/vault-migration-panel";
 import { aMigrationBackup, aVaultMigration, aVaultConfig } from "@/test-support/factories";
-import { adminSession, json, renderApp, type RenderAppOptions } from "@/test-support/render";
+import {
+  adminSession,
+  memberSession,
+  json,
+  renderApp,
+  type RenderAppOptions,
+} from "@/test-support/render";
 import type { StorageHealthRead, StorageProvider, VaultConfigRead } from "@/types";
 
 const PROVIDERS: StorageProvider[] = [
@@ -533,6 +539,30 @@ describe("StorageConfigCard", () => {
 
       expect(await screen.findByText(/422/)).toBeInTheDocument();
     });
+  });
+
+  describe("storage permission guidance", () => {
+    it("explains the administrator requirement to signed-in members", async () => {
+      renderCard({ auth: memberSession() });
+
+      expect(
+        await screen.findByText("Only an administrator can modify storage configuration."),
+      ).toBeVisible();
+      expect(screen.queryByText("Sign in to modify configuration.")).not.toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: /Save configuration/ })).not.toBeInTheDocument();
+    });
+
+    it.each([403, 503])(
+      "does not suggest sign-in after a %s configuration read failure",
+      async (status) => {
+        renderCard({
+          routes: { "GET /api/v1/config": () => json({ detail: "unavailable" }, status) },
+        });
+
+        expect(await screen.findByRole("alert")).toBeVisible();
+        expect(screen.queryByText("Sign in to modify configuration.")).not.toBeInTheDocument();
+      },
+    );
   });
 
   describe("a visitor with no session", () => {
