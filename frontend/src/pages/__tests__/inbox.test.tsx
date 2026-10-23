@@ -77,6 +77,25 @@ describe("InboxPage", () => {
     vi.mocked(listPendingImports).mockResolvedValue([pendingImport]);
   });
 
+  it.each([
+    { label: "empty", items: [] },
+    { label: "populated", items: [pendingImport] },
+  ])("offers the import dialog from an $label queue", async ({ items }) => {
+    renderApp(<InboxPage />, {
+      at: "/inbox",
+      routePath: "/inbox",
+      routes: { "GET /api/v1/inbox": json(items) },
+    });
+
+    expect(await screen.findByRole("link", { name: "Open import dialog" })).toHaveAttribute(
+      "href",
+      "/?upload=1",
+    );
+    expect(
+      screen.getByText("Open the import dialog, then choose From URL to add a model link."),
+    ).toBeVisible();
+  });
+
   it("localizes Inbox UI while preserving dynamic source data", async () => {
     render(
       <QueryClientProvider

@@ -5,6 +5,8 @@
 ### Fixed
 
 - Empty collections offer an upload into the current folder; active filters offer filter recovery.
+- Builds and Pending Imports now provide visible starting links and guidance for creating a build or capturing a model URL.
+
 - Collection delete confirmations explain that folders cannot be restored and their Models recover from Trash into All Models.
 
 - Keep multipart set names and counts readable on narrow screens by placing header actions below the title.

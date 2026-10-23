@@ -445,6 +445,41 @@ describe("Multipart manufacturing", () => {
       "/builds/1",
     );
   });
+  it.each([
+    { label: "empty", history: [] },
+    { label: "populated", history: [aBuild()] },
+  ])("offers a multipart selection entry from $label build history", async ({ history }) => {
+    renderApp(<MultipartBuildsPage />, {
+      at: "/builds",
+      routePath: "/builds",
+      auth: adminSession(),
+      routes: { "GET /api/v1/multipart-builds": json(history) },
+    });
+
+    expect(await screen.findByRole("link", { name: "Choose a multipart set" })).toHaveAttribute(
+      "href",
+      "/?type=multipart",
+    );
+    expect(
+      screen.getByText("Open a multipart set, then choose Create build to plan its pieces."),
+    ).toBeVisible();
+  });
+
+  it("keeps a selected multipart creation flow focused", async () => {
+    renderApp(<MultipartBuildsPage />, {
+      at: "/builds?multipart=7",
+      routePath: "/builds",
+      auth: adminSession(),
+      routes: {
+        "GET /api/v1/multipart-builds": json([]),
+        "GET /api/v1/multipart-models/7": json(aMultipartModel({ id: 7 })),
+      },
+    });
+
+    expect(await screen.findByRole("heading", { name: "Create build" })).toBeVisible();
+    expect(screen.queryByRole("link", { name: "Choose a multipart set" })).not.toBeInTheDocument();
+  });
+
   it("explains when no build history exists", async () => {
     renderApp(<MultipartBuildsPage />, {
       at: "/builds",
