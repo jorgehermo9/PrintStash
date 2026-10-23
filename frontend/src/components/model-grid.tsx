@@ -719,6 +719,8 @@ export function ModelBrowser({ initial }: { initial?: BrowserInitialData }) {
   // `keepPreviousData` holds the old cards on screen until the new page lands, so
   // there's no manual clearing or loading flash.
   const selectedCollection = currentFilters.collection;
+  const selectedCollectionId = collectionIdentity(searchParams);
+  const selectedLookup = useCollectionDestination(selectedCollection, selectedCollectionId);
   useEffect(() => {
     // Remember the folder we're in so the logo / post-delete nav can return
     // here instead of resetting to the root once the `?c=` param is dropped.
@@ -733,7 +735,12 @@ export function ModelBrowser({ initial }: { initial?: BrowserInitialData }) {
 
   const startNavigationReads = useLibraryNavigationReads();
   function handleCollectionChange(path: string | null, id: number | null = null) {
-    if (path === selectedCollection) return;
+    if (
+      path === selectedCollection &&
+      !selectedLookup.isError &&
+      (id === null || id === selectedCollectionId)
+    )
+      return;
     startNavigationReads(path, {
       ...folderModelFilters(path),
       view: libraryView,
@@ -881,8 +888,6 @@ export function ModelBrowser({ initial }: { initial?: BrowserInitialData }) {
     limit: PAGE_SIZE,
     sort: sortKey,
   };
-  const selectedCollectionId = collectionIdentity(searchParams);
-  const selectedLookup = useCollectionDestination(selectedCollection, selectedCollectionId);
   const destinationSettled = !selectedLookup.isFetching && !selectedLookup.error;
   const destinationCollection = destinationSettled ? selectedLookup.data?.collection : undefined;
   const modelQuery = useLibraryBrowse(
@@ -1765,11 +1770,13 @@ export function ModelBrowser({ initial }: { initial?: BrowserInitialData }) {
   // only collections whose name matches the query (anywhere in the tree), to
   // mirror the matching models. Without a query we fall back to the normal
   // folder explorer (immediate children of the selected collection).
-  // The folder being viewed and the way to it, from one lookup by path.
+  // The folder being viewed and the way to it, from one authorized lookup.
   // A folder view shows one bounded page of child folders at a time.
   const { isFetchingNextPage: fetchingFolders, fetchNextPage: fetchMoreFolders } = folderPages;
-  const availableRecentFolders = recentFolders.filter(
-    (folder) => folder.path !== selectedCollection,
+  const availableRecentFolders = recentFolders.filter((folder) =>
+    selectedCollectionId === null
+      ? folder.path !== selectedCollection
+      : folder.id !== selectedCollectionId,
   );
   const prefetchFolder = useIntentPrefetch(
     (path, signal) => {
@@ -2305,7 +2312,7 @@ export function ModelBrowser({ initial }: { initial?: BrowserInitialData }) {
                 </p>
                 {availableRecentFolders.map((folder) => (
                   <button
-                    key={folder.path}
+                    key={folder.id ?? folder.path}
                     title={folder.label}
                     disabled={folder.unavailable || folder.pending}
                     role="menuitem"

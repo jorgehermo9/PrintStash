@@ -4269,6 +4269,24 @@ describe("ModelBrowser", () => {
       ).toContainEqual([9, "current", "Current"]);
     });
 
+    it("opens an explicitly selected Recent identity when the old path is reused", async () => {
+      const user = userEvent.setup();
+      localStorage.setItem(
+        "ps-recent-folders-identified",
+        JSON.stringify([[10, "parts", "Replacement"]]),
+      );
+      renderVault({
+        at: "/?c=parts&cid=9",
+        historyProbe: true,
+        collections: [aCollectionNode({ id: 10, name: "Replacement", path: "parts" })],
+      });
+      await screen.findByRole("heading", { name: "Collection unavailable", level: 1 });
+      await user.click(screen.getByRole("button", { name: "Recent" }));
+      await user.click(await screen.findByRole("menuitem", { name: "Replacement" }));
+      expect(await screen.findByRole("heading", { name: "Replacement", level: 1 })).toBeVisible();
+      expect(screen.getByTestId("vault-location")).toHaveTextContent("cid=10");
+    });
+
     it("retires an unavailable Recent destination", async () => {
       const user = userEvent.setup();
       localStorage.setItem("ps-recent-folders-identified", JSON.stringify([[9, "gone", "Gone"]]));
