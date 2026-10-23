@@ -5,6 +5,8 @@
 ### Fixed
 
 - Empty collections offer an upload into the current folder; active filters offer filter recovery.
+- Multipart member cards keep Model names readable when file badges wrap on desktop.
+
 - Builds and Pending Imports now provide visible starting links and guidance for creating a build or capturing a model URL.
 
 - Collection delete confirmations explain that folders cannot be restored and their Models recover from Trash into All Models.

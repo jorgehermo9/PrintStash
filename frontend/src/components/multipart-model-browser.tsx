@@ -403,10 +403,10 @@ function MultipartMemberCard({ model }: { model: MultipartModelCandidate }) {
   const label = modelLabel(model, t("multipart.unavailable"));
   const content = (
     <>
-      <div className="h-3/5 shrink-0 overflow-hidden border-b border-border bg-muted/40">
+      <div className="min-h-0 flex-1 overflow-hidden border-b border-border bg-muted/40">
         <Cover src={model.thumbnail_url} alt={model.available ? label : ""} />
       </div>
-      <div className="flex min-h-0 flex-1 flex-col p-3">
+      <div className="flex shrink-0 flex-col p-3">
         <h3
           className={cn(
             "line-clamp-2 text-sm font-bold tracking-tight",

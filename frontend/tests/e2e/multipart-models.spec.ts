@@ -110,6 +110,52 @@ test.describe("multipart models", () => {
     });
   }
 
+  for (const width of [1280, 1440]) {
+    for (const { label, name, lines } of [
+      { label: "short", name: "Audit Benchy", lines: 1 },
+      {
+        label: "two-line",
+        name: "An unusually long accessory bracket for the workshop",
+        lines: 2,
+      },
+    ]) {
+      test(`keeps a ${label} member title readable beside wrapped badges at ${width}px`, async ({
+        page,
+      }) => {
+        await page.setViewportSize({ width, height: 1000 });
+        await page.route("**/api/v1/multipart-models/90", (route) =>
+          route.fulfill({
+            json: {
+              ...populatedMobileDetail,
+              part_count: 1,
+              model_count: 1,
+              parts: [
+                {
+                  ...populatedMobileDetail.parts[0],
+                  models: [{ ...candidates[0], name, choice_id: 1 }],
+                },
+              ],
+            },
+          }),
+        );
+        await page.goto("/multipart-models/90");
+        const title = page.getByRole("heading", { name, level: 3, exact: true });
+        await expect(title).toBeVisible();
+        const dimensions = await title.evaluate((element) => ({
+          height: element.clientHeight,
+          lineHeight: Number.parseFloat(getComputedStyle(element).lineHeight),
+        }));
+
+        expect(dimensions.height).toBeGreaterThanOrEqual(dimensions.lineHeight * lines);
+        const card = title.locator("xpath=ancestor::article");
+        const box = await card.boundingBox();
+        const metadata = await card.getByText("1 G-code revision", { exact: true }).boundingBox();
+        expect(metadata!.y + metadata!.height).toBeLessThanOrEqual(box!.y + box!.height);
+        expect(Math.abs(box!.width - box!.height)).toBeLessThanOrEqual(1);
+      });
+    }
+  }
+
   test("reviews a conflicting composition before saving the preserved draft", async ({ page }) => {
     let detail = { ...populatedMobileDetail };
     const versions: (string | undefined)[] = [];
