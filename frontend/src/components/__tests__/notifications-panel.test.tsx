@@ -616,14 +616,17 @@ describe("NotificationsPanel", () => {
   });
 
   it("adopts a replacement channel before editing", async () => {
+    const pending = Promise.withResolvers<NotificationsSettings>();
+    const replacement = {
+      ...EDIT_BASE,
+      enabled: true,
+      channels: [aChannel({ name: "Replacement", edit_epoch: "b".repeat(32) })],
+    };
     const read = vi
       .fn<NotificationsPanelDeps["getNotificationsSettings"]>()
       .mockResolvedValueOnce({ ...EDIT_BASE, enabled: true, channels: [aChannel()] })
-      .mockResolvedValue({
-        ...EDIT_BASE,
-        enabled: true,
-        channels: [aChannel({ name: "Replacement", edit_epoch: "b".repeat(32) })],
-      });
+      .mockResolvedValueOnce(replacement)
+      .mockReturnValue(pending.promise);
     await openConflictingDraft({ getNotificationsSettings: read });
     await userEvent.type(
       screen.getAllByPlaceholderText("•••••••• (unchanged)")[0]!,
@@ -634,7 +637,17 @@ describe("NotificationsPanel", () => {
 
     expect(await screen.findByRole("button", { name: "Save revised changes" })).toBeDisabled();
     await userEvent.click(screen.getByRole("button", { name: "Use current values" }));
-    expect(screen.getByPlaceholderText(/Living-room/)).toHaveValue("Replacement");
+    await waitFor(() => expect(read).toHaveBeenCalledTimes(3));
+    expect(screen.getByRole("textbox", { name: "Name" })).toHaveValue("Local draft");
+
+    await act(async () => {
+      pending.resolve(replacement);
+      await pending.promise;
+    });
+
+    await waitFor(() =>
+      expect(screen.getByRole("textbox", { name: "Name" })).toHaveValue("Replacement"),
+    );
     expect(screen.queryByDisplayValue("fake-old-secret")).not.toBeInTheDocument();
   });
 
