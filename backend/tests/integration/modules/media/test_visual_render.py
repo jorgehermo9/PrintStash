@@ -61,16 +61,69 @@ class TestVisualRender:
         assert processes[0].poll() is not None
         assert list(source.parent.iterdir()) == [source]
 
-    def test_kills_the_child_at_the_callers_deadline(self, render_case):
+    def test_kills_the_child_at_the_callers_deadline(
+        self, render_case, monkeypatch, tmp_path
+    ):
+        import time
+        from pathlib import Path
+        from types import SimpleNamespace
+
+        from printstash_core.inference import context as inference_context
+
+        from app.modules.media.worker_bootstrap import command
+
         source, recipe, processes = render_case
+        ready = tmp_path / "deadline-worker-ready"
+        logical_time = 0.0
+        clock = SimpleNamespace(
+            monotonic=lambda: logical_time,
+            monotonic_ns=time.monotonic_ns,
+            sleep=time.sleep,
+        )
+        # Admission is covered separately. Keep this caller's 10ms budget
+        # intact until a real child is alive, then expire it in supervision.
+        # Replace only these module clocks, never subprocess/pytest's clock.
+        monkeypatch.setattr(inference_context, "time", clock)
+        monkeypatch.setattr(mesh_isolation, "time", clock)
+        context = InferenceContext.bounded(0.01)
+        monkeypatch.setattr(
+            visual_render,
+            "worker_command",
+            lambda _module, _args, budget: command(
+                "tests.fakes.mesh_bootstrap_probe", ["wait", str(ready)], budget
+            ),
+        )
+        live_at_deadline = []
+        original_rss = native_process.process_tree_rss_bytes
+        started = time.monotonic()
+
+        def observe_then_expire(pid):
+            nonlocal logical_time
+            rss = original_rss(pid)
+            assert time.monotonic() - started < 10, "worker did not become ready"
+            if ready.exists() and not live_at_deadline:
+                assert len(processes) == 1
+                assert int(ready.read_text()) == processes[0].pid == pid
+                assert processes[0].poll() is None
+                live_at_deadline.append(pid)
+                logical_time = context.deadline + 0.01
+            return rss
+
+        monkeypatch.setattr(
+            native_process, "process_tree_rss_bytes", observe_then_expire
+        )
         with pytest.raises(EmbeddingError, match="inference_timeout"):
             visual_render.render(
                 source,
                 file_type="stl",
                 recipe=recipe,
-                context=InferenceContext.bounded(0.01),
+                context=context,
             )
+
+        assert len(processes) == 1
+        assert live_at_deadline == [processes[0].pid]
         assert processes[0].poll() is not None
+        assert not Path(f"/proc/{processes[0].pid}").exists()
 
     def test_kills_the_child_at_the_shared_memory_ceiling(
         self, render_case, monkeypatch
