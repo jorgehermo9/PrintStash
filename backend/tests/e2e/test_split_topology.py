@@ -22,9 +22,11 @@ import subprocess
 import sys
 import time
 from collections.abc import Iterator
+from datetime import datetime
 from pathlib import Path
 
 import pytest
+from dbos import DBOSClient
 from sqlalchemy import create_engine, text
 
 from app.db.migrate import run_migrations
@@ -110,23 +112,6 @@ def _workers(environment: dict[str, str]) -> list[str]:
         engine.dispose()
 
 
-def _tick_occurrences(environment: dict[str, str]) -> list[int]:
-    """The reconcile interval each recorded tick fell in."""
-    interval_ms = int(environment["VAULT_JOBS_RECONCILE_INTERVAL_SECONDS"]) * 1000
-    engine = create_engine(normalize_database_url(environment["VAULT_DB_URL"]))
-    try:
-        with engine.connect() as connection:
-            created = connection.execute(
-                text(
-                    "SELECT created_at FROM dbos.workflow_status "
-                    "WHERE name = 'printstash.tick'"
-                )
-            ).scalars()
-            return [int(value) // interval_ms for value in created]
-    finally:
-        engine.dispose()
-
-
 @pytest.fixture
 def converged(split_vault: dict[str, str], start_worker) -> dict:
     api = _start_api(split_vault)
@@ -154,14 +139,51 @@ class TestSplitTopology:
         assert all(notice["type"] == "job" for notice in converged["notices"])
 
     def test_each_tick_runs_once_across_every_process(self, converged: dict) -> None:
-        # Every process that runs jobs schedules the reconciler tick. Two ticks
-        # inside one interval would mean an occurrence ran once per process.
-        deadline = time.monotonic() + 90
-        while len(occurrences := _tick_occurrences(converged["env"])) < 3:
-            assert time.monotonic() < deadline, f"ticks recorded: {occurrences}"
-            time.sleep(1)
+        # Every worker schedules the same occurrence. Its persisted scheduled
+        # instant identifies it: delayed adjacent occurrences can be inserted in
+        # the same created_at interval, so insertion-time buckets are not IDs.
+        client = DBOSClient(
+            system_database_url=normalize_database_url(
+                converged["env"]["VAULT_DB_URL"]
+            ),
+            retry_connection_errors=False,
+        )
+        try:
+            deadline = time.monotonic() + 90
+            while True:
+                ticks = client.list_workflows(
+                    name="printstash.tick", load_input=True, load_output=False
+                )
+                completed = [tick for tick in ticks if tick.status == "SUCCESS"]
+                if len(completed) >= 3:
+                    break
+                assert time.monotonic() < deadline, [
+                    (tick.workflow_id, tick.status) for tick in ticks
+                ]
+                time.sleep(1)
 
-        assert len(occurrences) == len(set(occurrences)), occurrences
+            occurrences: list[datetime] = []
+            for tick in ticks:
+                assert tick.input is not None, tick.workflow_id
+                scheduled, _context = tick.input["args"]
+                assert isinstance(scheduled, datetime), tick.input
+                assert tick.schedule_name == "printstash.tick", tick.workflow_id
+                assert (
+                    tick.workflow_id == f"sched-printstash.tick-{scheduled.isoformat()}"
+                )
+                occurrences.append(scheduled)
+
+            assert len(occurrences) == len(set(occurrences)), occurrences
+            for tick in completed:
+                steps = client.list_workflow_steps(tick.workflow_id)
+                assert [step["function_name"] for step in steps] == ["work.tick"], (
+                    tick.workflow_id,
+                    steps,
+                )
+                assert steps[0]["error"] is None, steps
+                assert steps[0]["completed_at_epoch_ms"] is not None, steps
+        finally:
+            client.destroy()
 
     def test_a_worker_leaves_cleanly_on_sigterm(self, converged: dict) -> None:
         assert _workers(converged["env"]).count("worker") == 2
