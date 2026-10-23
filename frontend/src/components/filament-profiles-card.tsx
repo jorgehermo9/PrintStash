@@ -3,7 +3,7 @@
 import { uiText } from "@/lib/locale";
 import { useUiLocale } from "@/lib/i18n";
 
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import {
   filamentProfilesOptions,
@@ -182,7 +182,12 @@ function RowStatus({ state }: { state?: "saving" | "saved" }) {
   useUiLocale();
   if (state === "saving")
     return <Loader2 className="h-3.5 w-3.5 animate-spin text-muted-foreground" />;
-  if (state === "saved") return <Check className="h-3.5 w-3.5 text-emerald-500" />;
+  if (state === "saved")
+    return (
+      <span role="status" aria-label={uiText("Saved")}>
+        <Check className="h-3.5 w-3.5 text-emerald-500" aria-hidden />
+      </span>
+    );
   return null;
 }
 
@@ -298,6 +303,19 @@ export function FilamentProfilesCard() {
   const [error, setError] = useState<string | null>(null);
   // Per-row auto-save indicator, keyed "f{id}" / "p{id}".
   const [rowStatus, setRowStatus] = useState<Record<string, "saving" | "saved">>({});
+  const savedFeedbackTimers = useRef(new Map<string, ReturnType<typeof setTimeout>>());
+  const mounted = useRef(false);
+
+  useEffect(() => {
+    mounted.current = true;
+    const timers = savedFeedbackTimers.current;
+    return () => {
+      mounted.current = false;
+      for (const timer of timers.values()) clearTimeout(timer);
+      timers.clear();
+    };
+  }, []);
+
   const [filamentValidationErrors, setFilamentValidationErrors] = useState<Record<number, string>>(
     {},
   );
@@ -405,22 +423,33 @@ export function FilamentProfilesCard() {
     }
   }
 
+  function cancelSavedFeedback(key: string) {
+    const timer = savedFeedbackTimers.current.get(key);
+    if (timer !== undefined) {
+      clearTimeout(timer);
+      savedFeedbackTimers.current.delete(key);
+    }
+  }
+
   function flashSaved(key: string) {
+    if (!mounted.current) return;
+    cancelSavedFeedback(key);
     setRowStatus((s) => ({ ...s, [key]: "saved" }));
-    setTimeout(
-      () =>
-        setRowStatus((s) => {
-          // An earlier success indicator must not unlock a later pending save.
-          if (s[key] !== "saved") return s;
-          const n = { ...s };
-          delete n[key];
-          return n;
-        }),
-      1500,
-    );
+    const timer = setTimeout(() => {
+      savedFeedbackTimers.current.delete(key);
+      setRowStatus((s) => {
+        // An earlier success indicator must not unlock a later pending save.
+        if (s[key] !== "saved") return s;
+        const next = { ...s };
+        delete next[key];
+        return next;
+      });
+    }, 1500);
+    savedFeedbackTimers.current.set(key, timer);
   }
 
   function clearStatus(key: string) {
+    cancelSavedFeedback(key);
     setRowStatus((s) => {
       const n = { ...s };
       delete n[key];
@@ -528,6 +557,7 @@ export function FilamentProfilesCard() {
       return next;
     });
     const key = `f${profile.id}`;
+    cancelSavedFeedback(key);
     setRowStatus((s) => ({ ...s, [key]: "saving" }));
     const payload: FilamentProfileUpdate = {};
     if (edit.name !== initial.name) payload.name = edit.name.trim();
@@ -545,7 +575,7 @@ export function FilamentProfilesCard() {
         session,
         base: captureEditingBase(target),
       });
-      if (getSessionVersion() !== session) return;
+      if (!mounted.current || getSessionVersion() !== session) return;
       setError(null);
       setFilamentEdits((cur) => {
         const next = { ...cur };
@@ -559,7 +589,7 @@ export function FilamentProfilesCard() {
       });
       flashSaved(key);
     } catch (e) {
-      if (getSessionVersion() !== session) return;
+      if (!mounted.current || getSessionVersion() !== session) return;
       if (needsPresetReview(parseApiError(e)))
         setFilamentReviews((current) => ({ ...current, [profile.id]: { phase: "required" } }));
       setError(userMessage(e));
@@ -684,6 +714,7 @@ export function FilamentProfilesCard() {
       return;
     }
     const key = `p${profile.id}`;
+    cancelSavedFeedback(key);
     setRowStatus((s) => ({ ...s, [key]: "saving" }));
     const payload: PrinterProfileUpdate = {};
     if (edit.name !== initial.name) payload.name = edit.name.trim();
@@ -698,7 +729,7 @@ export function FilamentProfilesCard() {
         session,
         base: captureEditingBase(target),
       });
-      if (getSessionVersion() !== session) return;
+      if (!mounted.current || getSessionVersion() !== session) return;
       setError(null);
       setPrinterEdits((cur) => {
         const next = { ...cur };
@@ -712,7 +743,7 @@ export function FilamentProfilesCard() {
       });
       flashSaved(key);
     } catch (e) {
-      if (getSessionVersion() !== session) return;
+      if (!mounted.current || getSessionVersion() !== session) return;
       if (needsPresetReview(parseApiError(e)))
         setPrinterReviews((current) => ({ ...current, [profile.id]: { phase: "required" } }));
       setError(userMessage(e));

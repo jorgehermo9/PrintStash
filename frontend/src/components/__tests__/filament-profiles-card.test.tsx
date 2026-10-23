@@ -455,6 +455,135 @@ describe("FilamentProfilesCard", () => {
       }
     });
 
+    it.each(["filament", "printer"] as const)(
+      "cancels saved feedback timers when the %s card leaves",
+      async (kind) => {
+        const saved =
+          kind === "filament"
+            ? aFilamentProfile({ name: "Saved preset", edit_version: 2 })
+            : aPrinterProfile({ name: "Saved preset", edit_version: 2 });
+        const app = renderCard({
+          routes: { [`PATCH /api/v1/${kind}-profiles/1`]: json(saved) },
+        });
+        // Cache retention belongs to Query; isolate the card's feedback timers.
+        app.client.setDefaultOptions({
+          ...app.client.getDefaultOptions(),
+          mutations: { gcTime: Infinity },
+        });
+        app.rerender(<FilamentProfilesCard />);
+        if (kind === "printer")
+          await userEvent.click(screen.getByRole("tab", { name: /Printers/ }));
+        const label = kind === "filament" ? "Filament" : "Printer";
+        const name = await screen.findByRole("textbox", { name: `${label} preset name 1` });
+        vi.useFakeTimers({ shouldAdvanceTime: true });
+        const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+        try {
+          await user.clear(name);
+          await user.type(name, saved.name);
+          await user.click(screen.getByRole("heading", { name: `${label} presets` }));
+          await screen.findByRole("status", { name: "Saved" });
+
+          app.unmount();
+          app.client.clear();
+          expect(vi.getTimerCount()).toBe(0);
+        } finally {
+          app.unmount();
+          app.client.clear();
+          vi.useRealTimers();
+        }
+      },
+    );
+
+    it.each(["filament", "printer"] as const)(
+      "ignores a late %s save receipt after the card leaves",
+      async (kind) => {
+        const pending = Promise.withResolvers<Response>();
+        const saved =
+          kind === "filament"
+            ? aFilamentProfile({ name: "Late receipt", edit_version: 2 })
+            : aPrinterProfile({ name: "Late receipt", edit_version: 2 });
+        const queryKey =
+          kind === "filament" ? queryKeys.filamentProfiles : queryKeys.printerProfiles;
+        const app = renderCard({
+          routes: { [`PATCH /api/v1/${kind}-profiles/1`]: () => pending.promise },
+        });
+        // Cache retention belongs to Query; isolate the card's feedback timers.
+        app.client.setDefaultOptions({
+          ...app.client.getDefaultOptions(),
+          mutations: { gcTime: Infinity },
+        });
+        app.rerender(<FilamentProfilesCard />);
+        if (kind === "printer")
+          await userEvent.click(screen.getByRole("tab", { name: /Printers/ }));
+        const label = kind === "filament" ? "Filament" : "Printer";
+        const name = await screen.findByRole("textbox", { name: `${label} preset name 1` });
+        vi.useFakeTimers({ shouldAdvanceTime: true });
+        const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+        try {
+          await user.clear(name);
+          await user.type(name, saved.name);
+          await user.click(screen.getByRole("heading", { name: `${label} presets` }));
+          await waitFor(() => expect(app.requestsWithMethod("PATCH")).toHaveLength(1));
+          expect(name).toBeDisabled();
+          app.unmount();
+
+          await act(async () => {
+            pending.resolve(json(saved));
+            await pending.promise;
+          });
+          await waitFor(() => expect(app.client.getQueryData(queryKey)).toEqual([saved]));
+          app.client.clear();
+          expect(vi.getTimerCount()).toBe(0);
+        } finally {
+          app.unmount();
+          app.client.clear();
+          vi.useRealTimers();
+        }
+      },
+    );
+
+    it.each(["filament", "printer"] as const)(
+      "keeps renewed %s saved feedback for its own interval",
+      async (kind) => {
+        const first =
+          kind === "filament"
+            ? aFilamentProfile({ name: "First receipt", edit_version: 2 })
+            : aPrinterProfile({ name: "First receipt", edit_version: 2 });
+        const second = { ...first, name: "Second receipt", edit_version: 3 };
+        const app = renderCard({
+          routes: { [`PATCH /api/v1/${kind}-profiles/1`]: json(first) },
+        });
+        if (kind === "printer")
+          await userEvent.click(screen.getByRole("tab", { name: /Printers/ }));
+        const label = kind === "filament" ? "Filament" : "Printer";
+        const name = await screen.findByRole("textbox", { name: `${label} preset name 1` });
+        vi.useFakeTimers({ shouldAdvanceTime: true });
+        const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+        try {
+          await user.clear(name);
+          await user.type(name, first.name);
+          await user.click(screen.getByRole("heading", { name: `${label} presets` }));
+          await screen.findByRole("status", { name: "Saved" });
+          await act(async () => vi.advanceTimersByTimeAsync(1000));
+          app.route({ [`PATCH /api/v1/${kind}-profiles/1`]: json(second) });
+
+          await user.clear(name);
+          await user.type(name, second.name);
+          await user.click(screen.getByRole("heading", { name: `${label} presets` }));
+          await waitFor(() => expect(name).toBeEnabled());
+          expect(app.requestsWithMethod("PATCH")).toHaveLength(2);
+          await act(async () => vi.advanceTimersByTimeAsync(600));
+          expect(screen.getByRole("status", { name: "Saved" })).toBeVisible();
+          await act(async () => vi.advanceTimersByTimeAsync(900));
+          expect(screen.queryByRole("status", { name: "Saved" })).not.toBeInTheDocument();
+        } finally {
+          app.unmount();
+          app.client.clear();
+          vi.useRealTimers();
+        }
+      },
+    );
+
     it("clears obsolete filament validation after adopting current values", async () => {
       const user = userEvent.setup();
       const app = renderCard({
