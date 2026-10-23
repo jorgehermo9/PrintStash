@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+### Fixed
+
+- Notification channel and Spoolman form fields expose their visible labels to assistive technology and focus correctly when their labels are clicked.
+
 ## 0.15.0
 
 **Back up before upgrading to 0.15.0. Every model file will be re-derived in
