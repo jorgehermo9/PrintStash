@@ -5,6 +5,7 @@ import { currentLocale } from "@/lib/locale";
 import { uiText } from "@/lib/locale";
 import { useUiLocale } from "@/lib/i18n";
 import { useState } from "react";
+import { Link } from "react-router-dom";
 import {
   Area,
   AreaChart,
@@ -508,6 +509,15 @@ function StatsContent({
           <p className="text-sm text-muted-foreground">
             {translateUiText(locale, "No completed prints in this period.")}
           </p>
+          <p className="max-w-md text-sm text-muted-foreground">
+            {translateUiText(
+              locale,
+              "Statistics use completed print jobs. Review the selected period or manage your printers.",
+            )}
+          </p>
+          <Button variant="outline" className="mt-2" asChild>
+            <Link to="/printers">{translateUiText(locale, "Manage printers")}</Link>
+          </Button>
         </CardContent>
       </Card>
     );

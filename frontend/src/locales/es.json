@@ -787,6 +787,7 @@
   "No data for this period": "No hay datos para este periodo",
   "Completed jobs in selected period": "Trabajos completados en el periodo seleccionado",
   "No completed prints in this period.": "No hay impresiones completadas en este periodo.",
+  "Statistics use completed print jobs. Review the selected period or manage your printers.": "Las estadísticas usan trabajos de impresión completados. Revisa el periodo seleccionado o gestiona tus impresoras.",
   "7-day forecast uses selected period’s daily filament average.": "La previsión de 7 días usa la media diaria de filamento del periodo seleccionado.",
   "Print hours": "Horas de impresión",
   "Filament weight": "Peso del filamento",

@@ -356,6 +356,27 @@ describe("StatisticsPage", () => {
   });
 
   describe("a period with nothing in it", () => {
+    it.each([
+      [
+        "en",
+        "Statistics use completed print jobs. Review the selected period or manage your printers.",
+        "Manage printers",
+      ],
+      [
+        "es",
+        "Las estadísticas usan trabajos de impresión completados. Revisa el periodo seleccionado o gestiona tus impresoras.",
+        "Gestionar impresoras",
+      ],
+    ] as const)(
+      "offers period guidance and printer navigation in %s",
+      async (locale, guidance, action) => {
+        renderStatistics({ locale, stats: statistics({ total_prints: 0 }) });
+
+        expect(await screen.findByText(guidance)).toBeVisible();
+        expect(screen.getByRole("link", { name: action })).toHaveAttribute("href", "/printers");
+      },
+    );
+
     it("says so rather than showing a grid of zeroes", async () => {
       renderStatistics({
         stats: statistics({

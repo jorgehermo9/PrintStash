@@ -787,6 +787,7 @@
   "No data for this period": "No data for this period",
   "Completed jobs in selected period": "Completed jobs in selected period",
   "No completed prints in this period.": "No completed prints in this period.",
+  "Statistics use completed print jobs. Review the selected period or manage your printers.": "Statistics use completed print jobs. Review the selected period or manage your printers.",
   "7-day forecast uses selected period’s daily filament average.": "7-day forecast uses selected period’s daily filament average.",
   "Print hours": "Print hours",
   "Filament weight": "Filament weight",
