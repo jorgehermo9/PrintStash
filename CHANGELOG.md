@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+### Fixed
+
+- Builds is reachable from the account menu and mobile More sheet. Inbox, Builds,
+  Search, and the getting-started guide have distinct, translated browser titles.
+
 ## 0.15.0
 
 **Back up before upgrading to 0.15.0. Every model file will be re-derived in

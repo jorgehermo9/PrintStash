@@ -4479,5 +4479,6 @@
   "Worker settings let administrators choose model processing concurrency, with Automatic following available CPUs and memory": "Los ajustes de workers permiten elegir cuántos modelos se procesan a la vez; Automático se adapta a las CPU y la memoria disponibles",
   "3MF processing uses lib3mf on supported amd64 packages with XML fallback, STEP previews use coarser tessellation, and CPU thumbnails render faster": "El procesamiento 3MF usa lib3mf en paquetes amd64 compatibles con alternativa XML, las vistas previas STEP usan una teselación menos densa y las miniaturas por CPU se generan más rápido",
   "Unraid starts with the optional GPU field blank, GPU device groups survive startup, and Docker images include the library needed for exact STEP measurements": "Unraid arranca con el campo de GPU opcional vacío, los grupos de dispositivos GPU se conservan al iniciar y las imágenes Docker incluyen la biblioteca necesaria para las medidas STEP exactas",
-  "Cosmos Cloud and TrueNAS catalogue sources join the existing store packages; store submissions follow image publication": "Los catálogos de Cosmos Cloud y TrueNAS se suman a los paquetes existentes; los envíos a las tiendas se realizan después de publicar la imagen"
+  "Cosmos Cloud and TrueNAS catalogue sources join the existing store packages; store submissions follow image publication": "Los catálogos de Cosmos Cloud y TrueNAS se suman a los paquetes existentes; los envíos a las tiendas se realizan después de publicar la imagen",
+  "nav.gettingStarted": "Primeros pasos"
 }
