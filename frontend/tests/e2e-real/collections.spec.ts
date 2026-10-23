@@ -1,7 +1,7 @@
 /**
  * Building and dismantling the folder tree the whole library is organised by.
  *
- * A collection is a path, and every model under it carries that path, so deleting one is
+ * A collection has a stable identity and a mutable path; Models belong to that identity. Deleting one is
  * never just deleting a row. The recursive delete is here because it is the one action
  * that can take a shelf of somebody's library with it, and the flow that guards it lives
  * in the UI rather than the API. Keyboard focus keeps each action exposed while
@@ -10,7 +10,13 @@
  */
 import { readFile } from "node:fs/promises";
 import { test, expect } from "./helpers";
-import { createCollectionViaVault, gcodeFor, modelCard, uploadModel } from "./util";
+import {
+  createCollectionViaVault,
+  gcodeFor,
+  modelCard,
+  openLibraryTools,
+  uploadModel,
+} from "./util";
 
 // Real CRUD against the backend DB.
 
@@ -115,6 +121,87 @@ test.describe("collections", () => {
       .getByRole("button", { name: "Delete collection", exact: true })
       .click();
     await sidebar.getByRole("button", { name: "Delete", exact: true }).click();
+    await expect(parentRow).toHaveCount(0);
+    await page.goto("/settings?section=trash");
+    await page
+      .getByRole("checkbox", { name: `Select deleted model ${model}`, exact: true })
+      .locator("..")
+      .getByRole("button", { name: "Delete", exact: true })
+      .click();
+    await page.getByRole("button", { name: "Delete forever", exact: true }).click();
+    await expect(page.getByText(model, { exact: true })).toHaveCount(0);
+  });
+
+  test("keeps populated descendants reachable through ancestor renames", async ({ page }) => {
+    const stamp = Date.now();
+    const parent = `e2e-history-${stamp}`;
+    const child = `child-${stamp}`;
+    const model = `e2e-history-model-${stamp}`;
+    const headingName = `${parent}-heading`;
+    const bulkName = `${parent}-bulk`;
+    await createCollectionViaVault(page, parent);
+    await createCollectionViaVault(page, child, parent);
+    await uploadModel(page, model, { collection: `${parent}/${child}` });
+    await expect(page).toHaveURL((url) => url.searchParams.has("cid"));
+    const childId = new URL(page.url()).searchParams.get("cid");
+    const modelHref = await modelCard(page, model).getAttribute("href");
+    const modelPath = new URL(modelHref!, page.url()).pathname;
+
+    // ── History retains the descendant identity across a parent heading rename ──
+    await page
+      .getByRole("main")
+      .getByRole("navigation")
+      .getByRole("button", { name: parent, exact: true })
+      .click();
+    await page.getByRole("button", { name: `Rename ${parent}`, exact: true }).click();
+    await page.getByRole("textbox", { name: "Collection name", exact: true }).fill(headingName);
+    await page.getByRole("textbox", { name: "Collection name", exact: true }).press("Enter");
+    await expect(page.getByRole("heading", { name: headingName, exact: true })).toBeVisible();
+    await page.goBack();
+    await expect(page).toHaveURL((url) => url.searchParams.get("c") === `${headingName}/${child}`);
+    await expect(page).toHaveURL((url) => url.searchParams.get("cid") === childId);
+    await expect(modelCard(page, model)).toHaveAttribute(
+      "href",
+      new RegExp(`^${modelPath}(?:\\?|$)`),
+    );
+    await page.reload();
+    await expect(modelCard(page, model)).toBeVisible();
+
+    // ── Bulk rename resolves persisted Recent entries through the same identity ──
+    await page.goto("/");
+    await openLibraryTools(page);
+    await page.getByRole("button", { name: "Select", exact: true }).click();
+    await page.getByRole("checkbox", { name: `Select folder ${headingName}`, exact: true }).check();
+    await page.getByRole("button", { name: "Rename", exact: true }).click();
+    const rename = page.getByRole("dialog");
+    await rename.getByRole("textbox").fill(bulkName);
+    await rename.getByRole("button", { name: "Rename", exact: true }).click();
+    await expect(rename).toHaveCount(0);
+    await page.reload();
+    await page.getByRole("button", { name: "Recent", exact: true }).click();
+    await page.getByRole("menuitem", { name: `${bulkName}/${child}`, exact: true }).click();
+    await expect(page).toHaveURL((url) => url.searchParams.get("cid") === childId);
+    await expect(modelCard(page, model)).toHaveAttribute(
+      "href",
+      new RegExp(`^${modelPath}(?:\\?|$)`),
+    );
+    await modelCard(page, model).click();
+    await page.getByRole("tab", { name: /^Revisions/ }).click();
+    const [download] = await Promise.all([
+      page.waitForEvent("download"),
+      page.getByTitle("Download").first().click(),
+    ]);
+    expect(await readFile((await download.path())!, "utf8")).toBe(gcodeFor(model));
+
+    // ── Clean only this flow's Models and collection branch ──
+    await page.goto("/");
+    const parentRow = page.locator("aside").getByRole("button", { name: bulkName, exact: true });
+    await parentRow.focus();
+    await parentRow
+      .locator("..")
+      .getByRole("button", { name: "Delete collection", exact: true })
+      .click();
+    await page.locator("aside").getByRole("button", { name: "Delete", exact: true }).click();
     await expect(parentRow).toHaveCount(0);
     await page.goto("/settings?section=trash");
     await page

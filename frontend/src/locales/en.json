@@ -4485,5 +4485,7 @@
   "Enter a valid http(s) URL for a model page or file.": "Enter a valid http(s) URL for a model page or file.",
   "This request could not be completed. Try again.": "This request could not be completed. Try again.",
   "Printer is offline. Check its address and connection before sending commands.": "Printer is offline. Check its address and connection before sending commands.",
-  "nav.gettingStarted": "Getting started"
+  "nav.gettingStarted": "Getting started",
+  "library.collectionUnavailable": "Collection unavailable",
+  "library.collectionUnavailableHelp": "This collection may have moved, been deleted, or become unavailable to your account."
 }

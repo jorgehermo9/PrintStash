@@ -4485,5 +4485,7 @@
   "Enter a valid http(s) URL for a model page or file.": "Introduce una URL http(s) válida de una página de modelo o un archivo.",
   "This request could not be completed. Try again.": "No se pudo completar esta solicitud. Inténtalo de nuevo.",
   "Printer is offline. Check its address and connection before sending commands.": "La impresora está desconectada. Comprueba su dirección y conexión antes de enviar comandos.",
-  "nav.gettingStarted": "Primeros pasos"
+  "nav.gettingStarted": "Primeros pasos",
+  "library.collectionUnavailable": "Colección no disponible",
+  "library.collectionUnavailableHelp": "Esta colección puede haberse movido, eliminado o dejado de estar disponible para tu cuenta."
 }

@@ -3,6 +3,7 @@
 ## Unreleased
 
 ### Fixed
+- Collection history and Recent folders follow stable identities after heading or bulk renames. Unavailable destinations offer explicit recovery instead of showing an empty library or unrelated results.
 
 - Recent folders now opens inside the screen edge, and long collection paths
   wrap within the Model Overview panel without horizontal overflow.

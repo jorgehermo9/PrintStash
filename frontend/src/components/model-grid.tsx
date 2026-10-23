@@ -8,6 +8,11 @@ import {
   type FolderMove,
 } from "@/lib/folder-transition";
 import { useLibraryNavigationReads } from "@/features/library/navigation-reads";
+import {
+  collectionIdentity,
+  useCollectionDestination,
+  useRecentFolders,
+} from "@/features/library/collection-navigation";
 import { useTaxonomyCommands } from "@/features/library/taxonomy";
 
 import { LibraryBatchRecovery } from "@/components/library-batch-recovery";
@@ -138,7 +143,6 @@ import {
 import {
   useCollectionReadme,
   useCollectionChildren,
-  useCollectionLookup,
   useCollectionSearch,
   useModelFacets,
   usePrinters,
@@ -443,76 +447,11 @@ function DisplayMenu({
   );
 }
 
-/** Bare paths, as builds before #295 wrote them; read when nothing newer is stored. */
-const RECENT_FOLDERS_KEY = "ps-recent-folders";
-const RECENT_FOLDERS_LABELLED_KEY = "ps-recent-folders-labelled";
-const RECENT_FOLDERS_LIMIT = 6;
 const LIBRARY_VIEW_KEY = "ps-vault-library-view";
 
 function readVaultPreference(key: string): string | null {
   if (!("window" in globalThis)) return null;
   return localStorage.getItem(key);
-}
-
-/** A folder visited recently: its path to navigate to, its names to show. */
-interface RecentFolder {
-  path: string;
-  label: string;
-}
-
-/** Until a folder's names load, it is shown by the last part of its path. */
-function provisionalLabel(path: string): string {
-  return path.split("/").at(-1) ?? path;
-}
-
-/** Decode stored JSON that should be an array, or nothing if it is not one. */
-function readStoredArray(raw: string | null): readonly StoredEntry[] {
-  if (raw === null) return [];
-  try {
-    // `JSON.parse` is `any`; the annotation is the boundary, checked just below.
-    const decoded: StoredEntry = JSON.parse(raw);
-    return Array.isArray(decoded) ? decoded : [];
-  } catch {
-    return [];
-  }
-}
-
-/** A value JSON can hold: what edited or older storage may contain. */
-type StoredEntry =
-  | string
-  | number
-  | boolean
-  | null
-  | readonly StoredEntry[]
-  | { readonly [key: string]: StoredEntry };
-
-/**
- * The recent-folder list is a UI convenience written by this component, kept as
- * `[path, label]` pairs so the menu needs no collection list to name them.
- * Builds before labels were kept wrote bare paths under the older key; those
- * are read once, until the next write, with a provisional label.
- */
-function readRecentFolders(): RecentFolder[] {
-  const labelled = readVaultPreference(RECENT_FOLDERS_LABELLED_KEY);
-  if (labelled !== null) {
-    return readStoredArray(labelled).flatMap((entry) =>
-      Array.isArray(entry) && entry.length === 2
-        ? [{ path: String(entry[0]), label: String(entry[1]) }]
-        : [],
-    );
-  }
-  return readStoredArray(readVaultPreference(RECENT_FOLDERS_KEY)).map((entry) => ({
-    path: String(entry),
-    label: provisionalLabel(String(entry)),
-  }));
-}
-
-function writeRecentFolders(folders: RecentFolder[]): void {
-  if (!("window" in globalThis)) return;
-  localStorage.setItem(
-    RECENT_FOLDERS_LABELLED_KEY,
-    JSON.stringify(folders.map((folder) => [folder.path, folder.label])),
-  );
 }
 
 function canWriteCollection(collection: CollectionRead | null | undefined): boolean {
@@ -670,7 +609,6 @@ export function ModelBrowser({ initial }: { initial?: BrowserInitialData }) {
   const [compact, setCompact] = useState(
     () => readVaultPreference("ps-vault-density") === "compact",
   );
-  const [recentFolders, setRecentFolders] = useState<RecentFolder[]>(readRecentFolders);
   const [recentFoldersOpen, setRecentFoldersOpen] = useState(false);
   const [multipartCreateOpen, setMultipartCreateOpen] = useState(false);
   const [uploadOpen, setUploadOpen] = useState(false);
@@ -776,30 +714,11 @@ export function ModelBrowser({ initial }: { initial?: BrowserInitialData }) {
   // `keepPreviousData` holds the old cards on screen until the new page lands, so
   // there's no manual clearing or loading flash.
   const selectedCollection = currentFilters.collection;
-  // Entering a folder pushes it onto the recent list on the render that first
-  // sees the new `?c=`, so the list is never a navigation behind the URL.
-  const [recordedCollection, setRecordedCollection] = useState<string | null>(null);
-  if (recordedCollection !== selectedCollection) {
-    setRecordedCollection(selectedCollection);
-    if (selectedCollection !== null)
-      setRecentFolders((current) => {
-        const known = current.find((item) => item.path === selectedCollection);
-        return [
-          known ?? { path: selectedCollection, label: provisionalLabel(selectedCollection) },
-          ...current.filter((item) => item.path !== selectedCollection),
-        ].slice(0, RECENT_FOLDERS_LIMIT);
-      });
-  }
-
   useEffect(() => {
     // Remember the folder we're in so the logo / post-delete nav can return
     // here instead of resetting to the root once the `?c=` param is dropped.
     rememberLastCollection(selectedCollection);
   }, [selectedCollection]);
-
-  useEffect(() => {
-    writeRecentFolders(recentFolders);
-  }, [recentFolders]);
 
   // Remember the active tab so the logo / Back return to it (e.g. opening a
   // document from the Documents tab and coming back).
@@ -808,7 +727,7 @@ export function ModelBrowser({ initial }: { initial?: BrowserInitialData }) {
   }, [docView]);
 
   const startNavigationReads = useLibraryNavigationReads();
-  function handleCollectionChange(path: string | null) {
+  function handleCollectionChange(path: string | null, id: number | null = null) {
     if (path === selectedCollection) return;
     startNavigationReads(path, {
       ...folderModelFilters(path),
@@ -820,6 +739,8 @@ export function ModelBrowser({ initial }: { initial?: BrowserInitialData }) {
     // before Router can commit the destination and start its critical reads.
     setSelectedIds((current) => (current.size === 0 ? current : new Set()));
     const params = new URLSearchParams(searchParams.toString());
+    params.delete("cid");
+    if (id !== null) params.set("cid", String(id));
     if (path) params.set("c", path);
     else params.delete("c");
     const qs = params.toString();
@@ -955,11 +876,33 @@ export function ModelBrowser({ initial }: { initial?: BrowserInitialData }) {
     limit: PAGE_SIZE,
     sort: sortKey,
   };
-  const modelQuery = useLibraryBrowse(browseParams);
-
-  const selectedLookup = useCollectionLookup(selectedCollection);
+  const selectedCollectionId = collectionIdentity(searchParams);
+  const selectedLookup = useCollectionDestination(selectedCollection, selectedCollectionId);
+  const destinationSettled = !selectedLookup.isFetching && !selectedLookup.error;
+  const destinationCollection = destinationSettled ? selectedLookup.data?.collection : undefined;
+  const modelQuery = useLibraryBrowse(
+    browseParams,
+    selectedCollectionId === null || destinationCollection?.path === selectedCollection,
+  );
+  useEffect(() => {
+    if (!destinationCollection || selectedCollection === null) return;
+    if (
+      selectedCollectionId === destinationCollection.id &&
+      selectedCollection === destinationCollection.path
+    )
+      return;
+    const params = new URLSearchParams(searchParams.toString());
+    params.set("c", destinationCollection.path);
+    params.set("cid", String(destinationCollection.id));
+    router.replace(`/?${params}`);
+  }, [destinationCollection, selectedCollection, selectedCollectionId, searchParams, router]);
+  const recent = useRecentFolders(
+    destinationSettled ? selectedLookup.data : undefined,
+    recentFoldersOpen,
+  );
+  const recentFolders = recent.folders;
   const selectedCollectionRow =
-    selectedLookup.data?.collection.path === selectedCollection
+    destinationSettled && selectedLookup.data?.collection.path === selectedCollection
       ? selectedLookup.data.collection
       : null;
   // Read alongside the folder page, before committing the destination. A
@@ -979,7 +922,8 @@ export function ModelBrowser({ initial }: { initial?: BrowserInitialData }) {
   // that identity is settled, before the reader can establish its position.
   const projectionReady =
     currentLocationHref === canonicalLibraryHref &&
-    (selectedCollection === null || selectedCollectionRow !== null) &&
+    (selectedCollection === null ||
+      (selectedCollectionRow !== null && selectedCollectionId === selectedCollectionRow.id)) &&
     (!selectedCollectionRow?.has_readme || !collectionReadme.isPending) &&
     folderPages.data !== undefined &&
     !folderPages.isPlaceholderData &&
@@ -1048,8 +992,20 @@ export function ModelBrowser({ initial }: { initial?: BrowserInitialData }) {
     modelQuery.data?.pages.length,
   ]);
   const [settledSnapshot, setSettledSnapshot] = useState(nextSnapshot);
+  const lookupStatus = selectedLookup.error ? parseApiError(selectedLookup.error).status : null;
+  const unavailableCollection =
+    selectedCollection !== null &&
+    selectedLookup.isError &&
+    (lookupStatus === 403 ||
+      lookupStatus === 404 ||
+      settledSnapshot === null ||
+      settledSnapshot.entry.href !== canonicalLibraryHref);
+  if (unavailableCollection && settledSnapshot !== null) setSettledSnapshot(null);
   if (nextSnapshot !== null && nextSnapshot !== settledSnapshot) setSettledSnapshot(nextSnapshot);
-  const snapshot = currentRefresh?.status === "denied" ? null : (nextSnapshot ?? settledSnapshot);
+  const snapshot =
+    unavailableCollection || currentRefresh?.status === "denied"
+      ? null
+      : (nextSnapshot ?? settledSnapshot);
   const displayedCollection = snapshot?.collection ?? null;
   // `null` until the first snapshot lands: opening a folder by URL is arriving,
   // not moving, so the first settled folder must not animate.
@@ -1139,28 +1095,13 @@ export function ModelBrowser({ initial }: { initial?: BrowserInitialData }) {
       const updated = await renameCollection(target.collection.id, name);
       requireSessionVersion(session);
       if (!isCurrent()) return;
-      const oldPath = target.collection.path;
-      const oldLabel = target.collection.display_path;
-      const newLabel =
-        oldLabel.slice(0, oldLabel.length - target.collection.name.length) + updated.name;
-      setRecentFolders((folders) =>
-        folders.map((folder) =>
-          folder.path === oldPath || folder.path.startsWith(`${oldPath}/`)
-            ? {
-                path: updated.path + folder.path.slice(oldPath.length),
-                label: folder.label.startsWith(oldLabel)
-                  ? newLabel + folder.label.slice(oldLabel.length)
-                  : folder.label,
-              }
-            : folder,
-        ),
-      );
       setCollectionRename(null);
       toast.success(uiText("collection.renameSuccess", { count: 1 }));
       if (updated.path === selectedCollection) void refresh();
       else {
         const params = new URLSearchParams(searchParams.toString());
         params.set("c", updated.path);
+        params.set("cid", String(updated.id));
         router.replace(`/?${params}`);
       }
     } catch (error) {
@@ -1311,14 +1252,17 @@ export function ModelBrowser({ initial }: { initial?: BrowserInitialData }) {
         queryClient.cancelQueries({ queryKey: libraryBrowseKeys.all }),
         queryClient.cancelQueries({ queryKey: previousFolders, exact: true }),
         queryClient.cancelQueries({
-          queryKey: queryKeys.collectionLookup(selectedCollection),
+          queryKey:
+            selectedCollectionId === null
+              ? queryKeys.collectionLookup(selectedCollection)
+              : queryKeys.collectionLookupById(selectedCollectionId),
           exact: true,
         }),
       ]);
       if (!isCurrent()) return;
       await queryClient.invalidateQueries({ queryKey: libraryBrowseKeys.all, refetchType: "none" });
       if (!isCurrent()) return;
-      // Resolve the path first: a replacement folder may have a different id.
+      // Resolve the saved identity before refreshing its current children.
       let parentId: number | null = null;
       if (selectedCollection !== null) {
         const lookup = await selectedLookup.refetch({ throwOnError: true });
@@ -1819,23 +1763,6 @@ export function ModelBrowser({ initial }: { initial?: BrowserInitialData }) {
   // The folder being viewed and the way to it, from one lookup by path.
   // A folder view shows one bounded page of child folders at a time.
   const { isFetchingNextPage: fetchingFolders, fetchNextPage: fetchMoreFolders } = folderPages;
-  // The open folder's names replace its provisional label once they load.
-  if (
-    selectedCollectionRow &&
-    recentFolders.some(
-      (folder) =>
-        folder.path === selectedCollectionRow.path &&
-        folder.label !== selectedCollectionRow.display_path,
-    )
-  ) {
-    setRecentFolders((current) =>
-      current.map((folder) =>
-        folder.path === selectedCollectionRow.path
-          ? { ...folder, label: selectedCollectionRow.display_path }
-          : folder,
-      ),
-    );
-  }
   const availableRecentFolders = recentFolders.filter(
     (folder) => folder.path !== selectedCollection,
   );
@@ -1997,6 +1924,7 @@ export function ModelBrowser({ initial }: { initial?: BrowserInitialData }) {
     const params = new URLSearchParams(searchParams.toString());
     params.delete("q");
     params.delete("c");
+    params.delete("cid");
     params.delete("tag");
     params.delete("printer_id");
     params.delete("printer_presence");
@@ -2374,23 +2302,27 @@ export function ModelBrowser({ initial }: { initial?: BrowserInitialData }) {
                   <button
                     key={folder.path}
                     title={folder.label}
+                    disabled={folder.unavailable || folder.pending}
                     role="menuitem"
                     type="button"
                     onClick={() => {
-                      handleCollectionChange(folder.path);
+                      handleCollectionChange(folder.path, folder.id);
                       setRecentFoldersOpen(false);
                     }}
                     className="flex w-full items-center gap-2 rounded px-2.5 py-2 text-left text-xs transition-colors hover:bg-popover-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                   >
                     <Folder className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
-                    <span className="min-w-0 truncate">{folder.label}</span>
+                    <span className="min-w-0 truncate">
+                      {folder.label}
+                      {folder.unavailable ? ` — ${uiText("Unavailable")}` : ""}
+                    </span>
                   </button>
                 ))}
                 <button
                   type="button"
                   role="menuitem"
                   onClick={() => {
-                    setRecentFolders([]);
+                    recent.clear();
                     setRecentFoldersOpen(false);
                   }}
                   className="mt-1 w-full border-t border-border px-2.5 py-2 text-left text-xs text-muted-foreground transition-colors hover:bg-popover-hover hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
@@ -2410,7 +2342,9 @@ export function ModelBrowser({ initial }: { initial?: BrowserInitialData }) {
                     onDoubleClick={openCollectionRename}
                     className="min-w-0 break-words text-lg font-bold tracking-tight text-foreground sm:text-2xl"
                   >
-                    {selectedName ?? uiText("All Models")}
+                    {unavailableCollection
+                      ? uiText("library.collectionUnavailable")
+                      : (selectedName ?? uiText("All Models"))}
                   </h1>
                   {canRenameCollection && (
                     <Button
@@ -2427,11 +2361,13 @@ export function ModelBrowser({ initial }: { initial?: BrowserInitialData }) {
                   )}
                 </div>
                 <p className="text-sm text-muted-foreground">
-                  {loading
-                    ? uiText("Loading...")
-                    : uiText(selectedName ? "counts.collectionItems" : "counts.items", {
-                        count: displayCount,
-                      })}
+                  {unavailableCollection
+                    ? uiText("library.collectionUnavailableHelp")
+                    : loading
+                      ? uiText("Loading...")
+                      : uiText(selectedName ? "counts.collectionItems" : "counts.items", {
+                          count: displayCount,
+                        })}
                   {refreshing && (
                     <span className="ml-2 font-mono text-xs text-muted-foreground">
                       {uiText("Updating...")}
@@ -2966,7 +2902,7 @@ export function ModelBrowser({ initial }: { initial?: BrowserInitialData }) {
           )}
 
           {/* Content */}
-          {docView === "docs" ? (
+          {docView === "docs" && (selectedCollection === null || selectedCollectionRow !== null) ? (
             <DocumentBrowser
               collectionId={selectedCollectionRow?.id ?? null}
               collectionPath={selectedCollection}
@@ -3022,7 +2958,16 @@ export function ModelBrowser({ initial }: { initial?: BrowserInitialData }) {
               )}
               {error && (
                 <div className="mx-6 mt-4 rounded-md border border-destructive/40 bg-destructive/10 p-3 text-sm text-destructive">
-                  {error}
+                  {unavailableCollection ? uiText("library.collectionUnavailableHelp") : error}
+                  {unavailableCollection && (
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => handleCollectionChange(null)}
+                    >
+                      {uiText("aiSearch.backToLibrary")}
+                    </Button>
+                  )}
                   {currentRefresh && currentRefresh.status !== "pending" && (
                     <Button
                       variant="outline"

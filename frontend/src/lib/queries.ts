@@ -127,7 +127,7 @@ const QueryApiContext = createContext<QueryApi>(defaultQueryApi);
 /** Swaps the api implementation the hooks below call. */
 export const QueryApiProvider = QueryApiContext.Provider;
 
-function useQueryApi(): QueryApi {
+export function useQueryApi(): QueryApi {
   return useContext(QueryApiContext);
 }
 
@@ -164,7 +164,7 @@ export function collectionLookupOptions(
   client: QueryClient,
   api: Pick<QueryApi, "lookupCollection"> = defaultQueryApi,
 ) {
-  return queryOptions({
+  return queryOptions<CollectionLookupRead>({
     queryKey: queryKeys.collectionLookup(path),
     queryFn: async ({ signal }) => {
       if (path === null || path === "") throw new Error("Collection lookup requires a path");
@@ -195,15 +195,25 @@ export function useCollectionLookup(path: string | null) {
   });
 }
 
-/** A saved collection id and its named path; idle while no id is selected. */
-export function useCollectionLookupById(id: number | null) {
-  const api = useQueryApi();
-  return useQuery<CollectionLookupRead>({
+/** Resolve a saved identity through the bounded authorized lookup endpoint. */
+export function collectionLookupByIdOptions(
+  id: number | null,
+  api: Pick<QueryApi, "lookupCollectionById"> = defaultQueryApi,
+) {
+  return queryOptions<CollectionLookupRead>({
     queryKey: queryKeys.collectionLookupById(id),
     queryFn: ({ signal }) => {
       if (id === null) throw new Error("Collection lookup requires an id");
       return api.lookupCollectionById(id, { signal });
     },
+  });
+}
+
+/** A saved collection id and its named path; idle while no id is selected. */
+export function useCollectionLookupById(id: number | null) {
+  const api = useQueryApi();
+  return useQuery({
+    ...collectionLookupByIdOptions(id, api),
     enabled: id !== null,
   });
 }
