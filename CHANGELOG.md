@@ -4,6 +4,7 @@
 
 ### Fixed
 
+- Keep the rename pen vertically aligned with Model and collection titles, including wrapped names.
 - Empty collections offer an upload into the current folder; read-only members see permission guidance, and active filters offer filter recovery.
 - Multipart member cards keep Model names readable when file badges wrap on desktop.
 

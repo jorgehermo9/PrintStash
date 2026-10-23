@@ -2365,7 +2365,7 @@ export function ModelBrowser({ initial }: { initial?: BrowserInitialData }) {
           <div className="sticky top-0 z-40 flex flex-col gap-3 border-b border-border bg-background/95 px-4 py-3 backdrop-blur sm:px-6">
             <div className="flex min-w-0 items-start justify-between gap-4">
               <div className="min-w-0 flex-1 space-y-1">
-                <div className="flex min-w-0 items-start gap-1">
+                <div className="flex min-w-0 items-center gap-1">
                   <h1
                     onDoubleClick={openCollectionRename}
                     className="min-w-0 break-words text-lg font-bold tracking-tight text-foreground sm:text-2xl"

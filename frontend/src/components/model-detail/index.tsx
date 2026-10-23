@@ -702,7 +702,7 @@ function ModelDetailPresentation({
                   placeholder={uiText("Model name")}
                 />
               ) : (
-                <div className="flex min-w-0 items-start gap-1">
+                <div className="flex min-w-0 items-center gap-1">
                   <h1
                     onDoubleClick={() => {
                       if (auth.isAuthenticated && canEditModel) enterEdit();
