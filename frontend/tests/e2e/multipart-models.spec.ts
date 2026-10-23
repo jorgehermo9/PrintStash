@@ -85,6 +85,31 @@ const populatedMobileDetail: MultipartModelRead = {
 };
 
 test.describe("multipart models", () => {
+  for (const width of [320, 390]) {
+    test(`keeps the complete multipart heading above actions at ${width}px`, async ({ page }) => {
+      await page.setViewportSize({ width, height: 844 });
+      await page.route("**/api/v1/multipart-models/90", (route) =>
+        route.fulfill({ json: populatedMobileDetail }),
+      );
+      await page.goto("/multipart-models/90");
+      const heading = page.getByRole("heading", {
+        name: populatedMobileDetail.name,
+        level: 1,
+        exact: true,
+      });
+      await expect(heading).toBeVisible();
+      expect(await heading.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(
+        true,
+      );
+      const title = await heading.boundingBox();
+      const edit = await page.getByRole("button", { name: "Edit multipart set" }).boundingBox();
+      const create = await page.getByRole("link", { name: "Create build" }).boundingBox();
+      expect(edit!.y).toBeGreaterThan(title!.y + title!.height);
+      expect(create!.y).toBeGreaterThan(title!.y + title!.height);
+      expect(edit!.x + edit!.width).toBeLessThanOrEqual(width);
+    });
+  }
+
   test("reviews a conflicting composition before saving the preserved draft", async ({ page }) => {
     let detail = { ...populatedMobileDetail };
     const versions: (string | undefined)[] = [];
