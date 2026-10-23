@@ -508,6 +508,9 @@ describe("FilamentProfilesCard", () => {
             return pending.promise;
           },
         });
+        // The conflict panel can render before the save's busy state retires.
+        // Start the review only when the user can activate its button.
+        await waitFor(() => expect(review).toBeEnabled());
         await user.click(review);
         await waitFor(() => expect(signal).toBeDefined());
         await act(async () => {
