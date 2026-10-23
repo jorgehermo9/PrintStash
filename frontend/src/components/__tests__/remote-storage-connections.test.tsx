@@ -524,6 +524,18 @@ describe("RemoteStorageConnections ownership recovery", () => {
 });
 
 describe("RemoteStorageConnections authoritative lifetimes", () => {
+  it("explains administrator access before requesting remote storage", async () => {
+    const app = renderApp(<RemoteStorageConnections />, { auth: memberSession() });
+
+    expect(
+      screen.getByText("Only an administrator can manage remote storage connections."),
+    ).toBeVisible();
+    expect(screen.queryByText("Connections could not be loaded.")).not.toBeInTheDocument();
+    expect(screen.queryByText("No remote storage connected yet.")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Retry" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Save connection" })).not.toBeInTheDocument();
+    expect(app.requestsWithMethod("GET")).toHaveLength(0);
+  });
   it("hides warm private connections on a non-admin mount", async () => {
     const app = renderApp(<RemoteStorageConnections />, {
       auth: memberSession(),
@@ -533,11 +545,12 @@ describe("RemoteStorageConnections authoritative lifetimes", () => {
       ],
     });
     expect(screen.queryByText("Workshop storage")).not.toBeInTheDocument();
-    expect(screen.getByRole("alert")).toHaveTextContent("Connections could not be loaded.");
+    expect(
+      screen.getByText("Only an administrator can manage remote storage connections."),
+    ).toBeVisible();
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Edit" })).not.toBeInTheDocument();
-    const retry = screen.getByRole("button", { name: "Retry" });
-    expect(retry).toBeDisabled();
-    await userEvent.click(retry);
+    expect(screen.queryByRole("button", { name: "Retry" })).not.toBeInTheDocument();
     expect(app.requestsWithMethod("GET")).toHaveLength(0);
   });
   it("hides cached connection content immediately after role loss", async () => {
@@ -564,7 +577,10 @@ describe("RemoteStorageConnections authoritative lifetimes", () => {
     expect(screen.queryByText("Workshop storage")).not.toBeInTheDocument();
     expect(screen.queryByDisplayValue("FakeRoleLostStorageSecret")).not.toBeInTheDocument();
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
-    expect(screen.getByRole("alert")).toHaveTextContent("Connections could not be loaded.");
+    expect(
+      screen.getByText("Only an administrator can manage remote storage connections."),
+    ).toBeVisible();
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
   });
   it("retries a failed provider catalogue while preserving healthy connections", async () => {
     const app = renderApp(<RemoteStorageConnections />, {

@@ -126,7 +126,10 @@ export function RemoteStorageConnections({ disabled = false }: { disabled?: bool
     ...storageConnectionsOptions(),
     enabled: !!user?.is_superuser && !retired,
   });
-  const providerQuery = useQuery({ ...storageProvidersOptions(), enabled: !retired });
+  const providerQuery = useQuery({
+    ...storageProvidersOptions(),
+    enabled: !!user?.is_superuser && !retired,
+  });
   const command = useStorageConnectionCommand();
   const connectionsDenied =
     connectionQuery.isError && storageReadDenied(parseApiError(connectionQuery.error));
@@ -134,7 +137,7 @@ export function RemoteStorageConnections({ disabled = false }: { disabled?: bool
     providerQuery.isError && storageReadDenied(parseApiError(providerQuery.error));
   const connections = !user?.is_superuser || connectionsDenied ? [] : (connectionQuery.data ?? []);
   const providers = providersDenied ? [] : (providerQuery.data ?? []);
-  const catalogueFailed = providerQuery.isError;
+  const catalogueFailed = !!user?.is_superuser && providerQuery.isError;
   const connectionsFailed = connectionQuery.isError || !user?.is_superuser;
   const loading = !!user?.is_superuser && (connectionQuery.isPending || providerQuery.isPending);
   const busy =
@@ -462,7 +465,7 @@ export function RemoteStorageConnections({ disabled = false }: { disabled?: bool
             </Button>
           </div>
         )}
-        {editUnavailable && !connectionsFailed && (
+        {user?.is_superuser && editUnavailable && !connectionsFailed && (
           <p role="alert" className="px-4 py-3 text-sm sm:px-5">
             {i18n.t("storage.connectionUnavailable")}
           </p>
@@ -478,7 +481,11 @@ export function RemoteStorageConnections({ disabled = false }: { disabled?: bool
               </p>
             )}
           </div>
-          {loading ? (
+          {!user?.is_superuser ? (
+            <p className="px-4 pb-4 text-sm text-muted-foreground sm:px-5">
+              {i18n.t("storage.connectionsAdministratorRequired")}
+            </p>
+          ) : loading ? (
             <div
               role="status"
               aria-label={uiText("Loading connections…")}
