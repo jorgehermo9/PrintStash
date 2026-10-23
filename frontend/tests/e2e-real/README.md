@@ -209,3 +209,4 @@ sends no further setup probe.
 - `provider-connections.spec.ts`: issue a pairing code, claim without an account session, resolve competing browser-name drafts through explicit review, then confirm revocation.
 
 - `collections.spec.ts`: ancestor heading/bulk renames through browser Back, reload and persisted Recent, retaining the Model and downloadable Artifact.
+- `saved-views.spec.ts`: keyboard save and rename starts in the named field, replaces the selected name, and persists after reload.

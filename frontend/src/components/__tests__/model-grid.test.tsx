@@ -2480,6 +2480,23 @@ describe("ModelBrowser", () => {
       ).toHaveLength(2);
     });
 
+    it("focuses the saved-view name when creating a view", async () => {
+      const user = userEvent.setup();
+      renderVault({ models: [aModelListItem({ name: "Benchy" })] });
+      await screen.findByText("Benchy");
+      await openLibraryTools();
+      await user.click(screen.getByRole("button", { name: /Saved views/ }));
+      await user.click(await screen.findByRole("button", { name: /Save current view/ }));
+      const input = screen.getByRole("textbox", { name: "View name" });
+      expect(input).toHaveFocus();
+      await user.keyboard("Keyboard view");
+      expect(input).toHaveValue("Keyboard view");
+      await user.keyboard("{Escape}");
+      await waitFor(() =>
+        expect(screen.queryByRole("dialog", { name: "Save current view" })).toBeNull(),
+      );
+    });
+
     it("immediately retires the private create draft with its session", async () => {
       const user = userEvent.setup();
       renderVault({ models: [aModelListItem({ name: "Benchy" })] });

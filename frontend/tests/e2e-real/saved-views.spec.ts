@@ -45,8 +45,10 @@ test.describe("saved views", () => {
     await openLibraryTools(page);
     await savedViewsTrigger(page).click();
     await page.getByText("Save current view").click();
-    await page.getByPlaceholder("Ready to print").fill(viewName);
-    await page.getByRole("button", { name: "Save view" }).click();
+    const createName = page.getByRole("textbox", { name: "View name", exact: true });
+    await expect(createName).toBeFocused();
+    await page.keyboard.type(viewName);
+    await createName.press("Enter");
     // The dialog closes after the server acknowledges the save. Reloading
     // sooner can abort the request before the view is persisted.
     await expect(page.getByRole("dialog", { name: "Save current view" })).toBeHidden();
@@ -70,12 +72,17 @@ test.describe("saved views", () => {
     await openLibraryTools(page);
     await savedViewsTrigger(page).click();
     await page.getByLabel(`Rename ${viewName}`).click();
-    await page
-      .getByRole("dialog", { name: "Rename saved view" })
-      .getByRole("textbox")
-      .fill(renamed);
-    await page.getByRole("button", { name: "Rename", exact: true }).click();
+    const renameName = page.getByRole("textbox", { name: "View name", exact: true });
+    await expect(renameName).toBeFocused();
+    await expect(renameName).toHaveValue(viewName);
+    // Typing replaces the selected name immediately, without a pointer click.
+    await page.keyboard.type(renamed);
+    await renameName.press("Enter");
     await expect(savedViewsTrigger(page)).toContainText(renamed);
+    await page.reload();
+    await openLibraryTools(page);
+    await savedViewsTrigger(page).click();
+    await page.getByRole("button", { name: `${renamed} Recent`, exact: true }).click();
 
     // Duplicate — the duplicate button doesn't close the menu, so the new entry
     // and its own delete control are usable right away.

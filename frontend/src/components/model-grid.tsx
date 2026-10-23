@@ -538,6 +538,11 @@ export function ModelBrowser({ initial }: { initial?: BrowserInitialData }) {
   const [saveViewName, setSaveViewName] = useState("");
   const [saveViewBusy, setSaveViewBusy] = useState(false);
   const [saveViewSession, setSaveViewSession] = useState(savedViewsOwner.session);
+  const saveViewNameInput = useRef<HTMLInputElement>(null);
+  useEffect(() => {
+    if (saveViewOpen && saveViewSession === savedViewsOwner.session)
+      saveViewNameInput.current?.focus();
+  }, [saveViewOpen, saveViewSession, savedViewsOwner.session]);
   const saveViewRevision = useRef(0);
   function openSaveView() {
     saveViewRevision.current += 1;
@@ -2080,7 +2085,7 @@ export function ModelBrowser({ initial }: { initial?: BrowserInitialData }) {
             <label className="block space-y-1.5">
               <span className="text-sm font-medium text-foreground">{uiText("View name")}</span>
               <Input
-                autoFocus
+                ref={saveViewNameInput}
                 value={saveViewName}
                 onChange={(event) => {
                   saveViewRevision.current += 1;

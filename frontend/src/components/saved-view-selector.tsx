@@ -4,7 +4,7 @@ import { uiText } from "@/lib/locale";
 import { useUiLocale } from "@/lib/i18n";
 import { useLibraryStartup } from "@/lib/library-startup-context";
 
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   Bookmark,
   BookmarkPlus,
@@ -87,6 +87,13 @@ export function SavedViewSelector({
   const [deleting, setDeleting] = useState<SavedViewRead | null>(null);
   const [name, setName] = useState("");
   const [busy, setBusy] = useState(false);
+  const nameInput = useRef<HTMLInputElement>(null);
+  useEffect(() => {
+    if (editing) {
+      nameInput.current?.focus();
+      nameInput.current?.select();
+    }
+  }, [editing]);
   const draftRevision = useRef(0);
   const confirmationRevision = useRef(0);
   const filtered = useMemo(() => {
@@ -297,15 +304,18 @@ export function SavedViewSelector({
             }}
             className="space-y-4"
           >
-            <Input
-              autoFocus
-              value={name}
-              onChange={(event) => {
-                draftRevision.current += 1;
-                setName(event.target.value);
-              }}
-              maxLength={128}
-            />
+            <label className="block space-y-1.5">
+              <span className="text-sm font-medium text-foreground">{uiText("View name")}</span>
+              <Input
+                ref={nameInput}
+                value={name}
+                onChange={(event) => {
+                  draftRevision.current += 1;
+                  setName(event.target.value);
+                }}
+                maxLength={128}
+              />
+            </label>
             <div className="flex justify-end gap-2">
               <Button
                 type="button"

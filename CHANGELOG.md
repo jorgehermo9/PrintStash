@@ -18,6 +18,8 @@
   Search, and the getting-started guide have distinct, translated browser titles.
 - Add printer setup scrolls within short screens so every field and action remains reachable. Its dialog is announced by its title to assistive technology.
 
+- Saved-view naming dialogs focus the name field immediately; renaming has a visible accessible label and selects the existing name for keyboard replacement.
+
 ## 0.15.0
 
 **Back up before upgrading to 0.15.0. Every model file will be re-derived in
