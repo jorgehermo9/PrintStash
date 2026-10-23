@@ -4,7 +4,7 @@ import { currentLocale } from "@/lib/locale";
 import { uiText } from "@/lib/locale";
 import { useUiLocale } from "@/lib/i18n";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useRef, useState } from "react";
 import { Bell, Loader2, Plus, Send, Trash2, Pencil } from "lucide-react";
 import {
   createNotificationChannel,
@@ -940,6 +940,7 @@ function ChannelForm({
   reviewRequired: boolean;
 }) {
   useUiLocale();
+  const formId = useId();
   const fields: TargetField[] = TARGET_FIELDS[draft.target];
   const scoped = draft.printerIds !== null;
 
@@ -954,8 +955,11 @@ function ChannelForm({
       >
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
           <div>
-            <label className={LABEL}>{uiText("Name")}</label>
+            <label className={LABEL} htmlFor={formId + "-name"}>
+              {uiText("Name")}
+            </label>
             <input
+              id={formId + "-name"}
               value={draft.name}
               onChange={(e) => setDraft({ ...draft, name: e.target.value })}
               placeholder={uiText("Living-room printer alerts")}
@@ -963,8 +967,11 @@ function ChannelForm({
             />
           </div>
           <div>
-            <label className={LABEL}>{uiText("Type")}</label>
+            <label className={LABEL} htmlFor={formId + "-type"}>
+              {uiText("Type")}
+            </label>
             <select
+              id={formId + "-type"}
               value={draft.target}
               disabled={draft.id !== null}
               onChange={(e) => {
@@ -984,8 +991,11 @@ function ChannelForm({
 
         {fields.map((f) => (
           <div key={f.key}>
-            <label className={LABEL}>{f.label}</label>
+            <label className={LABEL} htmlFor={formId + "-config-" + f.key}>
+              {f.label}
+            </label>
             <input
+              id={formId + "-config-" + f.key}
               type={f.secret ? "password" : "text"}
               value={draft.config[f.key] ?? ""}
               onChange={(e) =>
@@ -1000,8 +1010,8 @@ function ChannelForm({
           </div>
         ))}
 
-        <div>
-          <label className={LABEL}>{uiText("Events")}</label>
+        <fieldset>
+          <legend className={LABEL}>{uiText("Events")}</legend>
           <div className="flex flex-wrap gap-3">
             {EVENTS.map((ev) => (
               <label
@@ -1025,10 +1035,10 @@ function ChannelForm({
               </label>
             ))}
           </div>
-        </div>
+        </fieldset>
 
-        <div>
-          <label className={LABEL}>{uiText("Printers")}</label>
+        <fieldset>
+          <legend className={LABEL}>{uiText("Printers")}</legend>
           <label className="inline-flex items-center gap-1.5 text-xs text-foreground mb-2">
             <input
               type="checkbox"
@@ -1084,7 +1094,7 @@ function ChannelForm({
                 ))}
             </div>
           )}
-        </div>
+        </fieldset>
 
         <label className="inline-flex items-center gap-1.5 text-xs text-foreground">
           <input

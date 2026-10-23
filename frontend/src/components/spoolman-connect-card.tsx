@@ -3,7 +3,7 @@
 import { uiText } from "@/lib/locale";
 import { useUiLocale } from "@/lib/i18n";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import { AlertTriangle, CheckCircle2, Loader2, PlugZap, Save } from "lucide-react";
 
 import { useSpoolmanCommands } from "@/lib/queries/settings-spoolman";
@@ -24,6 +24,7 @@ const SECRET_MASK = "********";
 
 export function SpoolmanConnectCard({ canEdit }: { canEdit: boolean }) {
   useUiLocale();
+  const formId = useId();
   const commands = useSpoolmanCommands(canEdit);
   const query = useSpoolmanStatus({ enabled: canEdit });
   const denied = [401, 403].includes(parseApiError(query.error).status);
@@ -303,10 +304,14 @@ export function SpoolmanConnectCard({ canEdit }: { canEdit: boolean }) {
                 }}
               >
                 <div>
-                  <label className="block text-2xs text-muted-foreground mb-1">
+                  <label
+                    className="block text-2xs text-muted-foreground mb-1"
+                    htmlFor={formId + "-base-url"}
+                  >
                     {uiText("Base URL")}
                   </label>
                   <input
+                    id={formId + "-base-url"}
                     type="url"
                     value={baseUrl}
                     disabled={busy}
@@ -319,11 +324,15 @@ export function SpoolmanConnectCard({ canEdit }: { canEdit: boolean }) {
                   />
                 </div>
                 <div>
-                  <label className="block text-2xs text-muted-foreground mb-1">
+                  <label
+                    className="block text-2xs text-muted-foreground mb-1"
+                    htmlFor={formId + "-api-key"}
+                  >
                     {uiText("API key ")}
                     <span className="opacity-60">{uiText("(optional)")}</span>
                   </label>
                   <input
+                    id={formId + "-api-key"}
                     type="password"
                     autoComplete="off"
                     value={apiKey}
