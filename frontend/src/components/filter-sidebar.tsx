@@ -504,13 +504,17 @@ function CollectionTreeRow({
                 )}
                 {descCount > 0 && node.model_count > 0 && " · "}
                 {node.model_count > 0 && (
-                  <span>
-                    {uiText("counts.models", { count: node.model_count })}
-                    {uiText(" → recycle bin")}
-                  </span>
+                  <span>{uiText("counts.models", { count: node.model_count })}</span>
                 )}
               </p>
             )}
+            <p className="text-3xs text-muted-foreground mb-1.5 leading-snug">
+              {hasContent
+                ? uiText(
+                    "Folders cannot be restored. Their models can be restored from Trash to All Models.",
+                  )
+                : uiText("This folder cannot be restored.")}
+            </p>
             <div className="flex gap-1">
               <button
                 type="button"

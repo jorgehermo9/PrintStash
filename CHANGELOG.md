@@ -5,6 +5,7 @@
 ### Fixed
 
 - Empty collections offer an upload into the current folder; active filters offer filter recovery.
+- Collection delete confirmations explain that folders cannot be restored and their Models recover from Trash into All Models.
 
 - Keep multipart set names and counts readable on narrow screens by placing header actions below the title.
 - Member Settings explain administrator-only remote storage access, omit unavailable version information, disable update checks that require an administrator, and explain why backup controls are unavailable.
