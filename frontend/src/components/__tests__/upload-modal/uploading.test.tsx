@@ -449,7 +449,9 @@ describe("UploadModal ingestion", () => {
       await screen.findByText(".stl .3mf .obj .step .dxf");
       await user.upload(fileInputs(container)[0], new File(["x"], "requested.stl"));
       await user.click(screen.getByRole("button", { name: "Upload to vault" }));
-      await waitFor(() => expect(onUploaded).toHaveBeenCalled(), { timeout: 5000 });
+      await waitFor(() => expect(onUploaded).toHaveBeenCalledWith({ id: 42, created }), {
+        timeout: 5000,
+      });
       expect(listTasks().find((task) => task.uploadedModel?.id === 42)).toMatchObject({
         status: "completed",
         uploadedModel: { id: 42, created },

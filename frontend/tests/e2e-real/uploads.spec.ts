@@ -389,6 +389,17 @@ test.describe("completed upload results", () => {
     await page.getByPlaceholder("e.g. Bracket v2").fill(requested);
     await page.getByRole("button", { name: /upload to vault/i }).click();
     await expect(dialog).toHaveCount(0);
+    const completion = page.locator("[data-sonner-toast]").filter({
+      hasText: "Saved to an existing Model. Open it to review files and revisions.",
+    });
+    await expect(completion).toBeVisible({ timeout: 60_000 });
+    await expect(page.getByRole("button", { name: "Notifications" })).toHaveAttribute(
+      "aria-expanded",
+      "false",
+    );
+    await completion.getByRole("button", { name: "Open Model", exact: true }).click();
+    await expect(page).toHaveURL(new RegExp(`/models/${modelId}$`));
+    await expect(page.getByRole("heading", { name, exact: true })).toBeVisible();
     await page.getByRole("button", { name: "Notifications" }).click();
     const duplicate = page
       .getByText(`Upload ${requested}`, { exact: true })

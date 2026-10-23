@@ -31,6 +31,35 @@ function rowOf(input: Locator): Locator {
 }
 
 test.describe("profiles", () => {
+  for (const kind of ["filament", "printer"] as const) {
+    test(`discards a canceled new ${kind} preset`, async ({ page }) => {
+      await page.setViewportSize({ width: 1440, height: 1000 });
+      await page.goto("/profiles");
+      if (kind === "printer") await page.getByRole("tab", { name: /Printers/ }).click();
+      const writes: string[] = [];
+      page.on("request", (request) => {
+        if (request.method() === "POST" && request.url().endsWith(`/api/v1/${kind}-profiles`)) {
+          writes.push(request.url());
+        }
+      });
+      const opener = page.getByRole("button", { name: `New ${kind}`, exact: true });
+      await opener.click();
+      const form = page.getByRole("form", { name: `Create ${kind} preset` });
+      for (const field of await form.getByRole("textbox").all()) await field.fill("12");
+
+      await form.getByRole("button", { name: "Cancel", exact: true }).click();
+
+      await expect(form).toHaveCount(0);
+      await expect(opener).toBeFocused();
+      await opener.press("Enter");
+      for (const field of await form.getByRole("textbox").all())
+        await expect(field).toHaveValue("");
+      await expect(form.getByRole("button", { name: "Add preset", exact: true })).toBeDisabled();
+      expect(writes).toEqual([]);
+      await form.getByRole("button", { name: "Cancel", exact: true }).click();
+    });
+  }
+
   test("create, edit, and delete a filament preset", async ({ page }) => {
     const name = `e2e-pla-${Date.now()}`;
     await page.goto("/profiles");

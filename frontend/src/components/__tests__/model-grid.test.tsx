@@ -348,6 +348,34 @@ describe("ModelBrowser", () => {
       expect(screen.getByText("Cube")).toBeInTheDocument();
     });
 
+    it("offers an upload into an empty collection", async () => {
+      const user = userEvent.setup();
+      renderVault({
+        at: "/?c=parts&cid=1",
+        collections: [aCollection({ model_count: 0 })],
+      });
+      expect(await screen.findByText("This collection is empty")).toBeVisible();
+      expect(screen.queryByText("Try clearing some filters.")).not.toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: "Clear all filters" })).not.toBeInTheDocument();
+      await user.click(screen.getByRole("button", { name: "Upload files" }));
+      const dialog = await screen.findByRole("dialog", { name: "Upload model" });
+      expect(await within(dialog).findByRole("button", { name: "Parts" })).toBeVisible();
+    });
+
+    it.each(["favorites=true", "material_type=PLA"])(
+      "offers filter recovery for an empty filtered collection (%s)",
+      async (filter) => {
+        renderVault({
+          at: `/?c=parts&cid=1&${filter}`,
+          collections: [aCollection({ model_count: 0 })],
+        });
+        expect(await screen.findByText("Try clearing some filters.")).toBeVisible();
+        expect(screen.getByRole("button", { name: "Clear all filters" })).toBeVisible();
+        expect(screen.queryByText("This collection is empty")).not.toBeInTheDocument();
+        expect(screen.queryByRole("button", { name: "Upload files" })).not.toBeInTheDocument();
+      },
+    );
+
     it("offers the empty state when the library has nothing in it", async () => {
       renderVault();
 

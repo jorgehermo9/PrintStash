@@ -4,9 +4,17 @@
 
 ### Fixed
 
+- Empty collections offer an upload into the current folder; active filters offer filter recovery.
+- Builds and Pending Imports now provide visible starting links and guidance for creating a build or capturing a model URL.
+
+- Collection delete confirmations explain that folders cannot be restored and their Models recover from Trash into All Models.
+
 - Keep multipart set names and counts readable on narrow screens by placing header actions below the title.
-- Member Settings explain administrator-only remote storage access, omit unavailable version information, and disable update checks that require an administrator.
+- Backup uploads explain invalid filenames, damaged archives, and existing copies so operators can correct the file and retry.
+
 - Member Settings explain administrator-only remote storage access, omit unavailable version information, disable update checks that require an administrator, and explain why backup controls are unavailable.
+- Empty Statistics periods explain that reports use completed jobs and offer a direct link to manage printers while keeping the period controls available.
+- Canceling a new filament or printer preset discards its draft and returns keyboard focus to the New button. Collapsing the form still preserves a draft for later.
 - Collection history and Recent folders follow stable identities after heading or bulk renames. Unavailable destinations offer explicit recovery instead of showing an empty library or unrelated results.
 
 - Recent folders now opens inside the screen edge, and long collection paths
@@ -28,7 +36,8 @@
 - G-code layer controls remain usable across the full slider on phones. Mesh-only zoom, reset and dimensions overlays now appear only in the 3D model view.
 
 - Completed uploads identify whether they created a Model or saved to an existing
-  one, with an Open Model link that remains available after reloading.
+  one, with a visible completion notice and Open Model action. The result link
+  remains available in Notifications after reloading.
 
 ## 0.15.0
 

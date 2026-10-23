@@ -251,6 +251,68 @@ describe("FilamentProfilesCard", () => {
     });
   });
 
+  describe("new preset drafts", () => {
+    it.each(["filament", "printer"] as const)("discards a canceled new %s preset", async (kind) => {
+      const user = userEvent.setup();
+      const app = renderCard();
+      if (kind === "printer") await user.click(screen.getByRole("tab", { name: /Printers/ }));
+      const existingName = await screen.findByRole("textbox", {
+        name: kind === "filament" ? "Filament preset name 1" : "Printer preset name 1",
+      });
+      fireEvent.change(existingName, { target: { value: "Unsaved existing row" } });
+      const opener = screen.getByRole("button", {
+        name: kind === "filament" ? "New filament" : "New printer",
+      });
+      await user.click(opener);
+      const formName = kind === "filament" ? "Create filament preset" : "Create printer preset";
+      const form = screen.getByRole("form", { name: formName });
+      for (const field of within(form).getAllByRole("textbox")) await user.type(field, "12");
+
+      await user.click(within(form).getByRole("button", { name: "Cancel" }));
+
+      expect(screen.queryByRole("form", { name: formName })).not.toBeInTheDocument();
+      expect(opener).toHaveFocus();
+      await user.click(opener);
+      for (const field of within(screen.getByRole("form", { name: formName })).getAllByRole(
+        "textbox",
+      )) {
+        expect(field).toHaveValue("");
+      }
+      expect(existingName).toHaveValue("Unsaved existing row");
+      expect(app.requestsWithMethod("POST")).toHaveLength(0);
+      expect(app.requestsWithMethod("PATCH")).toHaveLength(0);
+    });
+
+    it.each(["filament", "printer"] as const)(
+      "preserves a collapsed new %s preset",
+      async (kind) => {
+        const user = userEvent.setup();
+        renderCard();
+        if (kind === "printer") await user.click(screen.getByRole("tab", { name: /Printers/ }));
+        const opener = screen.getByRole("button", {
+          name: kind === "filament" ? "New filament" : "New printer",
+        });
+        await user.click(opener);
+        const formName = kind === "filament" ? "Create filament preset" : "Create printer preset";
+        await user.type(
+          within(screen.getByRole("form", { name: formName })).getByRole("textbox", {
+            name: "Name",
+          }),
+          "Draft to resume",
+        );
+
+        await user.click(opener);
+        await user.click(opener);
+
+        expect(
+          within(screen.getByRole("form", { name: formName })).getByRole("textbox", {
+            name: "Name",
+          }),
+        ).toHaveValue("Draft to resume");
+      },
+    );
+  });
+
   describe("creating a filament preset", () => {
     async function openForm(user: ReturnType<typeof userEvent.setup>) {
       await screen.findByText("Filament presets");

@@ -227,6 +227,10 @@ const ERROR_MESSAGES = {
     "Google Drive isn't available in this server image. Upgrade or rebuild the full image, then try again.",
   storage_connection_probe_failed:
     "Couldn't reach the remote storage. Check its credentials and connection settings, then try again.",
+  backup_filename_invalid: "settings.backupFilenameInvalid",
+  backup_archive_invalid: "settings.backupArchiveInvalid",
+  backup_manifest_invalid: "settings.backupArchiveInvalid",
+  backup_already_exists: "settings.backupAlreadyExists",
   backup_destination_required: "Select at least one available destination for this backup.",
   backup_all_destinations_failed:
     "The backup couldn't be saved to any selected destination. Check each destination and try again.",

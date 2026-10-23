@@ -53,6 +53,7 @@ import {
   runBulkModelUpload,
   type ModelUploadFiles,
 } from "@/lib/model-upload-workflow";
+import type { UploadedModelResult } from "@/lib/model-upload-result";
 import { startArchiveTransfer } from "@/lib/archive-upload";
 
 // `webkitdirectory` enables folder selection on a file input but isn't in the
@@ -115,7 +116,7 @@ export function UploadModal({
 }: {
   open: boolean;
   onClose: () => void;
-  onUploaded: () => Promise<void>;
+  onUploaded: (result?: UploadedModelResult) => Promise<void>;
   defaultCollection?: string | null;
   preloadFiles?: File[] | null;
   preloadItems?: BulkItem[] | null;

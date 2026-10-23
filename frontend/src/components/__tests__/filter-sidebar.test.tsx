@@ -616,15 +616,22 @@ describe("FilterSidebar", () => {
       expect(await screen.findByText(/Delete “Parts”\?/)).toBeInTheDocument();
     });
 
-    it("warns that a folder with models is not empty", async () => {
+    it("explains populated sidebar collection recovery", async () => {
       // Deleting one sends its models to the recycle bin; a bare "Delete?" hides
       // that entirely.
       const user = userEvent.setup();
-      renderSidebar();
+      renderSidebar({
+        collections: [aCollection({ id: 1, name: "Parts", path: "parts", model_count: 3 })],
+      });
 
       await user.click((await screen.findAllByTitle("Delete collection"))[0]);
 
-      expect(await screen.findByText(/models → recycle bin/)).toBeInTheDocument();
+      expect(await screen.findByText("3 models")).toBeInTheDocument();
+      expect(
+        screen.getByText(
+          "Folders cannot be restored. Their models can be restored from Trash to All Models.",
+        ),
+      ).toBeVisible();
     });
 
     it("counts every folder nested at any depth beneath it", async () => {
@@ -651,7 +658,7 @@ describe("FilterSidebar", () => {
       expect(onDeleteCollection).toHaveBeenCalledWith(1, true);
     });
 
-    it("says a folder with nothing in it takes nothing with it", async () => {
+    it("explains empty sidebar collection removal", async () => {
       const user = userEvent.setup();
       renderSidebar({
         collections: [
@@ -661,7 +668,8 @@ describe("FilterSidebar", () => {
 
       await user.click(await screen.findByTitle("Delete collection"));
 
-      expect(screen.queryByText(/recycle bin/)).toBeNull();
+      expect(screen.getByText("This folder cannot be restored.")).toBeVisible();
+      expect(screen.queryByText(/Their models can be restored/)).not.toBeInTheDocument();
     });
 
     it("backs out of the confirmation", async () => {
