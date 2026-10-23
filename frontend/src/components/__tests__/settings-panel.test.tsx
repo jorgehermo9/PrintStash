@@ -574,6 +574,30 @@ describe("SettingsPanel", () => {
   });
 
   describe("collection access", () => {
+    it("restores trigger focus after dismissing the collection picker", async () => {
+      const user = userEvent.setup();
+      renderSettings({ at: "/settings?section=access" });
+      const trigger = await screen.findByRole("button", { name: "Select collection" });
+      await user.click(trigger);
+      await user.click(await screen.findByRole("textbox", { name: "Find destination" }));
+
+      await user.keyboard("{Escape}");
+
+      await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+      expect(trigger).toHaveFocus();
+    });
+
+    it("shows an empty collection picker", async () => {
+      const user = userEvent.setup();
+      renderSettings({
+        at: "/settings?section=access",
+        routes: collectionTreeRoutes([]),
+      });
+      await user.click(await screen.findByRole("button", { name: "Select collection" }));
+
+      expect(await screen.findByText("No collections found.")).toBeVisible();
+    });
+
     async function pickParts(user: ReturnType<typeof userEvent.setup>) {
       await user.click(screen.getByRole("button", { name: "Select collection" }));
       await user.click(await screen.findByRole("option", { name: /Parts/ }));

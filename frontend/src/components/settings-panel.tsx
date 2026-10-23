@@ -2698,7 +2698,8 @@ export function SettingsPanel() {
                             onOpenChange={setAccessPickerOpen}
                             role="dialog"
                             align="start"
-                            contentClassName="w-80 max-w-[90vw] p-2"
+                            portal
+                            contentClassName="w-80 max-w-[90vw] rounded-md border border-border bg-popover p-2 text-popover-foreground shadow-lg"
                             trigger={
                               <button
                                 type="button"
