@@ -687,6 +687,7 @@ export function FilterSidebarContent({
   tags,
   printers,
   selectedCollection,
+  selectedCollectionId = null,
   selectedTags,
   selectedPrinterId,
   selectedPrinterPresence,
@@ -737,7 +738,7 @@ export function FilterSidebarContent({
     const timer = setTimeout(() => setSearchText(outlinerQ), 250);
     return () => clearTimeout(timer);
   }, [outlinerQ]);
-  const lookup = useCollectionLookup(selectedCollection);
+  const lookup = useCollectionLookup(selectedCollection, selectedCollectionId);
   const revealNodes =
     lookup.data?.collection.path === selectedCollection
       ? [...lookup.data.ancestors, lookup.data.collection]
@@ -1291,6 +1292,7 @@ export interface FilterSidebarProps {
   tags: TagRead[];
   printers: PrinterRead[];
   selectedCollection: string | null;
+  selectedCollectionId?: number | null;
   selectedTags: string[];
   selectedPrinterId: number | null;
   selectedPrinterPresence: "any" | "none" | null;

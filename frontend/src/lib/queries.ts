@@ -184,12 +184,14 @@ export function collectionLookupOptions(
   });
 }
 
-/** The collection at `path` and its ancestors; idle while `path` is null. */
-export function useCollectionLookup(path: string | null) {
+/** Resolve a selected identity when available; legacy paths remain bounded lookups. */
+export function useCollectionLookup(path: string | null, id: number | null = null) {
   const api = useQueryApi();
   const client = useQueryClient();
   return useQuery({
-    ...collectionLookupOptions(path, client, api),
+    ...(id === null
+      ? collectionLookupOptions(path, client, api)
+      : collectionLookupByIdOptions(id, api)),
     enabled: path !== null && path !== "",
     placeholderData: keepPreviousData,
   });

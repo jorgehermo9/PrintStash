@@ -378,6 +378,8 @@ destination, replacing renamed or moved paths in place. Legacy path-only links a
 unrecoverable links show an unavailable collection with recovery to the library.
 Recent keeps at most six identities and revalidates them when its menu opens,
 so persisted entries follow ancestor mutations without guessing path prefixes.
+The desktop outliner and mobile filter drawer share the selected identity lookup,
+avoiding a speculative read of the old path while its canonical URL resolves.
 
 A library transition renders one coherent source or destination snapshot: heading,
 folder breadcrumbs, outliner context and cards agree. While showing a prior

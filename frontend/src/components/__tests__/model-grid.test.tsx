@@ -4229,6 +4229,9 @@ describe("ModelBrowser", () => {
       expect(screen.getByTestId("vault-location")).toHaveTextContent("cid=9");
       expect(screen.queryByRole("heading", { name: "Reused old path", level: 1 })).toBeNull();
       expect(app.requests().some(({ url }) => url.includes("/collections/lookup?id=9"))).toBe(true);
+      expect(app.requests().some(({ url }) => url.includes("/collections/lookup?path=old"))).toBe(
+        false,
+      );
     });
 
     it.each([

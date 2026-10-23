@@ -146,6 +146,17 @@ async function openFolder(user: ReturnType<typeof userEvent.setup>, name: string
 }
 
 describe("FilterSidebar", () => {
+  it("resolves a restored sidebar selection by identity", async () => {
+    const app = renderSidebar({
+      selectedCollection: "former/brackets",
+      selectedCollectionId: 2,
+    });
+    await waitFor(() =>
+      expect(app.requests().some(({ url }) => url.includes("/collections/lookup?id=2"))).toBe(true),
+    );
+    expect(app.requests().some(({ url }) => url.includes("/collections/lookup?path="))).toBe(false);
+  });
+
   it("translates an already mounted Multipart Model leaf", async () => {
     renderSidebar({ multipartModels: [multipartSet()] });
     const leaf = await screen.findByRole("button", { name: "Dragon figure" }, { timeout: 5000 });
