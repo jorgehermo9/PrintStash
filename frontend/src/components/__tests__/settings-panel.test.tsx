@@ -215,6 +215,19 @@ describe("SettingsPanel", () => {
       expect(await screen.findByText(/0\.12\.1/)).toBeInTheDocument();
     });
 
+    it.each([
+      { label: "a member", auth: memberSession() },
+      { label: "a visitor", auth: memberSession({ user: null }) },
+    ])("omits unavailable health rows for $label", async ({ auth }) => {
+      renderSettings({ auth });
+
+      const system = await screen.findByRole("group", { name: "System" });
+      expect(within(system).getByText("Storage backend")).toBeVisible();
+      expect(within(system).queryByText("Vault version")).not.toBeInTheDocument();
+      expect(within(system).queryByText("Database")).not.toBeInTheDocument();
+      expect(within(system).queryByText("Loading...")).not.toBeInTheDocument();
+    });
+
     it("shows restart when the deployment supervisor supports it", async () => {
       renderSettings({
         routes: {

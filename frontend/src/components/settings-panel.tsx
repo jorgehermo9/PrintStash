@@ -1852,28 +1852,32 @@ export function SettingsPanel() {
 
   // System detail rows — configuration facts, distinct from the KPI tiles.
   const systemItems = [
-    {
-      get label() {
-        return uiText("Vault version");
-      },
-      value: health ? `${health.name} v${health.version}` : uiText("Loading..."),
-      desc: uiText("API server status and version"),
-      icon: Server,
-    },
-    {
-      get label() {
-        return uiText("Database");
-      },
-      value: health?.components?.database
-        ? health.components.database.ok
-          ? uiText("Connected")
-          : uiText("Unavailable")
-        : health?.status === "ok"
-          ? uiText("Connected")
-          : uiText("Unknown"),
-      desc: uiText("SQLite by default, Postgres optional"),
-      icon: Database,
-    },
+    ...(user?.is_superuser
+      ? [
+          {
+            get label() {
+              return uiText("Vault version");
+            },
+            value: health ? `${health.name} v${health.version}` : uiText("Loading..."),
+            desc: uiText("API server status and version"),
+            icon: Server,
+          },
+          {
+            get label() {
+              return uiText("Database");
+            },
+            value: health?.components?.database
+              ? health.components.database.ok
+                ? uiText("Connected")
+                : uiText("Unavailable")
+              : health?.status === "ok"
+                ? uiText("Connected")
+                : uiText("Unknown"),
+            desc: uiText("SQLite by default, Postgres optional"),
+            icon: Database,
+          },
+        ]
+      : []),
     {
       get label() {
         return uiText("Storage backend");

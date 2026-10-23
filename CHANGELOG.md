@@ -4,6 +4,7 @@
 
 ### Fixed
 
+- Members no longer see a permanently loading server version in Settings; storage settings explain when administrator access is required.
 - Backup settings keep titles and translated action labels readable on narrow screens.
 - Recent folders now opens inside the screen edge, and long collection paths
   wrap within the Model Overview panel without horizontal overflow.
