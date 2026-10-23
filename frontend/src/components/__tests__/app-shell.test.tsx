@@ -220,6 +220,28 @@ describe("AppShell", () => {
   });
 
   describe("the browser tab", () => {
+    it.each([
+      ["/inbox", "Pending Imports", "Importaciones pendientes"],
+      ["/inbox/41", "Pending Imports", "Importaciones pendientes"],
+      ["/builds", "Builds", "Fabricaciones"],
+      ["/builds/1", "Builds", "Fabricaciones"],
+      ["/search", "Search", "Buscar"],
+      ["/getting-started", "Getting started", "Primeros pasos"],
+    ])("names %s in the active locale", async (at, english, spanish) => {
+      localStorage.setItem("printstash.locale", "es");
+      const view = renderShell({ at, locale: "es" });
+      await waitFor(() => expect(document.title).toBe(`${spanish} · PrintStash`));
+      view.unmount();
+      localStorage.setItem("printstash.locale", "en");
+      renderShell({ at });
+      await waitFor(() => expect(document.title).toBe(`${english} · PrintStash`));
+    });
+
+    it("keeps unknown routes' fallback title concise", async () => {
+      renderShell({ at: "/unknown" });
+      await waitFor(() => expect(document.title).toBe("PrintStash"));
+    });
+
     it("names the vault", async () => {
       renderShell();
 

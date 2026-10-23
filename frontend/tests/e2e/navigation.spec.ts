@@ -101,3 +101,25 @@ test.describe("app navigation", () => {
     );
   });
 });
+
+for (const width of [1280, 390]) {
+  test(`${width === 1280 ? "desktop" : "mobile"} navigation opens Builds`, async ({ page }) => {
+    await page.setViewportSize({ width, height: 844 });
+    await page.goto("/");
+    await expect(page.getByRole("heading", { name: "All Models" })).toBeVisible();
+    if (width === 1280) {
+      await page.getByRole("button", { name: "tester" }).click();
+      await page.getByRole("menuitem", { name: "Builds", exact: true }).click();
+    } else {
+      await page.locator("nav").getByRole("button", { name: "More", exact: true }).click();
+      await page
+        .getByRole("dialog", { name: "More" })
+        .getByRole("link", { name: "Builds", exact: true })
+        .click();
+      await expect(page.getByRole("dialog", { name: "More" })).toHaveCount(0);
+    }
+    await expect(page).toHaveURL(/\/builds$/);
+    await expect(page.getByRole("heading", { name: "Builds", exact: true })).toBeVisible();
+    await expect(page).toHaveTitle("Builds · PrintStash");
+  });
+}
