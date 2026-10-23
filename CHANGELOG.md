@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Dropdown menus stay on screen on narrow and short displays, including Statistics customization and Model actions.
+
 ## 0.15.0
 
 **Back up before upgrading to 0.15.0. Every model file will be re-derived in
