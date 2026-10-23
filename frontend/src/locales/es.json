@@ -1,4 +1,5 @@
 {
+  "library.collectionReadOnlyEmptyHelp": "Solo tienes permiso de lectura en esta colección. Pide permiso de edición a un administrador para añadir modelos.",
   "library.collectionEmpty": "Esta colección está vacía",
   "library.collectionEmptyHelp": "Sube archivos o importa un modelo desde una URL a esta colección.",
   "materials.loadFailed": "No se pudieron cargar los materiales de la impresora. Reintenta para recuperarlos.",

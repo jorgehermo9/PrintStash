@@ -1,4 +1,5 @@
 {
+  "library.collectionReadOnlyEmptyHelp": "You have view-only access to this collection. Ask an administrator for edit access to add Models.",
   "library.collectionEmpty": "This collection is empty",
   "library.collectionEmptyHelp": "Upload files or import a Model from a URL into this collection.",
   "materials.loadFailed": "Could not load printer materials. Retry to recover.",
