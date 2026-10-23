@@ -3,8 +3,31 @@
  * Statistics and a view-only Model put their triggers near the phone screen's
  * left edge; every option must remain reachable without horizontal scrolling.
  */
-import { test, expect, authBundleFor, authedContext } from "./helpers";
+import { test as authenticatedTest, expect, authBundleFor, authedContext } from "./helpers";
 import { modelCard, uploadModel } from "./util";
+
+const test = authenticatedTest.extend({
+  page: async ({ page }, use) => {
+    const errors: string[] = [];
+    page.on("pageerror", (error) => errors.push(error.message));
+    page.on("console", (message) => {
+      if (message.text().startsWith("Native browser error:")) errors.push(message.text());
+    });
+    await page.addInitScript(() => {
+      window.addEventListener("error", (event) => {
+        console.error("Native browser error: " + event.message);
+      });
+    });
+    await use(page);
+    await page.evaluate(
+      () =>
+        new Promise<void>((resolve) =>
+          requestAnimationFrame(() => requestAnimationFrame(() => resolve())),
+        ),
+    );
+    expect(errors).toEqual([]);
+  },
+});
 
 test.describe("dropdown viewport placement", () => {
   test("keeps Statistics customization reachable on a phone", async ({ page }) => {
