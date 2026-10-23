@@ -13,6 +13,8 @@
 - URL capture now explains invalid links, and offline printer errors identify the printer connection instead of blaming the PrintStash server. Offline controls explain their connection requirement; transport details remain in Diagnostics.
 - Notification channel and Spoolman form fields expose their visible labels to assistive technology and focus correctly when their labels are clicked.
 - Dropdown menus stay on screen on narrow and short displays, including Statistics customization and Model actions.
+- Builds is reachable from the account menu and mobile More sheet. Inbox, Builds,
+  Search, and the getting-started guide have distinct, translated browser titles.
 
 ## 0.15.0
 

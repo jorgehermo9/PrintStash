@@ -16,6 +16,7 @@ import {
   LogOut,
   MoreHorizontal,
   Inbox,
+  Layers,
   ScanSearch,
   Printer,
   Settings,
@@ -48,6 +49,7 @@ const NAV_ITEMS: NavItem[] = [
   { href: "/library/similar", labelKey: "nav.similar", icon: ScanSearch },
   { href: "/printers", labelKey: "nav.printers", icon: Printer, adminOnly: true },
   { href: "/profiles", labelKey: "nav.profiles", icon: SlidersHorizontal },
+  { href: "/builds", labelKey: "build.title", icon: Layers },
   { href: "/statistics", labelKey: "nav.stats", icon: BarChart3, adminOnly: true },
   { href: "/settings", labelKey: "nav.settings", icon: Settings },
   {

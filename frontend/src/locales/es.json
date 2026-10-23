@@ -4484,5 +4484,6 @@
   "Could not connect to the printer. Check its address and network connection, then retry.": "No se pudo conectar con la impresora. Comprueba su dirección y conexión de red e inténtalo de nuevo.",
   "Enter a valid http(s) URL for a model page or file.": "Introduce una URL http(s) válida de una página de modelo o un archivo.",
   "This request could not be completed. Try again.": "No se pudo completar esta solicitud. Inténtalo de nuevo.",
-  "Printer is offline. Check its address and connection before sending commands.": "La impresora está desconectada. Comprueba su dirección y conexión antes de enviar comandos."
+  "Printer is offline. Check its address and connection before sending commands.": "La impresora está desconectada. Comprueba su dirección y conexión antes de enviar comandos.",
+  "nav.gettingStarted": "Primeros pasos"
 }
