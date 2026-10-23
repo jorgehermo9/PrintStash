@@ -23,6 +23,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { SpoolmanConnectCard } from "@/components/spoolman-connect-card";
 import { clearLogin } from "@/lib/auth-store";
+import { SUPPORTED_LOCALES } from "@/lib/locale";
+import { localeDefinitions } from "@/locales/catalogs";
 import { queryKeys } from "@/lib/query-client";
 import { json, renderApp, type RenderAppOptions } from "@/test-support/render";
 import type { SpoolmanStatus } from "@/types";
@@ -69,7 +71,29 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
+const fieldLabelCases = SUPPORTED_LOCALES.flatMap((locale) =>
+  [
+    localeDefinitions[locale].messages["Base URL"],
+    localeDefinitions[locale].messages["API key "] +
+      localeDefinitions[locale].messages["(optional)"],
+  ].map((label) => ({ locale, label })),
+);
+
 describe("SpoolmanConnectCard", () => {
+  it.each(fieldLabelCases)(
+    "focuses $locale field $label from its visible label",
+    async ({ locale, label }) => {
+      const user = userEvent.setup();
+      renderCard({ locale });
+
+      const control = await screen.findByLabelText<HTMLInputElement>(label, { exact: true });
+      await user.click(control.labels![0]);
+
+      expect(control).toHaveFocus();
+      expect(control).toHaveAccessibleName(label);
+    },
+  );
+
   describe("what it shows", () => {
     it("preserves a connection draft on status refresh", async () => {
       const { client } = renderCard();

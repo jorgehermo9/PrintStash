@@ -635,9 +635,11 @@ export function StorageConfigCard({
             </div>
           )}
 
-          {!canEdit && (
+          {!user?.is_superuser && (
             <p className="text-xs text-muted-foreground italic">
-              {uiText("Sign in to modify configuration.")}
+              {user
+                ? t("settings.storageAdministratorRequired")
+                : uiText("Sign in to modify configuration.")}
             </p>
           )}
         </div>
