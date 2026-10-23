@@ -574,6 +574,30 @@ describe("SettingsPanel", () => {
   });
 
   describe("collection access", () => {
+    it("restores trigger focus after dismissing the collection picker", async () => {
+      const user = userEvent.setup();
+      renderSettings({ at: "/settings?section=access" });
+      const trigger = await screen.findByRole("button", { name: "Select collection" });
+      await user.click(trigger);
+      await user.click(await screen.findByRole("textbox", { name: "Find destination" }));
+
+      await user.keyboard("{Escape}");
+
+      await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+      expect(trigger).toHaveFocus();
+    });
+
+    it("shows an empty collection picker", async () => {
+      const user = userEvent.setup();
+      renderSettings({
+        at: "/settings?section=access",
+        routes: collectionTreeRoutes([]),
+      });
+      await user.click(await screen.findByRole("button", { name: "Select collection" }));
+
+      expect(await screen.findByText("No collections found.")).toBeVisible();
+    });
+
     async function pickParts(user: ReturnType<typeof userEvent.setup>) {
       await user.click(screen.getByRole("button", { name: "Select collection" }));
       await user.click(await screen.findByRole("option", { name: /Parts/ }));
@@ -1766,6 +1790,55 @@ describe("SettingsPanel", () => {
       ).toBeVisible();
     });
 
+    it.each([
+      [
+        "backup_filename_invalid",
+        "Use the original PrintStash backup filename. Download the backup again if it was renamed.",
+      ],
+      [
+        "backup_archive_invalid",
+        "This file is not a valid PrintStash backup. Download or create a new backup, then upload it.",
+      ],
+      [
+        "backup_manifest_invalid",
+        "This file is not a valid PrintStash backup. Download or create a new backup, then upload it.",
+      ],
+      [
+        "backup_already_exists",
+        "This backup copy already exists. Use the listed backup or choose a different archive.",
+      ],
+    ])("recovers from rejected backup upload %s", async (code, message) => {
+      const user = userEvent.setup();
+      const app = renderSettings({
+        at: "/settings?section=backup",
+        routes: { "POST /api/v1/backups/upload": json({ detail: code }, 409) },
+      });
+      const upload = await screen.findByLabelText("Upload backup archive");
+      await user.upload(
+        upload,
+        new File(["rejected"], "printstash-backup-rejected.tar.gz", {
+          type: "application/gzip",
+        }),
+      );
+
+      expect(await screen.findByText(message)).toBeVisible();
+      expect(upload).toBeEnabled();
+      app.route({
+        "POST /api/v1/backups/upload": json(BACKUP, 201),
+        "GET /api/v1/backups/sources": json([BACKUP]),
+      });
+      await user.upload(
+        upload,
+        new File(["valid"], "printstash-backup-corrected.tar.gz", {
+          type: "application/gzip",
+        }),
+      );
+      expect(await screen.findByText(BACKUP.backup_id)).toBeVisible();
+      expect(
+        app.requestsWithMethod("POST").filter((request) => request.url.endsWith("/backups/upload")),
+      ).toHaveLength(2);
+    });
+
     it("uploads the selected backup archive", async () => {
       const user = userEvent.setup();
       let uploaded: FormDataEntryValue | null = null;
@@ -1900,6 +1973,8 @@ describe("SettingsPanel", () => {
     it("tells a non-admin they cannot see the backups", async () => {
       renderSettings({ at: "/settings?section=backup", auth: memberSession() });
 
+      expect(await screen.findByText("Only an administrator can manage backups.")).toBeVisible();
+      expect(screen.getByLabelText("Upload backup archive")).toBeDisabled();
       expect(await screen.findByText("Superuser access is required.")).toBeInTheDocument();
     });
   });
@@ -1988,7 +2063,7 @@ describe("SettingsPanel", () => {
         expect(screen.getByRole("button", { name: "Save backup settings" })).toBeDisabled();
         await userEvent.click(screen.getByRole("button", { name: "Review latest version" }));
         const latest = await screen.findByRole("region", { name: "Latest saved version" });
-        expect(within(latest).getByText("06:45")).toBeVisible();
+        expect(await within(latest).findByText("06:45")).toBeVisible();
         expect(screen.getByLabelText("Daily time (UTC)")).toHaveValue("02:00");
         await userEvent.click(
           screen.getByRole("button", { name: "Save my draft against this version" }),
@@ -2350,9 +2425,7 @@ describe("SettingsPanel", () => {
       await user.click(screen.getByRole("button", { name: "Create preview" }));
 
       expect(
-        await screen.findByText(
-          "Something went wrong reaching the server. Check that PrintStash is running and try again.",
-        ),
+        await screen.findByText("This request could not be completed. Try again."),
       ).toBeVisible();
       expect(screen.queryByText("GC plan #12 · preview")).not.toBeInTheDocument();
     });
@@ -2573,6 +2646,17 @@ describe("SettingsPanel", () => {
   });
 
   describe("about", () => {
+    it("omits unavailable member version information", async () => {
+      const app = renderSettings({ at: "/settings?section=about", auth: memberSession() });
+
+      expect(await screen.findByText("Latest changes")).toBeVisible();
+      expect(screen.queryByText("v0.2.0")).not.toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Check for updates" })).toBeDisabled();
+      expect(
+        app.requestsWithMethod("GET").filter((request) => request.url.includes("/health/")),
+      ).toHaveLength(0);
+    });
+
     it("shows the version running", async () => {
       renderSettings({ at: "/settings?section=about" });
 
@@ -3295,9 +3379,7 @@ describe("Settings account intent", () => {
     });
     await userEvent.click(screen.getByRole("button", { name: "Create" }));
     expect(
-      await screen.findByText(
-        "Something went wrong reaching the server. Check that PrintStash is running and try again.",
-      ),
+      await screen.findByText("This request could not be completed. Try again."),
     ).toBeVisible();
     expect(username).toHaveValue("retry-maker");
     expect(screen.getByLabelText("Initial password")).toHaveValue("FakePassword123");
@@ -3589,9 +3671,7 @@ describe("Settings resource access recovery", () => {
     await userEvent.selectOptions(within(card).getByLabelText("Role"), "edit");
     await userEvent.click(within(card).getByRole("button", { name: "Grant" }));
     expect(
-      await screen.findByText(
-        "Something went wrong reaching the server. Check that PrintStash is running and try again.",
-      ),
+      await screen.findByText("This request could not be completed. Try again."),
     ).toBeVisible();
     expect(within(card).getByLabelText("User")).toHaveValue("2");
     expect(within(card).getByLabelText("Role")).toHaveValue("edit");
@@ -3750,6 +3830,7 @@ describe("Settings remote read recovery", () => {
       },
     });
     expect(await screen.findByText("System health could not be loaded.")).toBeVisible();
+    expect(screen.queryByText("v0.2.0")).not.toBeInTheDocument();
     app.route({ "GET /api/v1/health/details": json(HEALTH) });
     await userEvent.click(screen.getByRole("button", { name: "Retry health check" }));
     await waitFor(() =>

@@ -1056,7 +1056,7 @@ describe("Storage configuration ownership", () => {
     await userEvent.click(
       within(screen.getByRole("dialog")).getByRole("button", { name: "Enroll root" }),
     );
-    await screen.findByText(/Something went wrong/);
+    await screen.findByText("This request could not be completed. Try again.");
     await userEvent.click(
       within(screen.getByRole("dialog")).getByRole("button", { name: "Enroll root" }),
     );

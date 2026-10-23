@@ -58,7 +58,9 @@ async function snapshotApi(page: Page) {
       const url = new URL(route.request().url());
       const row = collections.find((candidate) =>
         url.pathname.endsWith("/lookup")
-          ? candidate.path === url.searchParams.get("path")
+          ? url.searchParams.has("id")
+            ? candidate.id === Number(url.searchParams.get("id"))
+            : candidate.path === url.searchParams.get("path")
           : url.pathname.endsWith("/children")
             ? String(candidate.id) === url.searchParams.get("parent_id")
             : url.pathname.endsWith("/readme")

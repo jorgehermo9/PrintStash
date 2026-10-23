@@ -84,10 +84,13 @@ describe("toast.error", () => {
   });
 
   describe("something else entirely", () => {
-    it("falls back to the network copy for a thrown non-Error", async () => {
+    it("uses neutral recovery copy for a thrown non-Error", async () => {
       raise({ nope: true });
 
-      expect(await screen.findByText(NETWORK_COPY)).toBeInTheDocument();
+      expect(
+        await screen.findByText("This request could not be completed. Try again."),
+      ).toBeInTheDocument();
+      expect(screen.queryByText(NETWORK_COPY)).not.toBeInTheDocument();
     });
   });
 });

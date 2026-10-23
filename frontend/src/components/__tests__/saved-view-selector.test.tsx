@@ -14,7 +14,7 @@
 
 import "@testing-library/jest-dom/vitest";
 import { describe, expect, it, vi } from "vitest";
-import { act, render, screen, within } from "@testing-library/react";
+import { act, render, screen, within, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { SavedViewSelector } from "@/components/saved-view-selector";
 import type { ComponentProps } from "react";
@@ -80,6 +80,33 @@ describe("SavedViewSelector", () => {
         .querySelector('button[type="submit"]')!,
     );
     expect(handlers.onRename).toHaveBeenCalledWith(saved, "Daily prints");
+  });
+
+  it("exposes a focused rename field", async () => {
+    const user = userEvent.setup();
+    const handlers = handlerSpies();
+    render(<SavedViewSelector views={[view(1, "Workshop")]} activeId={null} {...handlers} />);
+    await user.click(screen.getByRole("button", { name: /Saved views/ }));
+    await user.click(screen.getByRole("button", { name: "Rename Workshop" }));
+    const input = screen.getByRole<HTMLInputElement>("textbox", { name: "View name" });
+    expect(input).toHaveFocus();
+    expect(input.selectionStart).toBe(0);
+    expect(input.selectionEnd).toBe("Workshop".length);
+    await user.keyboard("Daily prints{Enter}");
+    expect(handlers.onRename).toHaveBeenCalledWith(view(1, "Workshop"), "Daily prints");
+  });
+
+  it("cancels a keyboard rename without saving", async () => {
+    const user = userEvent.setup();
+    const handlers = handlerSpies();
+    render(<SavedViewSelector views={[view(1, "Workshop")]} activeId={null} {...handlers} />);
+    await user.click(screen.getByRole("button", { name: /Saved views/ }));
+    await user.click(screen.getByRole("button", { name: "Rename Workshop" }));
+    await user.keyboard("Discarded{Escape}");
+    await waitFor(() =>
+      expect(screen.queryByRole("dialog", { name: "Rename saved view" })).toBeNull(),
+    );
+    expect(handlers.onRename).not.toHaveBeenCalled();
   });
 
   it("starts saving current filters from the selector", async () => {

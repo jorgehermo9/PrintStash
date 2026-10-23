@@ -83,7 +83,22 @@ function BuildList() {
   if (created) return <Navigate to={`/builds/${created}`} />;
   return (
     <PageContainer>
-      <PageHeader title={t("build.title")} description={t("build.help")} />
+      <PageHeader
+        title={t("build.title")}
+        description={
+          <>
+            {t("build.help")}
+            {compositionId <= 0 && <span className="block">{t("build.startHelp")}</span>}
+          </>
+        }
+        actions={
+          compositionId <= 0 ? (
+            <Button asChild>
+              <Link to="/?type=multipart">{t("build.chooseMultipart")}</Link>
+            </Button>
+          ) : undefined
+        }
+      />
       {displayedError && (
         <p role="alert" className="text-destructive">
           {t(displayedError)}

@@ -130,6 +130,32 @@ describe("BatchToolbar", () => {
     expect(props.onDeleteSelection).toHaveBeenCalledTimes(1);
   });
 
+  it.each([
+    { label: "folder-only selection", modelCount: 0 },
+    { label: "mixed selection", modelCount: 2 },
+  ])("explains collection deletion recovery for $label", async ({ modelCount }) => {
+    const user = userEvent.setup();
+    setup({ modelCount, selectedCollections: [node(collection())] });
+
+    await user.click(screen.getByRole("button", { name: /^delete$/i }));
+
+    expect(screen.getByRole("dialog")).toHaveTextContent(
+      "Folders cannot be restored. Their models can be restored from Trash to All Models.",
+    );
+  });
+
+  it("retains model-only deletion guidance", async () => {
+    const user = userEvent.setup();
+    setup({ modelCount: 2 });
+
+    await user.click(screen.getByRole("button", { name: /^delete$/i }));
+
+    expect(screen.getByRole("dialog")).toHaveTextContent(
+      "They move to trash and can be restored until purged.",
+    );
+    expect(screen.getByRole("dialog")).not.toHaveTextContent("Folders cannot be restored");
+  });
+
   it("clears the selection", async () => {
     const user = userEvent.setup();
     const props = setup();

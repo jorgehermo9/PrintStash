@@ -435,6 +435,29 @@ describe("UploadModal ingestion", () => {
   });
 
   describe("a mesh on its own", () => {
+    it.each([true, false])("records the confirmed upload destination (%s)", async (created) => {
+      const user = userEvent.setup();
+      setJobSource(async () => [
+        aJob({
+          kind: "ingestion.artifact_upload",
+          state: "completed",
+          model_id: 42,
+          result: { created },
+        }),
+      ]);
+      const { container, onUploaded } = renderUpload();
+      await screen.findByText(".stl .3mf .obj .step .dxf");
+      await user.upload(fileInputs(container)[0], new File(["x"], "requested.stl"));
+      await user.click(screen.getByRole("button", { name: "Upload to vault" }));
+      await waitFor(() => expect(onUploaded).toHaveBeenCalledWith({ id: 42, created }), {
+        timeout: 5000,
+      });
+      expect(listTasks().find((task) => task.uploadedModel?.id === 42)).toMatchObject({
+        status: "completed",
+        uploadedModel: { id: 42, created },
+      });
+    });
+
     it("uploads the file the user chose", async () => {
       const user = userEvent.setup();
       const { container, uploadRequests } = renderUpload();
@@ -552,9 +575,7 @@ describe("UploadModal ingestion", () => {
       ]);
       await user.click(await screen.findByRole("button", { name: /Upload 2 models/ }));
       expect(
-        await screen.findByText(
-          "Something went wrong reaching the server. Check that PrintStash is running and try again.",
-        ),
+        await screen.findByText("This request could not be completed. Try again."),
       ).toBeInTheDocument();
       expect(onUploaded).toHaveBeenCalledTimes(1);
     });

@@ -5,7 +5,7 @@ precedence over historical branch names in git history.
 
 ## Branches
 
-Create one short-lived branch per bug, feature, or supporting change from an
+Create one short-lived branch per requested task or audit from an
 up-to-date `main`. The branch name describes the work:
 
 ```
@@ -51,7 +51,7 @@ address from session context; GitHub attributes by verified email.
 
 ## Pull requests
 
-- One PR per bug/feature; small enough to review in one sitting
+- Group all changes for one requested task or audit in a single PR unless the user explicitly asks to split them; organize the description so the whole result is reviewable
   (`CONTRIBUTING.md`).
 - Fill `.github/PULL_REQUEST_TEMPLATE.md`: Summary bullets, the three Testing
   checkboxes (check them truthfully), and Notes for any schema, API, storage,

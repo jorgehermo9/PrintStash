@@ -7,7 +7,7 @@ import { currentLocale } from "@/lib/locale";
 import { uiText } from "@/lib/locale";
 import { useUiLocale } from "@/lib/i18n";
 
-import { useMemo, useRef, useState } from "react";
+import { useId, useMemo, useRef, useState } from "react";
 import { Link } from "@/lib/link";
 import { PrinterRead, type PrinterCreate, type PrinterStatus } from "@/types";
 import { usePrinterCatalogCommands } from "@/features/printers/queries";
@@ -799,6 +799,7 @@ function PrinterModelPicker({
 }
 
 function AddPrinterModal({ onClose, onCreated }: { onClose: () => void; onCreated: () => void }) {
+  const titleId = useId();
   const { createPrinter } = usePrinterCatalogCommands();
   useUiLocale();
   const [name, setName] = useState("");
@@ -878,9 +879,12 @@ function AddPrinterModal({ onClose, onCreated }: { onClose: () => void; onCreate
     <Localized>
       <ModalShell
         onClose={onClose}
-        className="bg-card border border-border rounded w-full max-w-md p-6 shadow-lg"
+        labelledBy={titleId}
+        className="bg-card border border-border rounded w-full max-w-md max-h-[calc(100dvh-2rem)] overflow-y-auto p-6 shadow-lg"
       >
-        <h3 className="text-lg font-semibold text-foreground mb-5">{uiText("Add printer")}</h3>
+        <h3 id={titleId} className="text-lg font-semibold text-foreground mb-5">
+          {uiText("Add printer")}
+        </h3>
         <form onSubmit={submit} className="space-y-4">
           <div>
             <label

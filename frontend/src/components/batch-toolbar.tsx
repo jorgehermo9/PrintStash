@@ -165,7 +165,9 @@ export function BatchToolbar({
         title={uiText("items.deleteSelected", { value1: String(count), count: Number(count) })}
         description={
           selectedCollections.length
-            ? uiText("Selected folders and their contents move to trash.")
+            ? uiText(
+                "Folders cannot be restored. Their models can be restored from Trash to All Models.",
+              )
             : uiText("They move to trash and can be restored until purged.")
         }
         confirmLabel={uiText("Delete")}

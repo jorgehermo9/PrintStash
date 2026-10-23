@@ -92,6 +92,10 @@ Dropdown placement covers Statistics customization at phone width, an open-menu
 resize, a short viewport, and member Model actions. Checkbox choices survive a
 reload; Escape returns focus to the Model action trigger.
 
+G-code layer controls use a real 31-layer PrusaSlicer file at 320px, 390px and
+desktop widths. Pointer hit tests and actual layer changes cover both ends of the
+slider; switching back to 3D restores the mesh camera controls.
+
 First-run onboarding (`playwright.onboarding.config.ts`) checks centered desktop
 and mobile layouts in Spanish, inline password visibility, immediately visible
 server folders, keyboard step navigation, and the account → first Model flow.
@@ -126,7 +130,7 @@ export (JSON/CSV) · manual and uploaded backups · reusable remote storage
 connection for backups and Library sources · notification channels (add webhook + delete; competing channel drafts and master-switch intents with explicit review/revised save) ·
 remote storage loading layout and provider choice at desktop and mobile widths ·
 About (running version + changelog) · design customization (metadata visibility,
-card-metric slots + reset) · printer add/remove · cross-cutting (theme
+card-metric slots + reset) · printer add/remove and short-screen provider setup (320px, 390px and landscape; accessible dialog name, reachable actions and keyboard cancellation) · cross-cutting (theme
 persistence, health version, routes free of uncaught errors).
 
 The mock-API browser suite also exercises operator recovery for an active fleet
@@ -207,3 +211,8 @@ sends no further setup probe.
   while preserving the other editor’s notes, verified after reload.
 
 - `provider-connections.spec.ts`: issue a pairing code, claim without an account session, resolve competing browser-name drafts through explicit review, then confirm revocation.
+
+- `collections.spec.ts`: ancestor heading/bulk renames through browser Back, reload and persisted Recent, retaining the Model and downloadable Artifact.
+- `saved-views.spec.ts`: keyboard save and rename starts in the named field, replaces the selected name, and persists after reload.
+
+- `uploads.spec.ts`: repeated identical STL uploads report the existing Model, retain the destination after reload, and link to the unchanged Model and downloadable bytes.

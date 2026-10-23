@@ -2698,7 +2698,8 @@ export function SettingsPanel() {
                             onOpenChange={setAccessPickerOpen}
                             role="dialog"
                             align="start"
-                            contentClassName="w-80 max-w-[90vw] p-2"
+                            portal
+                            contentClassName="w-80 max-w-[90vw] rounded-md border border-border bg-popover p-2 text-popover-foreground shadow-lg"
                             trigger={
                               <button
                                 type="button"
@@ -3309,6 +3310,11 @@ export function SettingsPanel() {
 
             {activeSection === "backup" && (
               <div className="space-y-6 animate-panel-in">
+                {!user?.is_superuser && (
+                  <p className="text-sm text-muted-foreground">
+                    {t("settings.backupAdministratorRequired")}
+                  </p>
+                )}
                 <StorageConnectionReview
                   review={backupConnectionCommand.review}
                   busy={backupConnectionCommand.isPending}
@@ -3749,7 +3755,8 @@ export function SettingsPanel() {
                       className={cn(
                         BTN_SECONDARY,
                         "cursor-pointer",
-                        uploadingBackup && "pointer-events-none opacity-50",
+                        (!user?.is_superuser || uploadingBackup) &&
+                          "pointer-events-none opacity-50",
                       )}
                     >
                       {uploadingBackup ? (
@@ -5043,10 +5050,12 @@ export function SettingsPanel() {
                         <h3 className="text-lg font-bold text-foreground tracking-tight">
                           PrintStash
                         </h3>
-                        <span className="rounded-full bg-muted px-2 py-0.5 text-3xs font-semibold text-muted-foreground">
-                          {uiText("v")}
-                          {health?.version ?? "0.2.0"}
-                        </span>
+                        {health?.version && (
+                          <span className="rounded-full bg-muted px-2 py-0.5 text-3xs font-semibold text-muted-foreground">
+                            {uiText("v")}
+                            {health.version}
+                          </span>
+                        )}
                       </div>
                       <p className="text-xs text-muted-foreground mt-0.5">
                         {uiText("Self-hosted asset management for 3D printing workflows.")}
@@ -5056,7 +5065,7 @@ export function SettingsPanel() {
                       <button
                         type="button"
                         onClick={() => void checkForUpdates(true)}
-                        disabled={releaseChecking}
+                        disabled={!user?.is_superuser || releaseChecking}
                         className={BTN_SECONDARY}
                       >
                         <RefreshCw

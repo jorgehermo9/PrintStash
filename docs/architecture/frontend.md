@@ -370,6 +370,17 @@ share isolation, setup/auth gates, history and return destinations. Reject unsaf
 external return targets. Replace invalid/retired query values canonically without
 adding a history entry. Route navigation remains unanimated under DESIGN.md.
 
+Collection destinations retain a `cid` identity beside the readable `c` path.
+The public `features/library/collection-navigation.ts` interface exposes
+`collectionIdentity`, `useCollectionDestination` and `useRecentFolders`. It resolves
+that identity through the authorized bounded lookup before publishing a
+destination, replacing renamed or moved paths in place. Legacy path-only links acquire an identity after lookup;
+unrecoverable links show an unavailable collection with recovery to the library.
+Recent keeps at most six identities and revalidates them when its menu opens,
+so persisted entries follow ancestor mutations without guessing path prefixes.
+The desktop outliner and mobile filter drawer share the selected identity lookup,
+avoiding a speculative read of the old path while its canonical URL resolves.
+
 A library transition renders one coherent source or destination snapshot: heading,
 folder breadcrumbs, outliner context and cards agree. While showing a prior
 snapshot, actions cannot accidentally target the destination URL. An error keeps

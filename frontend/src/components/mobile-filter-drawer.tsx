@@ -21,6 +21,7 @@ interface MobileFilterDrawerProps {
   tags: TagRead[];
   printers: PrinterRead[];
   selectedCollection: string | null;
+  selectedCollectionId?: number | null;
   selectedTags: string[];
   selectedPrinterId: number | null;
   selectedPrinterPresence: "any" | "none" | null;

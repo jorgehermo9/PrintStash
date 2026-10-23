@@ -4,18 +4,42 @@
 
 ### Fixed
 
-- Builds is reachable from the account menu and mobile More sheet. Inbox, Builds,
-  Search, and the getting-started guide have distinct, translated browser titles.
-- Dropdown menus stay on screen on narrow and short displays, including Statistics customization and Model actions.
-### Fixed
+- Empty collections offer an upload into the current folder; read-only members see permission guidance, and active filters offer filter recovery.
+- Multipart member cards keep Model names readable when file badges wrap on desktop.
 
-- Notification channel and Spoolman form fields expose their visible labels to assistive technology and focus correctly when their labels are clicked.
-- Members no longer see a permanently loading server version in Settings; storage settings explain when administrator access is required.
-- Backup settings keep titles and translated action labels readable on narrow screens.
+- Builds and Pending Imports now provide visible starting links and guidance for creating a build or capturing a model URL.
+
+- Collection delete confirmations explain that folders cannot be restored and their Models recover from Trash into All Models.
+
+- Keep multipart set names and counts readable on narrow screens by placing header actions below the title.
+- Backup uploads explain invalid filenames, damaged archives, and existing copies so operators can correct the file and retry.
+
+- Member Settings explain administrator-only remote storage access, omit unavailable version information, disable update checks that require an administrator, and explain why backup controls are unavailable.
+- Empty Statistics periods explain that reports use completed jobs and offer a direct link to manage printers while keeping the period controls available.
+- Canceling a new filament or printer preset discards its draft and returns keyboard focus to the New button. Collapsing the form still preserves a draft for later.
+- Collection history and Recent folders follow stable identities after heading or bulk renames. Unavailable destinations offer explicit recovery instead of showing an empty library or unrelated results.
+
 - Recent folders now opens inside the screen edge, and long collection paths
   wrap within the Model Overview panel without horizontal overflow.
 - Collection and Model headings offer a pen button and double-click shortcut
   for renaming, while respecting editing permissions.
+- Backup settings keep titles and translated action labels readable on narrow screens.
+- Members no longer see a permanently loading server version in Settings; storage settings explain when administrator access is required.
+- URL capture now explains invalid links, and offline printer errors identify the printer connection instead of blaming the PrintStash server. Offline controls explain their connection requirement; transport details remain in Diagnostics.
+- Notification channel and Spoolman form fields expose their visible labels to assistive technology and focus correctly when their labels are clicked.
+- The collection access picker uses an opaque surface and opens outside its Settings card, keeping options readable and reachable on narrow screens.
+
+- Dropdown menus stay on screen on narrow and short displays, including Statistics customization and Model actions. Statistics options remain above the page header in very short windows.
+- Builds is reachable from the account menu and mobile More sheet. Inbox, Builds,
+  Search, and the getting-started guide have distinct, translated browser titles.
+- Add printer setup scrolls within short screens so every field and action remains reachable. Its dialog is announced by its title to assistive technology.
+
+- Saved-view naming dialogs focus the name field immediately; renaming has a visible accessible label and selects the existing name for keyboard replacement.
+- G-code layer controls remain usable across the full slider on phones. Mesh-only zoom, reset and dimensions overlays now appear only in the 3D model view.
+
+- Completed uploads identify whether they created a Model or saved to an existing
+  one, with a visible completion notice and Open Model action. The result link
+  remains available in Notifications after reloading.
 
 ## 0.15.0
 

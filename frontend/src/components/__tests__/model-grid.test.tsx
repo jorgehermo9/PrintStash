@@ -215,6 +215,7 @@ function HistoryProbe() {
   return (
     <>
       <output data-testid="vault-location">{location.pathname + location.search}</output>
+      <button onClick={() => navigate("/?c=missing&cid=9")}>Open missing collection</button>
       <button onClick={() => navigate(-1)}>History back</button>
       <button onClick={() => navigate(1)}>History forward</button>
       <button onClick={() => navigate("/?type=multipart&sort=name-asc")}>
@@ -346,6 +347,85 @@ describe("ModelBrowser", () => {
       expect(await screen.findByText("Benchy")).toBeInTheDocument();
       expect(screen.getByText("Cube")).toBeInTheDocument();
     });
+
+    it("offers an upload into an empty collection", async () => {
+      const user = userEvent.setup();
+      renderVault({
+        at: "/?c=parts&cid=1",
+        collections: [aCollection({ model_count: 0 })],
+      });
+      expect(await screen.findByText("This collection is empty")).toBeVisible();
+      expect(screen.queryByText("Try clearing some filters.")).not.toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: "Clear all filters" })).not.toBeInTheDocument();
+      await user.click(screen.getByRole("button", { name: "Upload files" }));
+      const dialog = await screen.findByRole("dialog", { name: "Upload model" });
+      expect(await within(dialog).findByRole("button", { name: "Parts" })).toBeVisible();
+    });
+
+    it.each([false, true])(
+      "explains an empty read-only collection (%s)",
+      async (writableElsewhere) => {
+        const user = userEvent.setup();
+        const { requestsWithMethod } = renderVault({
+          at: "/?c=parts&cid=1",
+          auth: memberSession(),
+          historyProbe: true,
+          collections: [
+            aCollection({ model_count: 0, effective_role: "view" }),
+            ...(writableElsewhere
+              ? [
+                  aCollection({
+                    id: 2,
+                    name: "Writable",
+                    path: "writable",
+                    slug: "writable",
+                    model_count: 0,
+                    effective_role: "edit",
+                  }),
+                ]
+              : []),
+          ],
+        });
+        expect(
+          await screen.findByText(
+            "You have view-only access to this collection. Ask an administrator for edit access to add Models.",
+          ),
+        ).toBeVisible();
+        expect(screen.queryByRole("button", { name: "Upload files" })).not.toBeInTheDocument();
+        expect(screen.queryByRole("button", { name: "Import from URL" })).not.toBeInTheDocument();
+        await user.click(screen.getByRole("button", { name: "Back to library" }));
+        await waitFor(() => {
+          const location = new URL(
+            screen.getByTestId("vault-location").textContent!,
+            "http://test",
+          );
+          expect(location.pathname).toBe("/");
+          expect(location.searchParams.has("c")).toBe(false);
+          expect(location.searchParams.has("cid")).toBe(false);
+        });
+        expect(
+          requestsWithMethod("POST").filter(
+            (request) =>
+              request.url.startsWith("/api/v1/artifact-uploads") ||
+              request.url.startsWith("/api/v1/inbox"),
+          ),
+        ).toHaveLength(0);
+      },
+    );
+
+    it.each(["favorites=true", "material_type=PLA"])(
+      "offers filter recovery for an empty filtered collection (%s)",
+      async (filter) => {
+        renderVault({
+          at: `/?c=parts&cid=1&${filter}`,
+          collections: [aCollection({ model_count: 0 })],
+        });
+        expect(await screen.findByText("Try clearing some filters.")).toBeVisible();
+        expect(screen.getByRole("button", { name: "Clear all filters" })).toBeVisible();
+        expect(screen.queryByText("This collection is empty")).not.toBeInTheDocument();
+        expect(screen.queryByRole("button", { name: "Upload files" })).not.toBeInTheDocument();
+      },
+    );
 
     it("offers the empty state when the library has nothing in it", async () => {
       renderVault();
@@ -953,7 +1033,7 @@ describe("ModelBrowser", () => {
       expect(screen.getByText("Shelf rig")).toBeVisible();
       const sourceLink = screen.getByRole("link", { name: /Shelf rig/ });
       const sourceHref = new URL(sourceLink.getAttribute("href")!, "http://test");
-      expect(sourceHref.searchParams.get("return")).toBe("/?c=parts&type=all&sort=date-desc");
+      expect(sourceHref.searchParams.get("return")).toBe("/?c=parts&type=all&sort=date-desc&cid=1");
       expect(screen.queryByText("Bracket piece")).not.toBeInTheDocument();
       expect(await folderCard("parts/brackets")).toBeVisible();
       pending.resolve(
@@ -1026,7 +1106,7 @@ describe("ModelBrowser", () => {
         screen.getByRole("link", { name: /Displayed shelf/ }).getAttribute("href")!,
         "http://test",
       );
-      expect(href.searchParams.get("return")).toBe("/?c=parts&type=all&sort=date-desc");
+      expect(href.searchParams.get("return")).toBe("/?c=parts&type=all&sort=date-desc&cid=1");
       expect(screen.queryByText("Late root")).not.toBeInTheDocument();
       child.resolve(
         json({
@@ -1617,8 +1697,8 @@ describe("ModelBrowser", () => {
       });
 
       await waitFor(() =>
-        expect(window.localStorage.getItem("ps-recent-folders-labelled")).toBe(
-          JSON.stringify([["parts/brackets", "Parts/Brackets"]]),
+        expect(window.localStorage.getItem("ps-recent-folders-identified")).toBe(
+          JSON.stringify([[2, "parts/brackets", "Parts/Brackets"]]),
         ),
       );
     });
@@ -1627,12 +1707,12 @@ describe("ModelBrowser", () => {
       // Those were stored as bare paths, before labels were kept (#295).
       const user = userEvent.setup();
       window.localStorage.setItem("ps-recent-folders", JSON.stringify(["parts"]));
-      renderVault({ models: [aModelListItem({ name: "Benchy" })] });
+      renderVault({ models: [aModelListItem({ name: "Benchy" })], collections: [aCollection()] });
       await screen.findByText("Benchy");
 
       await user.click(screen.getAllByRole("button", { name: /Recent/ }).at(-1)!);
 
-      expect(await screen.findByRole("menuitem", { name: "parts" })).toBeInTheDocument();
+      expect(await screen.findByRole("menuitem", { name: "Parts" })).toBeInTheDocument();
     });
 
     it("ignores a stored list that is not an array", async () => {
@@ -2023,8 +2103,8 @@ describe("ModelBrowser", () => {
         parent_id: 1,
       });
       window.localStorage.setItem(
-        "ps-recent-folders-labelled",
-        JSON.stringify([["parts/brackets", "Parts/Brackets"]]),
+        "ps-recent-folders-identified",
+        JSON.stringify([[2, "parts/brackets", "Parts/Brackets"]]),
       );
       renderVault({
         at: "/?c=parts",
@@ -2048,8 +2128,8 @@ describe("ModelBrowser", () => {
 
       expect(await screen.findByRole("heading", { name: "Brackets", level: 1 })).toBeVisible();
       expect(
-        JSON.parse(window.localStorage.getItem("ps-recent-folders-labelled") ?? "[]"),
-      ).toContainEqual(["spares/brackets", "Spares/Brackets"]);
+        JSON.parse(window.localStorage.getItem("ps-recent-folders-identified") ?? "[]"),
+      ).toContainEqual([2, "spares/brackets", "Spares/Brackets"]);
     });
 
     it("retires the rename draft when navigation changes", async () => {
@@ -2477,6 +2557,23 @@ describe("ModelBrowser", () => {
       expect(
         app.requestsWithMethod("GET").filter((request) => request.url === "/api/v1/saved-views"),
       ).toHaveLength(2);
+    });
+
+    it("focuses the saved-view name when creating a view", async () => {
+      const user = userEvent.setup();
+      renderVault({ models: [aModelListItem({ name: "Benchy" })] });
+      await screen.findByText("Benchy");
+      await openLibraryTools();
+      await user.click(screen.getByRole("button", { name: /Saved views/ }));
+      await user.click(await screen.findByRole("button", { name: /Save current view/ }));
+      const input = screen.getByRole("textbox", { name: "View name" });
+      expect(input).toHaveFocus();
+      await user.keyboard("Keyboard view");
+      expect(input).toHaveValue("Keyboard view");
+      await user.keyboard("{Escape}");
+      await waitFor(() =>
+        expect(screen.queryByRole("dialog", { name: "Save current view" })).toBeNull(),
+      );
     });
 
     it("immediately retires the private create draft with its session", async () => {
@@ -3238,7 +3335,7 @@ describe("ModelBrowser", () => {
       expect(mainHas("Current model")).toBeVisible();
     });
 
-    it("follows the refreshed folder identity", async () => {
+    it("does not switch to a replacement collection reusing the saved path", async () => {
       const app = renderVault({
         at: "/?c=parts",
         models: [aModelListItem({ name: "Original model" })],
@@ -3253,7 +3350,14 @@ describe("ModelBrowser", () => {
         ]),
         "GET /api/v1/models/browse": modelPage("Current model"),
       });
-      expect(await within(screen.getByRole("main")).findByText("Replacement child")).toBeVisible();
+      expect(
+        await within(screen.getByRole("main")).findByRole("heading", {
+          name: "Collection unavailable",
+        }),
+      ).toBeVisible();
+      expect(mainHas("Original model")).not.toBeInTheDocument();
+      expect(mainHas("Current model")).not.toBeInTheDocument();
+      expect(mainHas("Replacement child")).not.toBeInTheDocument();
       expect(
         app
           .requests()
@@ -3262,7 +3366,7 @@ describe("ModelBrowser", () => {
               call.url.includes("/collections/children") &&
               new URL(call.url, "http://test").searchParams.get("parent_id") === "7",
           ),
-      ).toBe(true);
+      ).toBe(false);
     });
 
     it("refreshes active folder search results", async () => {
@@ -4188,6 +4292,103 @@ describe("ModelBrowser", () => {
       await selectAndMove(user);
 
       expect(await screen.findByText("1 skipped")).toBeInTheDocument();
+    });
+  });
+  describe("collection navigation identity", () => {
+    it("resolves a renamed collection by its saved identity", async () => {
+      const renamed = aCollectionNode({ id: 9, name: "Current", path: "current" });
+      const app = renderVault({
+        at: "/?c=old&cid=9",
+        historyProbe: true,
+        collections: [renamed, aCollectionNode({ id: 10, name: "Reused old path", path: "old" })],
+        models: [aModelListItem({ name: "Kept Model", collection: "current", collection_id: 9 })],
+      });
+      expect(await screen.findByRole("heading", { name: "Current", level: 1 })).toBeVisible();
+      expect(screen.getByTestId("vault-location")).toHaveTextContent("c=current");
+      expect(screen.getByTestId("vault-location")).toHaveTextContent("cid=9");
+      expect(screen.queryByRole("heading", { name: "Reused old path", level: 1 })).toBeNull();
+      expect(app.requests().some(({ url }) => url.includes("/collections/lookup?id=9"))).toBe(true);
+      expect(app.requests().some(({ url }) => url.includes("/collections/lookup?path=old"))).toBe(
+        false,
+      );
+    });
+
+    it.each([
+      [403, "/?c=missing&cid=9"],
+      [404, "/?c=missing&cid=9"],
+      [404, "/?c=missing"],
+    ] as const)(
+      "shows an unavailable destination for collection lookup %s at %s",
+      async (status, at) => {
+        renderVault({
+          at,
+          routes: {
+            "GET /api/v1/collections/lookup": json({ detail: "collection_not_found" }, status),
+          },
+        });
+        expect(
+          await screen.findByRole("heading", { name: "Collection unavailable", level: 1 }),
+        ).toBeVisible();
+        expect(screen.queryByRole("heading", { name: "All Models", level: 1 })).toBeNull();
+        expect(screen.queryByText("0 items shown")).toBeNull();
+        expect(screen.getByRole("button", { name: "Back to library" })).toBeVisible();
+      },
+    );
+
+    it("resolves a persisted Recent identity after an external rename", async () => {
+      const user = userEvent.setup();
+      localStorage.setItem("ps-recent-folders-identified", JSON.stringify([[9, "old", "Old"]]));
+      renderVault({
+        historyProbe: true,
+        collections: [aCollectionNode({ id: 9, name: "Current", path: "current" })],
+      });
+      await user.click(await screen.findByRole("button", { name: "Recent" }));
+      await user.click(await screen.findByRole("menuitem", { name: "Current" }));
+      expect(await screen.findByRole("heading", { name: "Current", level: 1 })).toBeVisible();
+      expect(screen.getByTestId("vault-location")).toHaveTextContent("cid=9");
+      expect(
+        JSON.parse(localStorage.getItem("ps-recent-folders-identified") ?? "[]"),
+      ).toContainEqual([9, "current", "Current"]);
+    });
+
+    it("opens an explicitly selected Recent identity when the old path is reused", async () => {
+      const user = userEvent.setup();
+      localStorage.setItem(
+        "ps-recent-folders-identified",
+        JSON.stringify([[10, "parts", "Replacement"]]),
+      );
+      renderVault({
+        at: "/?c=parts&cid=9",
+        historyProbe: true,
+        collections: [aCollectionNode({ id: 10, name: "Replacement", path: "parts" })],
+      });
+      await screen.findByRole("heading", { name: "Collection unavailable", level: 1 });
+      await user.click(screen.getByRole("button", { name: "Recent" }));
+      await user.click(await screen.findByRole("menuitem", { name: "Replacement" }));
+      expect(await screen.findByRole("heading", { name: "Replacement", level: 1 })).toBeVisible();
+      expect(screen.getByTestId("vault-location")).toHaveTextContent("cid=10");
+    });
+
+    it("retires an unavailable Recent destination", async () => {
+      const user = userEvent.setup();
+      localStorage.setItem("ps-recent-folders-identified", JSON.stringify([[9, "gone", "Gone"]]));
+      renderVault();
+      await user.click(await screen.findByRole("button", { name: "Recent" }));
+      expect(await screen.findByRole("menuitem", { name: "Gone — Unavailable" })).toBeDisabled();
+      expect(screen.getByRole("menuitem", { name: "Clear recent folders" })).toBeEnabled();
+    });
+
+    it("replaces a failed destination without retaining the departing library results", async () => {
+      const user = userEvent.setup();
+      renderVault({ historyProbe: true, models: [aModelListItem({ name: "Root Model" })] });
+      await screen.findByRole("heading", { name: "All Models", level: 1 });
+      await user.click(screen.getByRole("button", { name: "Open missing collection" }));
+      expect(
+        await screen.findByRole("heading", { name: "Collection unavailable", level: 1 }),
+      ).toBeVisible();
+      expect(screen.queryByText("Root Model")).toBeNull();
+      await user.click(screen.getByRole("button", { name: "Back to library" }));
+      expect(await screen.findByRole("heading", { name: "All Models", level: 1 })).toBeVisible();
     });
   });
 });

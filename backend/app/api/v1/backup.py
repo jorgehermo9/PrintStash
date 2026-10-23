@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import gzip
 import tarfile
 import uuid
+import zlib
 from pathlib import Path
 
 from fastapi import (
@@ -161,7 +163,9 @@ def upload_backup(file: UploadFile = File(...)) -> dict:
         ) from exc
     except FileExistsError as exc:
         raise HTTPException(status_code=409, detail="backup_already_exists") from exc
-    except (ValueError, RuntimeError, OSError, tarfile.TarError) as exc:
+    except (gzip.BadGzipFile, tarfile.TarError, zlib.error, EOFError) as exc:
+        raise HTTPException(status_code=409, detail="backup_archive_invalid") from exc
+    except (ValueError, RuntimeError, OSError) as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     return {
         "backup_id": meta.id,

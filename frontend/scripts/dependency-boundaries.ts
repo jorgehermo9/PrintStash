@@ -59,6 +59,7 @@ export const FEATURE_PUBLIC_MODULES = new Set([
     "batch-edits",
     "browse",
     "builds",
+    "collection-navigation",
     "filters",
     "model-detail",
     "moves",

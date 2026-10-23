@@ -851,6 +851,13 @@ function PrinterDetailView({
 
                   {printer.capabilities.can_send_gcode && (
                     <div className="border-t border-border pt-4 space-y-4">
+                      {printer.status === "offline" && (
+                        <p className="text-sm text-muted-foreground">
+                          {uiText(
+                            "Printer is offline. Check its address and connection before sending commands.",
+                          )}
+                        </p>
+                      )}
                       <div className="space-y-2">
                         <span className="font-mono text-3xs uppercase tracking-wider text-muted-foreground">
                           {uiText("Preheat")}
@@ -976,7 +983,9 @@ function PrinterDetailView({
               </div>
               {printer.last_error && printer.status === "offline" && (
                 <div className="border-b border-border bg-red-50/30 px-6 py-3 font-mono text-2xs text-red-600 break-words dark:bg-red-950/20">
-                  {printer.last_error}
+                  {uiText(
+                    "Could not connect to the printer. Check its address and network connection, then retry.",
+                  )}
                 </div>
               )}
               {printerFiles.length === 0 ? (
@@ -1275,6 +1284,11 @@ function PrinterDetailView({
                 </button>
               </div>
 
+              {printer.last_error && printer.status === "offline" && (
+                <p className="border-b border-border px-6 py-3 font-mono text-xs text-muted-foreground break-words">
+                  {printer.last_error}
+                </p>
+              )}
               {!diagnostics ? (
                 <div className="p-10 text-center font-mono text-xs text-muted-foreground">
                   {uiText("Diagnostics have not loaded yet.")}

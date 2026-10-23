@@ -34,10 +34,12 @@ export function TaskList({
   tasks,
   onClear,
   compact = false,
+  onNavigate,
 }: {
   tasks: TaskItem[];
   onClear: () => void;
   compact?: boolean;
+  onNavigate?: () => void;
 }) {
   useUiLocale();
   return (
@@ -76,7 +78,7 @@ export function TaskList({
           }
         >
           {tasks.map((task) => (
-            <TaskRow key={task.id} task={task} />
+            <TaskRow key={task.id} task={task} onNavigate={onNavigate} />
           ))}
         </div>
       )}
@@ -84,7 +86,7 @@ export function TaskList({
   );
 }
 
-function TaskRow({ task }: { task: TaskItem }) {
+function TaskRow({ task, onNavigate }: { task: TaskItem; onNavigate?: () => void }) {
   useUiLocale();
   const { user } = useAuth();
   const active = (task.status === "pending" || task.status === "running") && !task.uploadPaused;
@@ -117,6 +119,24 @@ function TaskRow({ task }: { task: TaskItem }) {
           </div>
           {(task.detail || task.stage) && (
             <p className="mt-0.5 line-clamp-2 text-xs text-muted-foreground">{taskDetail(task)}</p>
+          )}
+          {task.status === "completed" && task.uploadedModel && (
+            <div className="mt-2 space-y-1 text-xs">
+              <p className="text-muted-foreground">
+                {uiText(
+                  task.uploadedModel.created
+                    ? "Created a new Model."
+                    : "Saved to an existing Model. Open it to review files and revisions.",
+                )}
+              </p>
+              <Link
+                to={`/models/${task.uploadedModel.id}`}
+                onClick={onNavigate}
+                className="inline-flex rounded px-2 py-1 font-medium text-primary underline underline-offset-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              >
+                {uiText("Open Model")}
+              </Link>
+            </div>
           )}
           {task.archiveUploading && task.archiveSizeBytes !== undefined && (
             <div className="mt-1 space-y-0.5 text-xs text-muted-foreground">

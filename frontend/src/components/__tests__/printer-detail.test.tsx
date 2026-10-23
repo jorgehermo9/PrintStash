@@ -27,6 +27,7 @@ import { PrinterDetailPage } from "@/components/printer-detail";
 import {
   aPrinter,
   aPrinterFile,
+  aPrinterDiagnostics,
   printerAccess,
   printerCapabilities,
 } from "@/test-support/factories";
@@ -102,7 +103,7 @@ function renderPrinter(options: RenderAppOptions & { printer?: PrinterRead } = {
       "GET /api/v1/printers/4/jobs": json([]),
       "GET /api/v1/printers/4/files": json([]),
       "GET /api/v1/printers/4/status": json({ state: "ready" }),
-      "GET /api/v1/printers/4/diagnostics": json({ provider: "moonraker", checks: [] }),
+      "GET /api/v1/printers/4/diagnostics": json(aPrinterDiagnostics()),
       "GET /api/v1/printers/4/config": json({ config: "" }),
       // The live socket is opened against a short-lived ticket, so the page
       // cannot reach a snapshot at all without this one.
@@ -131,6 +132,55 @@ afterEach(() => {
 
 describe("PrinterDetailPage", () => {
   describe("what it shows", () => {
+    it("explains the offline command requirement", async () => {
+      renderPrinter({ printer: aPrinter({ id: 4, status: "offline" }) });
+
+      expect(
+        await screen.findByText(
+          "Printer is offline. Check its address and connection before sending commands.",
+        ),
+      ).toBeVisible();
+    });
+
+    it("replaces raw file transport text with recovery guidance", async () => {
+      const user = userEvent.setup();
+      renderPrinter({
+        printer: aPrinter({
+          id: 4,
+          status: "offline",
+          last_error: "transport error: All connection attempts failed",
+        }),
+      });
+
+      await user.click(await screen.findByRole("tab", { name: "Files" }));
+
+      expect(
+        await screen.findByText(
+          "Could not connect to the printer. Check its address and network connection, then retry.",
+        ),
+      ).toBeVisible();
+      expect(
+        screen.queryByText("transport error: All connection attempts failed"),
+      ).not.toBeInTheDocument();
+    });
+
+    it("keeps transport detail in Diagnostics", async () => {
+      const user = userEvent.setup();
+      renderPrinter({
+        printer: aPrinter({
+          id: 4,
+          status: "offline",
+          last_error: "transport error: All connection attempts failed",
+        }),
+      });
+
+      await user.click(await screen.findByRole("tab", { name: "Diagnostics" }));
+
+      expect(
+        await screen.findByText("transport error: All connection attempts failed"),
+      ).toBeVisible();
+    });
+
     it("names the printer", async () => {
       renderPrinter();
 
@@ -837,7 +887,9 @@ describe("PrinterDetailPage", () => {
         ),
       });
       await user.click(await screen.findByRole("button", { name: "Review current settings" }));
-      expect(await screen.findByRole("button", { name: "Save revised changes" })).toBeDisabled();
+      await waitFor(() =>
+        expect(screen.getByRole("button", { name: "Save revised changes" })).toBeDisabled(),
+      );
       expect(screen.getByPlaceholderText("Unchanged")).toHaveValue("draft-only-credential");
       expect(app.requestsWithMethod("PATCH")).toHaveLength(1);
       await user.click(screen.getByRole("button", { name: "Use current values" }));
@@ -1233,7 +1285,7 @@ describe("PrinterDetailPage HTTP ownership", () => {
           "GET /api/v1/printers/4": json(printer),
           "GET /api/v1/printers/4/jobs": json([]),
           "GET /api/v1/printers/4/files": json([]),
-          "GET /api/v1/printers/4/diagnostics": json({ provider: "moonraker", checks: [] }),
+          "GET /api/v1/printers/4/diagnostics": json(aPrinterDiagnostics()),
           "GET /api/v1/printers/4/config": json({ config: "" }),
           "POST /api/v1/printers/4/ws-ticket": json({ ticket: "t", expires_in: 60 }),
         },
@@ -1372,7 +1424,7 @@ describe("PrinterDetailPage HTTP ownership", () => {
             : json(aPrinter({ id: 4, name: "Recovered machine" })),
         "GET /api/v1/printers/4/jobs": json([]),
         "GET /api/v1/printers/4/files": json([]),
-        "GET /api/v1/printers/4/diagnostics": json({ provider: "moonraker", checks: [] }),
+        "GET /api/v1/printers/4/diagnostics": json(aPrinterDiagnostics()),
         "GET /api/v1/printers/4/config": json({ config: "" }),
         "POST /api/v1/printers/4/ws-ticket": json({ ticket: "t", expires_in: 60 }),
       },

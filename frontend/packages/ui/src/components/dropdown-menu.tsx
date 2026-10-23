@@ -124,7 +124,16 @@ export function DropdownMenu({
         (align === "end" ? "right" : "left") + (upward ? " bottom" : " top");
     }
     position();
-    const observer = "ResizeObserver" in globalThis ? new ResizeObserver(position) : null;
+    // A panel can change size when its available height changes. Defer the
+    // observer's style writes so they cannot invalidate its own delivery frame.
+    let resizeFrame = 0;
+    const observer =
+      "ResizeObserver" in globalThis
+        ? new ResizeObserver(() => {
+            cancelAnimationFrame(resizeFrame);
+            resizeFrame = requestAnimationFrame(position);
+          })
+        : null;
     observer?.observe(wrapper);
     observer?.observe(panel);
     window.addEventListener("resize", position);
@@ -133,6 +142,7 @@ export function DropdownMenu({
     window.visualViewport?.addEventListener("scroll", position);
     return () => {
       observer?.disconnect();
+      cancelAnimationFrame(resizeFrame);
       window.removeEventListener("resize", position);
       window.removeEventListener("scroll", position, true);
       window.visualViewport?.removeEventListener("resize", position);
