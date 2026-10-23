@@ -2089,7 +2089,7 @@ describe("confirmed upload destinations", () => {
     },
   );
 
-  it("keeps a new mesh and linked slice classified as new", async () => {
+  it("classifies a new mesh with its linked slice as a new Model", async () => {
     const id = tc.createTask({ title: "Upload pair", status: "running", expectedJobCount: 2 });
     tc.linkTaskToJob(id, "mesh");
     tc.linkTaskToJob(id, "slice");

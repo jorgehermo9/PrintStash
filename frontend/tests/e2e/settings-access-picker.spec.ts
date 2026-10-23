@@ -58,7 +58,7 @@ test.describe("Settings collection access picker", () => {
           );
         });
 
-        test("keeps the collection picker opaque and reachable", async ({ page }) => {
+        test("keeps the collection picker visible above the Settings card", async ({ page }) => {
           const problems = await collectPageProblems(page);
           await page.goto("/settings?section=access");
           await page
