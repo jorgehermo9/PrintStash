@@ -3,7 +3,7 @@
 import { uiText } from "@/lib/locale";
 import { useUiLocale } from "@/lib/i18n";
 
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import {
   filamentProfilesOptions,
@@ -309,6 +309,8 @@ export function FilamentProfilesCard() {
   const spoolmanEnabled = useSpoolmanStatus().data?.enabled ?? false;
   const [syncing, setSyncing] = useState(false);
 
+  const newPresetButton = useRef<HTMLButtonElement>(null);
+
   // add form state — filament
   const [showAddFilament, setShowAddFilament] = useState(false);
   const [newName, setNewName] = useState("");
@@ -323,6 +325,23 @@ export function FilamentProfilesCard() {
   const [newPrinterModel, setNewPrinterModel] = useState("");
   const [newPrinterNozzle, setNewPrinterNozzle] = useState("");
   const [newPrinterNotes, setNewPrinterNotes] = useState("");
+
+  function resetNewFilament() {
+    setNewName("");
+    setNewType("");
+    setNewBrand("");
+    setNewCost("");
+    setNewNotes("");
+    setShowAddFilament(false);
+  }
+
+  function resetNewPrinter() {
+    setNewPrinterName("");
+    setNewPrinterModel("");
+    setNewPrinterNozzle("");
+    setNewPrinterNotes("");
+    setShowAddPrinter(false);
+  }
 
   function updateFilamentEdit(id: number, patch: Partial<FilamentEdit>) {
     const profile = filaments.find((row) => row.id === id);
@@ -377,12 +396,7 @@ export function FilamentProfilesCard() {
       });
       if (getSessionVersion() !== session) return;
       setError(null);
-      setNewName("");
-      setNewType("");
-      setNewBrand("");
-      setNewCost("");
-      setNewNotes("");
-      setShowAddFilament(false);
+      resetNewFilament();
       toast.success(uiText('Filament preset "{value1}" saved', { value1: String(trimmedName) }));
     } catch (e) {
       if (getSessionVersion() !== session) return;
@@ -609,11 +623,7 @@ export function FilamentProfilesCard() {
       });
       if (getSessionVersion() !== session) return;
       setError(null);
-      setNewPrinterName("");
-      setNewPrinterModel("");
-      setNewPrinterNozzle("");
-      setNewPrinterNotes("");
-      setShowAddPrinter(false);
+      resetNewPrinter();
       toast.success(uiText('Printer preset "{value1}" saved', { value1: String(trimmedName) }));
     } catch (e) {
       if (getSessionVersion() !== session) return;
@@ -803,6 +813,7 @@ export function FilamentProfilesCard() {
                 </Button>
               )}
               <Button
+                ref={newPresetButton}
                 type="button"
                 size="xs"
                 disabled={!auth.isAuthenticated || activeDenied}
@@ -905,7 +916,10 @@ export function FilamentProfilesCard() {
                       type="button"
                       variant="ghost"
                       size="xs"
-                      onClick={() => setShowAddFilament(false)}
+                      onClick={() => {
+                        resetNewFilament();
+                        newPresetButton.current?.focus();
+                      }}
                     >
                       <X className="h-3.5 w-3.5" />
                       {uiText("Cancel")}
@@ -1187,7 +1201,10 @@ export function FilamentProfilesCard() {
                       type="button"
                       variant="ghost"
                       size="xs"
-                      onClick={() => setShowAddPrinter(false)}
+                      onClick={() => {
+                        resetNewPrinter();
+                        newPresetButton.current?.focus();
+                      }}
                     >
                       <X className="h-3.5 w-3.5" />
                       {uiText("Cancel")}
