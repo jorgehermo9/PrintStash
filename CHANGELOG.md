@@ -15,7 +15,7 @@
 - Notification channel and Spoolman form fields expose their visible labels to assistive technology and focus correctly when their labels are clicked.
 - The collection access picker uses an opaque surface and opens outside its Settings card, keeping options readable and reachable on narrow screens.
 
-- Dropdown menus stay on screen on narrow and short displays, including Statistics customization and Model actions.
+- Dropdown menus stay on screen on narrow and short displays, including Statistics customization and Model actions. Statistics options remain above the page header in very short windows.
 - Builds is reachable from the account menu and mobile More sheet. Inbox, Builds,
   Search, and the getting-started guide have distinct, translated browser titles.
 - Add printer setup scrolls within short screens so every field and action remains reachable. Its dialog is announced by its title to assistive technology.

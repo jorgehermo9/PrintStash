@@ -662,6 +662,7 @@ export default function StatisticsPage() {
               onChange={setPeriod}
             />
             <DropdownMenu
+              portal
               open={customizeOpen}
               onOpenChange={setCustomizeOpen}
               role="dialog"
