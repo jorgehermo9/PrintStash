@@ -368,7 +368,7 @@ describe("StatisticsPage", () => {
         "Gestionar impresoras",
       ],
     ] as const)(
-      "offers period guidance and printer navigation in %s",
+      "offers a next step from empty Statistics in %s",
       async (locale, guidance, action) => {
         renderStatistics({ locale, stats: statistics({ total_prints: 0 }) });
 
