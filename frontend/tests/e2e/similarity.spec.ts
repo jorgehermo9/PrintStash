@@ -1,11 +1,11 @@
 /** Matches stay usable at desktop size; real WebGL geometry verifies comparison display transforms. */
-import { expect, test } from "@playwright/test";
+import { expect, test, type Page } from "@playwright/test";
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { aModel, aRevision } from "../../src/test-support/factories";
 import { aSimilarityCandidate, similarityStatus } from "../../src/test-support/similarity";
 import type { MetadataRead } from "../../src/types/models";
-import { silhouetteOverlap } from "../similarity-pixels";
+import { silhouetteAreaRatio, silhouetteOverlap } from "../similarity-pixels";
 import { collectPageProblems, useMockApi } from "./_setup";
 
 useMockApi();
@@ -83,6 +83,78 @@ function previewCube(scale: number, reflected: boolean, shear: boolean) {
 
 const screenshotStyle =
   '[aria-label="Open Tanstack query devtools"], [title="Open Tanstack query devtools"] { display: none !important; }';
+
+/** Require useful framing, not merely a nonempty WebGL canvas. */
+async function meshForegroundFraction(page: Page, screenshot: Buffer) {
+  return page.evaluate(
+    async (bytes) => {
+      const bitmap = await createImageBitmap(
+        new Blob([new Uint8Array(bytes)], { type: "image/png" }),
+      );
+      const canvas = document.createElement("canvas");
+      canvas.width = canvas.height = 256;
+      const context = canvas.getContext("2d")!;
+      context.drawImage(bitmap, 0, 0, 256, 256);
+      bitmap.close();
+      const pixels = context.getImageData(0, 0, 256, 256).data;
+      let foreground = 0;
+      for (let at = 0; at < pixels.length; at += 4) {
+        if (
+          Math.max(
+            ...[0, 1, 2].map((channel) => Math.abs(pixels[at + channel] - pixels[channel])),
+          ) > 30
+        )
+          foreground++;
+      }
+      return foreground / (256 * 256);
+    },
+    [...screenshot],
+  );
+}
+
+async function mockComparison(page: Page, names: [string, string]) {
+  const mesh = previewCube(1, false, false);
+  const hash = createHash("sha256").update(mesh).digest("hex");
+  const candidate = aSimilarityCandidate({
+    model_a: { id: 1, name: names[0], slug: "bracket", thumbnail_file_id: null },
+    model_b: { id: 2, name: names[1], slug: "bracket-copy", thumbnail_file_id: null },
+    primary_lineage_key: "preview",
+    observations: [
+      {
+        id: 1,
+        lineage_key: "preview",
+        fingerprint_a_id: 1,
+        fingerprint_b_id: 2,
+        input_hash_a: hash,
+        input_hash_b: hash,
+        kind: "whole",
+        multiplicity_a: 1,
+        multiplicity_b: 1,
+        evidence: {},
+      },
+    ],
+  });
+  await page.route("**/api/v1/similarity/candidates/1", (route) =>
+    route.fulfill({ json: candidate }),
+  );
+  for (const id of [1, 2]) {
+    const file = aRevision({
+      id,
+      model_id: id,
+      file_type: "stl",
+      original_filename: `${names[id - 1]}.stl`,
+      sha256: hash,
+      metadata: metadata(20),
+    });
+    await page.route(`**/api/v1/models/${id}`, (route) =>
+      route.fulfill({ json: aModel({ id, name: names[id - 1], files: [file] }) }),
+    );
+    await page.route(`**/api/v1/models/${id}/print-jobs`, (route) => route.fulfill({ json: [] }));
+    await page.route(`**/api/v1/files/${id}/stl`, (route) =>
+      route.fulfill({ body: mesh, contentType: "model/stl" }),
+    );
+  }
+}
 
 test.describe("Similarity desktop review", () => {
   test.beforeEach(async ({ page }) => {
@@ -294,7 +366,7 @@ test.describe("Model detail Similar controls", () => {
       await page.evaluate(() => document.fonts.ready);
       const filters = pane.getByRole("button", { name: scenario.filters, exact: true });
       const find = pane.getByRole("button", { name: scenario.find, exact: true });
-      await find.scrollIntoViewIfNeeded();
+      await find.evaluate((element) => element.scrollIntoView({ block: "center" }));
       const review = firstState.locator("..");
       expect(
         await review.evaluate((element) => element.scrollWidth <= element.clientWidth + 1),
@@ -344,6 +416,115 @@ test.describe("Model detail Similar controls", () => {
       await expect(pane.getByRole("combobox").first()).toBeVisible();
     });
   }
+});
+
+test.describe("Similarity comparison layout", () => {
+  test.describe.configure({ timeout: 60_000 });
+  test("shows review actions, ready previews, measurements and evidence together at 1080p", async ({
+    page,
+  }, testInfo) => {
+    await page.setViewportSize({ width: 1920, height: 1080 });
+    await mockComparison(page, ["Bracket", "Bracket copy"]);
+    await page.goto("/library/similar/1");
+    for (const name of ["Confirm match", "Reject match", "Review later"]) {
+      const action = page.getByRole("button", { name, exact: true });
+      await expect(action).toBeInViewport({ ratio: 1 });
+      await action.click({ trial: true });
+    }
+    await expect(page.locator("canvas")).toHaveCount(2, { timeout: 30_000 });
+    const previews = page.locator("canvas");
+    await expect
+      .poll(async () =>
+        silhouetteOverlap(
+          page,
+          await previews.nth(0).screenshot({ style: screenshotStyle }),
+          await previews.nth(1).screenshot({ style: screenshotStyle }),
+        ),
+      )
+      .toBeGreaterThan(0.98);
+    const table = page.getByRole("table", { name: "Measurements and print history", exact: true });
+    await expect(table).toBeInViewport({ ratio: 1 });
+    await expect(
+      table.getByRole("rowheader", { name: "Original dimensions", exact: true }),
+    ).toBeVisible();
+    for (const label of [
+      "Sampled Chamfer distance",
+      "Sampled Hausdorff distance",
+      "Voxel overlap",
+      "Independent surface samples",
+    ]) {
+      await expect(page.getByText(label, { exact: true })).toBeInViewport({ ratio: 1 });
+    }
+    for (const name of ["Compensate scale", "Compensate reflection"]) {
+      await expect(page.getByRole("checkbox", { name, exact: true })).toBeInViewport({ ratio: 1 });
+    }
+    const tableBounds = (await table.boundingBox())!;
+    const canvasBounds = await Promise.all([
+      previews.nth(0).boundingBox(),
+      previews.nth(1).boundingBox(),
+    ]);
+    for (const bounds of canvasBounds) {
+      expect(bounds).not.toBeNull();
+      expect(bounds!.height).toBeGreaterThanOrEqual(300);
+      expect(bounds!.y + bounds!.height).toBeLessThanOrEqual(1080);
+      expect(tableBounds.x).toBeGreaterThanOrEqual(bounds!.x + bounds!.width);
+    }
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(
+      true,
+    );
+    await page.screenshot({ path: testInfo.outputPath("comparison-visible-details-1080p.png") });
+  });
+
+  test("contains long model names in the comparison on desktop and mobile", async ({
+    page,
+  }, testInfo) => {
+    const names: [string, string] = ["A".repeat(255), "B".repeat(255)];
+    await page.setViewportSize({ width: 1920, height: 1080 });
+    await mockComparison(page, names);
+    await page.goto("/library/similar/1");
+    await expect(page.locator("canvas")).toHaveCount(2, { timeout: 30_000 });
+    await expect
+      .poll(async () =>
+        silhouetteOverlap(
+          page,
+          await page.locator("canvas").nth(0).screenshot({ style: screenshotStyle }),
+          await page.locator("canvas").nth(1).screenshot({ style: screenshotStyle }),
+        ),
+      )
+      .toBeGreaterThan(0.98);
+    for (const width of [1920, 390, 320]) {
+      await page.setViewportSize({ width, height: width === 1920 ? 1080 : 844 });
+      await expect(page.getByRole("button", { name: "Confirm match", exact: true })).toBeVisible();
+      const table = page.getByRole("table", {
+        name: "Measurements and print history",
+        exact: true,
+      });
+      await expect(table).toBeVisible();
+      for (const [index, name] of names.entries()) {
+        await expect(
+          table.getByRole("columnheader", {
+            name: `${index === 0 ? "A" : "B"} ${name}`,
+            exact: true,
+          }),
+        ).toBeVisible();
+      }
+      expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(
+        true,
+      );
+      const tableBounds = (await table.boundingBox())!;
+      expect(tableBounds.x).toBeGreaterThanOrEqual(0);
+      expect(tableBounds.x + tableBounds.width).toBeLessThanOrEqual(width);
+      for (const preview of await page.locator("canvas").all()) {
+        const bounds = (await preview.boundingBox())!;
+        expect(bounds.x).toBeGreaterThanOrEqual(0);
+        expect(bounds.x + bounds.width).toBeLessThanOrEqual(width);
+      }
+      await page.screenshot({
+        path: testInfo.outputPath(`comparison-long-names-${width}.png`),
+        fullPage: true,
+      });
+    }
+  });
 });
 
 test.describe("Similarity preview compensation", () => {
@@ -418,6 +599,18 @@ test.describe("Similarity preview compensation", () => {
         );
       await expect.poll(overlap).toBeGreaterThan(0.05);
       await expect.poll(overlap).toBeLessThan(0.9);
+      if (variant === "scale") {
+        const images = await Promise.all([
+          first.screenshot({ style: screenshotStyle }),
+          second.screenshot({ style: screenshotStyle }),
+        ]);
+        const occupied = await meshForegroundFraction(page, images[1]);
+        expect(occupied).toBeGreaterThan(0.15);
+        expect(occupied).toBeLessThan(0.85);
+        const areaRatio = await silhouetteAreaRatio(page, images[0], images[1]);
+        expect(areaRatio).toBeGreaterThan(0.15);
+        expect(areaRatio).toBeLessThan(0.4);
+      }
       const canvasBounds = await Promise.all([first.boundingBox(), second.boundingBox()]);
       for (const bounds of canvasBounds) {
         expect(bounds).not.toBeNull();
@@ -430,8 +623,9 @@ test.describe("Similarity preview compensation", () => {
         "aria-pressed",
         "true",
       );
-      await expect(page.getByRole("table")).toBeHidden();
-      await page.getByText("Alignment options", { exact: true }).click();
+      await expect(
+        page.getByRole("table", { name: "Measurements and print history", exact: true }),
+      ).toBeVisible();
       const control = page.getByRole("checkbox", {
         name: variant === "scale" ? "Compensate scale" : "Compensate reflection",
       });

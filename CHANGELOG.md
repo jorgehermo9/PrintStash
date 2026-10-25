@@ -4,6 +4,8 @@
 
 ### Fixed
 
+- Similar comparisons keep aligned review actions, larger shared-scale previews, measurements and match evidence together without nested information dropdowns. Match rows show their explanation directly beside a clear Compare action.
+
 - Language choices open in a framed menu with keyboard navigation and return focus to their button. Saved views uses the full quick-access row with a visible open state and compact search focus.
 - Model and collection names open a compact editor beside the title with Save and Cancel. Renaming keeps Add tags, Favorite and the page controls visible; full Model details remain a separate action.
 - Similar models opens on visual matches with direct review tabs, separate analysis settings/history, readable pair previews and clear confirmation actions. Comparison links retain review filters, and empty states describe the selected review state accurately.

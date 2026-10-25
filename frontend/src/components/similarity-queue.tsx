@@ -54,7 +54,7 @@ function ModelLabel({ model }: { model: SimilarityModel }) {
     >
       <span
         ref={ref}
-        className="flex h-20 w-20 sm:h-24 sm:w-24 shrink-0 items-center justify-center overflow-hidden rounded-md bg-muted"
+        className="flex h-16 w-16 shrink-0 items-center justify-center overflow-hidden rounded-md bg-muted"
       >
         {image ? (
           <img src={image} alt="" className="h-full w-full object-contain" />
@@ -76,16 +76,16 @@ export function SimilarityRow({
 }) {
   const { t } = useI18n();
   return (
-    <li className="px-4 py-4 sm:px-5">
-      <div className="grid gap-3 @lg/similarity:grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] @lg/similarity:items-center">
-        <ModelLabel model={candidate.model_a} />
-        <ArrowLeftRight
-          className="hidden h-4 w-4 text-muted-foreground @lg/similarity:block"
-          aria-hidden
-        />
-        <ModelLabel model={candidate.model_b} />
-      </div>
-      <div className="mt-3 flex flex-wrap items-center justify-between gap-3 border-t border-border pt-3">
+    <li className="grid gap-4 px-4 py-4 sm:px-5 @3xl/similarity:grid-cols-[minmax(0,1fr)_auto] @3xl/similarity:items-center">
+      <div className="min-w-0 space-y-3">
+        <div className="grid gap-3 @lg/similarity:grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] @lg/similarity:items-center">
+          <ModelLabel model={candidate.model_a} />
+          <ArrowLeftRight
+            className="hidden h-4 w-4 text-muted-foreground @lg/similarity:block"
+            aria-hidden
+          />
+          <ModelLabel model={candidate.model_b} />
+        </div>
         <div className="min-w-0 space-y-1">
           <div className="flex flex-wrap items-center gap-2">
             <span className="text-sm font-medium">{evidenceLabel(candidate.evidence_class)}</span>
@@ -96,25 +96,24 @@ export function SimilarityRow({
               <Badge variant="outline">{t("similarity.stale")}</Badge>
             )}
           </div>
-          {candidate.freshness === "stale" ? (
-            <p className="text-xs text-warning">{evidenceDescription(candidate)}</p>
-          ) : (
-            <details className="text-xs text-muted-foreground">
-              <summary className="cursor-pointer py-1 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
-                {t("similarity.evidenceDetails")}
-              </summary>
-              <p className="mt-1 max-w-prose leading-relaxed">{evidenceDescription(candidate)}</p>
-            </details>
-          )}
-        </div>
-        <Button asChild size="sm">
-          <Link
-            href={`/library/similar/${candidate.id}${returnTo ? `?returnTo=${encodeURIComponent(returnTo)}` : ""}`}
+          <p
+            className={
+              candidate.freshness === "stale"
+                ? "text-xs text-warning"
+                : "text-xs text-muted-foreground"
+            }
           >
-            {t("similarity.compare")}
-          </Link>
-        </Button>
+            {evidenceDescription(candidate)}
+          </p>
+        </div>
       </div>
+      <Button asChild size="sm" className="justify-self-end">
+        <Link
+          href={`/library/similar/${candidate.id}${returnTo ? `?returnTo=${encodeURIComponent(returnTo)}` : ""}`}
+        >
+          {t("similarity.compare")}
+        </Link>
+      </Button>
     </li>
   );
 }

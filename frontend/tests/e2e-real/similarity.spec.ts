@@ -270,9 +270,20 @@ test.describe("Standalone similarity", () => {
         page.getByRole("heading", { name: "Compare models", exact: true }),
       ).toBeVisible();
       await expect(page.getByText("Identical geometry", { exact: true })).toBeVisible();
-      await page.getByText("Measurements and print history", { exact: true }).click();
-      await expect(page.getByRole("table")).toBeVisible();
-      await page.getByText("Measurements and print history", { exact: true }).click();
+      await expect(
+        page.getByRole("table", { name: "Measurements and print history", exact: true }),
+      ).toBeInViewport({ ratio: 1 });
+      for (const label of [
+        "Sampled Chamfer distance",
+        "Sampled Hausdorff distance",
+        "Voxel overlap",
+        "Independent surface samples",
+      ]) {
+        await expect(page.getByText(label, { exact: true })).toBeInViewport({ ratio: 1 });
+      }
+      for (const name of ["Confirm match", "Reject match", "Review later"]) {
+        await expect(page.getByRole("button", { name, exact: true })).toBeInViewport({ ratio: 1 });
+      }
       await expect(page.locator("canvas")).toHaveCount(2);
       const left = page.locator("canvas").nth(0);
       const originalView = await left.screenshot({

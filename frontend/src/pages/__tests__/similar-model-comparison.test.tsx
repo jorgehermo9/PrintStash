@@ -80,7 +80,7 @@ describe("SimilarModelComparisonPage", () => {
     await screen.findByRole("button", { name: "Confirm match" });
     expect(screen.getByText(/Models, files and print history remain separate/)).toBeVisible();
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
-    expect(screen.getByText("0.03 mm")).not.toBeVisible();
+    expect(screen.getByText("0.03 mm")).toBeVisible();
   });
 
   it("reuses the canonical Model detail snapshot", async () => {
@@ -99,7 +99,6 @@ describe("SimilarModelComparisonPage", () => {
       routes: { [`GET ${endpoint}`]: json({ detail: "unavailable" }, 503) },
     });
     await screen.findByRole("alert");
-    await userEvent.click(screen.getByText("Measurements and print history"));
     expect(screen.getByRole("table")).toBeVisible();
     expect(screen.getByRole("button", { name: "Confirm match" })).toBeEnabled();
     app.route({ [`GET ${endpoint}`]: json(response) });
@@ -183,11 +182,10 @@ describe("SimilarModelComparisonPage", () => {
   });
   it("keeps the metadata table usable without previews", async () => {
     renderComparison();
-    await userEvent.click(await screen.findByText("Measurements and print history"));
+    await screen.findByRole("table", { name: "Measurements and print history" });
     expect(screen.getByRole("table")).toBeVisible();
     expect(screen.getAllByText("3D preview unavailable").length).toBeGreaterThan(0);
     expect(screen.getByRole("rowheader", { name: "Original dimensions" })).toBeVisible();
-    await userEvent.click(screen.getByText("Match details"));
     expect(screen.getByText("0.03 mm")).toBeVisible();
   });
   it("submits the verified plate quantity", async () => {
@@ -276,7 +274,7 @@ describe("Multipart resolution", () => {
     await act(async () => {
       await app.client.invalidateQueries({ queryKey: ["similarity", "candidate", 1] });
     });
-    await screen.findByText("Renamed remotely · Bracket copy");
+    await screen.findByRole("link", { name: "Renamed remotely" });
     expect(dialog.getByText("Quantity: 6")).toBeVisible();
     await userEvent.click(dialog.getByRole("button", { name: "Create multipart model" }));
     await waitFor(() => expect(app.requestsWithMethod("POST")).toHaveLength(2));

@@ -1,11 +1,14 @@
 /** Comparison uses one physical scale and a camera bus; compensation cannot silently rescale a model. */
 import { describe, expect, it } from "vitest";
-import { Vector3 } from "three";
+import { BoxGeometry, PerspectiveCamera, Vector3 } from "three";
 import {
+  comparisonBounds,
   comparisonTransform,
+  fitComparisonFrames,
   createComparisonCamera,
   sharedScale,
   type CameraPose,
+  type ComparisonFrame,
 } from "@/lib/comparison-camera";
 
 describe("sharedScale", () => {
@@ -94,5 +97,90 @@ describe("createComparisonCamera", () => {
     unsubscribe();
     camera.publish(Symbol("origin"), { position: [1, 1, 1], target: [0, 0, 0] });
     expect(received).toEqual([]);
+  });
+});
+
+describe("comparison geometry framing", () => {
+  function projectedCorners(frame: ComparisonFrame, pose: CameraPose) {
+    const camera = new PerspectiveCamera(frame.verticalFov, frame.aspect, 0.1, 1000);
+    camera.position.fromArray(pose.position);
+    camera.lookAt(new Vector3(...pose.target));
+    camera.updateMatrixWorld();
+    const half = new Vector3(...frame.size).multiplyScalar(0.5);
+    return [-half.x, half.x].flatMap((x) =>
+      [-half.y, half.y].flatMap((y) =>
+        [-half.z, half.z].map((z) => new Vector3(x, y, z).project(camera)),
+      ),
+    );
+  }
+
+  it.each([0.7, 1.4, 2.4])("fills the usable frame for a shallow tray at aspect %s", (aspect) => {
+    const frame: ComparisonFrame = { size: [10, 3.29, 7.04], aspect, verticalFov: 50 };
+    const corners = projectedCorners(frame, fitComparisonFrames([frame]));
+    const extent = Math.max(
+      ...corners.flatMap((corner) => [Math.abs(corner.x), Math.abs(corner.y)]),
+    );
+    expect(extent).toBeCloseTo(0.8, 10);
+    expect(corners.every((corner) => corner.z > -1 && corner.z < 1)).toBe(true);
+  });
+
+  it("uses one camera distance that contains both shapes in unequal viewports", () => {
+    const frames: ComparisonFrame[] = [
+      { size: [10, 2, 3], aspect: 2, verticalFov: 50 },
+      { size: [3, 8, 5], aspect: 0.7, verticalFov: 50 },
+    ];
+    const pose = fitComparisonFrames(frames);
+    for (const frame of frames)
+      for (const corner of projectedCorners(frame, pose)) {
+        expect(Math.abs(corner.x)).toBeLessThanOrEqual(0.800000001);
+        expect(Math.abs(corner.y)).toBeLessThanOrEqual(0.800000001);
+      }
+    expect(new Vector3(...pose.position).length()).toBe(
+      Math.max(
+        ...frames.map((frame) => new Vector3(...fitComparisonFrames([frame]).position).length()),
+      ),
+    );
+  });
+
+  it("keeps physical dimensions and applies only selected scale compensation", () => {
+    const geometry = new BoxGeometry(20, 10, 4);
+    const positions = Array.from(geometry.getAttribute("position").array);
+    const options = {
+      referenceSizeMm: 40,
+      alignment: [
+        [2, 0, 0, 0],
+        [0, 2, 0, 0],
+        [0, 0, 2, 0],
+        [0, 0, 0, 1],
+      ],
+    };
+    comparisonBounds(geometry, options)
+      .toArray()
+      .forEach((value, index) => expect(value).toBeCloseTo([5, 1, 2.5][index], 10));
+    comparisonBounds(geometry, { ...options, compensateScale: true })
+      .toArray()
+      .forEach((value, index) => expect(value).toBeCloseTo([10, 2, 5][index], 10));
+    expect(Array.from(geometry.getAttribute("position").array)).toEqual(positions);
+    geometry.dispose();
+  });
+
+  it("fits every registered viewer together and removes retired bounds", () => {
+    const camera = createComparisonCamera();
+    const first = Symbol("first");
+    const second = Symbol("second");
+    const frame: ComparisonFrame = { size: [10, 3, 7], aspect: 1.4, verticalFov: 50 };
+    const large: ComparisonFrame = { ...frame, size: [20, 6, 14] };
+    const received: CameraPose[] = [];
+    camera.subscribe((_sender, pose) => received.push(pose));
+    camera.setFrame(first, frame);
+    camera.setFrame(second, large);
+    camera.fit();
+    expect(received.at(-1)).toEqual(fitComparisonFrames([frame, large]));
+    camera.removeFrame(second);
+    camera.fit();
+    expect(received.at(-1)).toEqual(fitComparisonFrames([frame]));
+    camera.removeFrame(first);
+    camera.fit();
+    expect(received).toHaveLength(2);
   });
 });

@@ -250,6 +250,9 @@ describe("SimilarityQueue", () => {
       "href",
       "/library/similar/1?returnTo=%2Flibrary%2Fsimilar%3Freview%3Dlater%26format%3Dstl",
     );
+    expect(
+      screen.getByText("Matching triangle geometry verified under a rigid transform."),
+    ).toBeVisible();
   });
 
   it("starts only the selected Model work", async () => {

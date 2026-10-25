@@ -5,6 +5,7 @@ import { ArrowLeft, ScanSearch } from "lucide-react";
 import { SimilarityComparison } from "@/components/similarity-comparison";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Card } from "@/components/ui/card";
 import { EmptyState } from "@/components/ui/empty-state";
 import { Input } from "@/components/ui/input";
 import { Modal } from "@/components/ui/modal";
@@ -102,157 +103,169 @@ function CandidateReview({
   } as const;
   return (
     <>
-      <PageHeader
-        title={t("similarity.compareTitle")}
-        description={
-          <span className="break-words">
-            {candidate.model_a.name} · {candidate.model_b.name}
-          </span>
-        }
-      />
-      <div className="space-y-5">
+      <PageHeader title={t("similarity.compareTitle")} />
+      <Card className="overflow-hidden">
         {reviewChanged && (
-          <p role="alert" className="text-sm text-warning">
+          <p role="alert" className="border-b border-border px-4 py-3 text-sm text-warning">
             {t("similarity.reviewChanged")}
           </p>
         )}
-        <div className="space-y-2">
-          <div className="flex flex-wrap gap-2">
-            <span className="text-sm font-semibold">{evidenceLabel(candidate.evidence_class)}</span>
-            <span className="text-sm text-muted-foreground">
-              {number(candidate.confidence * 100, "%")}
-            </span>
-            <Badge variant="outline">{t(stateLabels[candidate.review_state])}</Badge>
+        <div className="flex flex-wrap items-center justify-between gap-4 border-b border-border bg-muted/30 p-4">
+          <div className="min-w-0 flex-1 basis-72 space-y-2">
+            <div className="flex flex-wrap gap-2">
+              <span className="text-sm font-semibold">
+                {evidenceLabel(candidate.evidence_class)}
+              </span>
+              <span className="text-sm text-muted-foreground">
+                {number(candidate.confidence * 100, "%")}
+              </span>
+              <Badge variant="outline">{t(stateLabels[candidate.review_state])}</Badge>
+              {candidate.freshness === "stale" && (
+                <Badge variant="outline">{t("similarity.stale")}</Badge>
+              )}
+            </div>
             {candidate.freshness === "stale" && (
-              <Badge variant="outline">{t("similarity.stale")}</Badge>
+              <p className="text-sm text-warning">{evidenceDescription(candidate)}</p>
+            )}
+            <p className="text-sm text-muted-foreground">{t("similarity.confirmHelp")}</p>
+            {candidate.resolution_kind && (
+              <p className="text-sm text-muted-foreground">
+                {t(
+                  candidate.resolution_kind === "evidence_only"
+                    ? "similarity.evidenceResolution"
+                    : "similarity.multipartResolution",
+                )}
+              </p>
+            )}
+            {candidate.reconsidered_candidate_id && (
+              <p className="text-sm text-muted-foreground">{t("similarity.newAlgorithm")}</p>
             )}
           </div>
-          {candidate.freshness === "stale" && (
-            <p className="text-sm text-warning">{evidenceDescription(candidate)}</p>
-          )}
-          <p className="text-sm text-muted-foreground">{t("similarity.confirmHelp")}</p>
-          {candidate.resolution_kind && (
-            <p className="text-sm text-muted-foreground">
-              {t(
-                candidate.resolution_kind === "evidence_only"
-                  ? "similarity.evidenceResolution"
-                  : "similarity.multipartResolution",
-              )}
-            </p>
-          )}
-          {candidate.reconsidered_candidate_id && (
-            <p className="text-sm text-muted-foreground">{t("similarity.newAlgorithm")}</p>
-          )}
-        </div>
-        <div className="flex flex-wrap gap-2">
-          {allowed("confirm_evidence") && candidate.review_state !== "confirmed" && (
-            <Button
-              disabled={decision.isPending || readOnly}
-              onClick={() => setConfirmation(request("confirm_evidence"))}
-            >
-              {t("similarity.confirmEvidence")}
-            </Button>
-          )}
-          {allowed("create_multipart") && (
-            <Button
-              variant="outline"
-              disabled={decision.isPending || readOnly}
-              onClick={() => {
-                setTargetId(undefined);
-                setTargetSearch("");
-                setMultipartName(
-                  `${candidate.model_a.name} / ${candidate.model_b.name}`.slice(0, 255),
-                );
-                setConfirmation(request("create_multipart"));
-              }}
-            >
-              {t("similarity.createMultipart")}
-            </Button>
-          )}
-          {allowed("reject") && candidate.review_state !== "rejected" && (
-            <Button
-              variant="outline"
-              disabled={decision.isPending || readOnly}
-              onClick={() => submitDecision(request("reject"))}
-            >
-              {t("similarity.reject")}
-            </Button>
-          )}
-          {allowed("later") && candidate.review_state !== "later" && (
-            <Button
-              variant="outline"
-              disabled={decision.isPending || readOnly}
-              onClick={() => submitDecision(request("later"))}
-            >
-              {t("similarity.saveLater")}
-            </Button>
-          )}
-          {allowed("reopen") && candidate.review_state !== "open" && (
-            <Button
-              variant="ghost"
-              disabled={decision.isPending || readOnly}
-              onClick={() => submitDecision(request("reopen"))}
-            >
-              {t("similarity.reopen")}
-            </Button>
-          )}
-        </div>
-        {[a, b].map(
-          (model, index) =>
-            model.isError && (
-              <div key={index} role="alert" className="text-sm text-destructive">
-                {t("similarity.loadError")}{" "}
-                <Button variant="outline" onClick={() => void model.refetch()}>
-                  {t("similarity.retry")}
-                </Button>
-              </div>
-            ),
-        )}
-        <SimilarityComparison candidate={candidate} models={[a.data, b.data]} />
-        <details className="rounded-lg border border-border text-sm">
-          <summary className="cursor-pointer px-4 py-3 font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
-            {t("similarity.evidenceDetails")}
-          </summary>
-          <div className="space-y-4 border-t border-border p-4">
-            <p className="text-muted-foreground">{evidenceDescription(candidate)}</p>
-            <dl className="grid grid-cols-2 gap-4 sm:grid-cols-4">
-              {[
-                [t("similarity.chamfer"), number(proof.sampled_chamfer_mm, " mm")],
-                [t("similarity.hausdorff"), number(proof.sampled_hausdorff_mm, " mm")],
-                [
-                  t("similarity.iou"),
-                  number(proof.voxel_iou == null ? null : proof.voxel_iou * 100, "%"),
-                ],
-                [t("similarity.sampleCount"), number(proof.sample_points)],
-              ].map(([label, value]) => (
-                <div key={label}>
-                  <dt className="text-muted-foreground">{label}</dt>
-                  <dd className="mt-1 font-mono tabular-nums">{value}</dd>
-                </div>
-              ))}
-            </dl>
-            {proof.unavailable?.length ? (
-              <p className="text-sm text-muted-foreground">
-                {t("similarity.incompleteMeasurements")}
-              </p>
-            ) : null}
-            <details className="rounded-lg border border-border p-4 text-sm">
-              <summary className="cursor-pointer font-medium">{t("similarity.lineage")}</summary>
-              <p className="mt-3 text-muted-foreground">{candidate.algorithm_version}</p>
-              <ul className="mt-2 space-y-2">
-                {candidate.observations?.map((item) => (
-                  <li key={item.id} className="break-all font-mono text-xs">
-                    {item.input_hash_a} → {item.input_hash_b}
-                  </li>
-                ))}
-              </ul>
-              {candidate.observations_truncated && (
-                <p className="mt-2 text-muted-foreground">{t("similarity.lineageTruncated")}</p>
-              )}
-            </details>
+          <div className="flex flex-wrap gap-2">
+            {allowed("confirm_evidence") && candidate.review_state !== "confirmed" && (
+              <Button
+                size="sm"
+                disabled={decision.isPending || readOnly}
+                onClick={() => setConfirmation(request("confirm_evidence"))}
+              >
+                {t("similarity.confirmEvidence")}
+              </Button>
+            )}
+            {allowed("create_multipart") && (
+              <Button
+                size="sm"
+                variant="outline"
+                disabled={decision.isPending || readOnly}
+                onClick={() => {
+                  setTargetId(undefined);
+                  setTargetSearch("");
+                  setMultipartName(
+                    `${candidate.model_a.name} / ${candidate.model_b.name}`.slice(0, 255),
+                  );
+                  setConfirmation(request("create_multipart"));
+                }}
+              >
+                {t("similarity.createMultipart")}
+              </Button>
+            )}
+            {allowed("reject") && candidate.review_state !== "rejected" && (
+              <Button
+                size="sm"
+                variant="outline"
+                disabled={decision.isPending || readOnly}
+                onClick={() => submitDecision(request("reject"))}
+              >
+                {t("similarity.reject")}
+              </Button>
+            )}
+            {allowed("later") && candidate.review_state !== "later" && (
+              <Button
+                size="sm"
+                variant="outline"
+                disabled={decision.isPending || readOnly}
+                onClick={() => submitDecision(request("later"))}
+              >
+                {t("similarity.saveLater")}
+              </Button>
+            )}
+            {allowed("reopen") && candidate.review_state !== "open" && (
+              <Button
+                size="sm"
+                variant="ghost"
+                disabled={decision.isPending || readOnly}
+                onClick={() => submitDecision(request("reopen"))}
+              >
+                {t("similarity.reopen")}
+              </Button>
+            )}
           </div>
-        </details>
-      </div>
+        </div>
+        <div>
+          {[a, b].map(
+            (model, index) =>
+              model.isError && (
+                <div key={index} role="alert" className="m-4 text-sm text-destructive">
+                  {t("similarity.loadError")}{" "}
+                  <Button variant="outline" onClick={() => void model.refetch()}>
+                    {t("similarity.retry")}
+                  </Button>
+                </div>
+              ),
+          )}
+          <SimilarityComparison
+            candidate={candidate}
+            models={[a.data, b.data]}
+            evidence={
+              <section
+                aria-labelledby="similarity-match-details"
+                className="space-y-3 border-t border-border pt-4 text-xs"
+              >
+                <h2 id="similarity-match-details" className="text-sm font-semibold">
+                  {t("similarity.evidenceDetails")}
+                </h2>
+                <p className="text-muted-foreground">{evidenceDescription(candidate)}</p>
+                <dl className="grid grid-cols-2 gap-x-4 gap-y-2">
+                  {[
+                    [t("similarity.chamfer"), number(proof.sampled_chamfer_mm, " mm")],
+                    [t("similarity.hausdorff"), number(proof.sampled_hausdorff_mm, " mm")],
+                    [
+                      t("similarity.iou"),
+                      number(proof.voxel_iou == null ? null : proof.voxel_iou * 100, "%"),
+                    ],
+                    [t("similarity.sampleCount"), number(proof.sample_points)],
+                  ].map(([label, value]) => (
+                    <div key={label}>
+                      <dt className="text-muted-foreground">{label}</dt>
+                      <dd className="font-mono tabular-nums">{value}</dd>
+                    </div>
+                  ))}
+                </dl>
+                {proof.unavailable?.length ? (
+                  <p className="text-sm text-muted-foreground">
+                    {t("similarity.incompleteMeasurements")}
+                  </p>
+                ) : null}
+                <details className="border-t border-border pt-3 text-xs">
+                  <summary className="cursor-pointer font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
+                    {t("similarity.lineage")}
+                  </summary>
+                  <p className="mt-3 text-muted-foreground">{candidate.algorithm_version}</p>
+                  <ul className="mt-2 space-y-2">
+                    {candidate.observations?.map((item) => (
+                      <li key={item.id} className="break-all font-mono text-xs">
+                        {item.input_hash_a} → {item.input_hash_b}
+                      </li>
+                    ))}
+                  </ul>
+                  {candidate.observations_truncated && (
+                    <p className="mt-2 text-muted-foreground">{t("similarity.lineageTruncated")}</p>
+                  )}
+                </details>
+              </section>
+            }
+          />
+        </div>
+      </Card>
       <Modal
         open={confirmation?.action === "confirm_evidence"}
         onClose={() => {
