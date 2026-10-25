@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useId, useState } from "react";
 import { useLocation, useNavigate, useNavigationType } from "react-router-dom";
 import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
-import { Box, ScanSearch, SlidersHorizontal } from "lucide-react";
+import { Box, Columns2, ScanSearch, SlidersHorizontal } from "lucide-react";
 
 import { SimilaritySearch } from "@/components/similarity-search";
 import { CollectionPicker } from "@/components/collection-picker";
@@ -78,8 +78,12 @@ export function SimilarityRow({
   return (
     <li className="grid gap-4 px-4 py-4 sm:px-5 @3xl/similarity:grid-cols-[minmax(0,1fr)_auto] @3xl/similarity:items-center">
       <div className="min-w-0 space-y-3">
-        <div className="grid gap-3 @lg/similarity:grid-cols-2 @lg/similarity:items-center">
+        <div className="grid gap-3 @lg/similarity:grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] @lg/similarity:items-center">
           <ModelLabel model={candidate.model_a} />
+          <Columns2
+            className="hidden h-4 w-4 text-muted-foreground @lg/similarity:block"
+            aria-hidden
+          />
           <ModelLabel model={candidate.model_b} />
         </div>
         <div className="min-w-0 space-y-1">
