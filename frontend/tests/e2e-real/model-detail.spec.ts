@@ -81,7 +81,7 @@ test.describe("model detail", () => {
 
     // ── Double-click the heading and persist the new name ──
     await page.getByRole("heading", { name, exact: true }).dblclick();
-    const input = page.getByPlaceholder("Model name");
+    const input = page.getByRole("textbox", { name: "Model name", exact: true });
     await expect(input).toBeFocused();
     await expect(input).toHaveValue(name);
     await input.fill(renamed);

@@ -1,10 +1,13 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useId, useState } from "react";
+import { useLocation, useNavigate, useNavigationType } from "react-router-dom";
 import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
-import { ArrowLeftRight, Box, ScanSearch } from "lucide-react";
+import { ArrowLeftRight, Box, ScanSearch, SlidersHorizontal } from "lucide-react";
 
 import { SimilaritySearch } from "@/components/similarity-search";
 import { CollectionPicker } from "@/components/collection-picker";
 import { Badge } from "@/components/ui/badge";
+import { TabBar } from "@/components/ui/tabs";
+import { useSearchParams } from "@/lib/navigation";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -19,7 +22,13 @@ import { getSessionVersion } from "@/lib/session-transport";
 import { uiText } from "@/lib/locale";
 import { useI18n } from "@/lib/i18n";
 import { Link } from "@/lib/link";
-import { evidenceDescription, evidenceLabel, isSimilarityRunActive } from "@/lib/similarity";
+import {
+  evidenceDescription,
+  evidenceLabel,
+  isSimilarityRunActive,
+  readSimilarityFilters,
+  similarityFiltersHref,
+} from "@/lib/similarity";
 import { toast } from "@/lib/toast";
 import { useViewportAssetUrl } from "@/lib/use-viewport-admission";
 import type { CollectionNodeRead } from "@/types";
@@ -45,7 +54,7 @@ function ModelLabel({ model }: { model: SimilarityModel }) {
     >
       <span
         ref={ref}
-        className="flex h-10 w-10 sm:h-12 sm:w-12 shrink-0 items-center justify-center overflow-hidden rounded-md bg-muted"
+        className="flex h-20 w-20 sm:h-24 sm:w-24 shrink-0 items-center justify-center overflow-hidden rounded-md bg-muted"
       >
         {image ? (
           <img src={image} alt="" className="h-full w-full object-contain" />
@@ -58,7 +67,13 @@ function ModelLabel({ model }: { model: SimilarityModel }) {
   );
 }
 
-export function SimilarityRow({ candidate }: { candidate: SimilarityCandidate }) {
+export function SimilarityRow({
+  candidate,
+  returnTo,
+}: {
+  candidate: SimilarityCandidate;
+  returnTo?: string;
+}) {
   const { t } = useI18n();
   return (
     <li className="px-4 py-4 sm:px-5">
@@ -73,7 +88,7 @@ export function SimilarityRow({ candidate }: { candidate: SimilarityCandidate })
       <div className="mt-3 flex flex-wrap items-center justify-between gap-3 border-t border-border pt-3">
         <div className="min-w-0 space-y-1">
           <div className="flex flex-wrap items-center gap-2">
-            <Badge variant="outline">{evidenceLabel(candidate.evidence_class)}</Badge>
+            <span className="text-sm font-medium">{evidenceLabel(candidate.evidence_class)}</span>
             <span className="font-mono text-xs tabular-nums text-muted-foreground">
               {Math.round(candidate.confidence * 100)}%
             </span>
@@ -81,12 +96,23 @@ export function SimilarityRow({ candidate }: { candidate: SimilarityCandidate })
               <Badge variant="outline">{t("similarity.stale")}</Badge>
             )}
           </div>
-          <p className="text-xs leading-relaxed text-muted-foreground">
-            {evidenceDescription(candidate)}
-          </p>
+          {candidate.freshness === "stale" ? (
+            <p className="text-xs text-warning">{evidenceDescription(candidate)}</p>
+          ) : (
+            <details className="text-xs text-muted-foreground">
+              <summary className="cursor-pointer py-1 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
+                {t("similarity.evidenceDetails")}
+              </summary>
+              <p className="mt-1 max-w-prose leading-relaxed">{evidenceDescription(candidate)}</p>
+            </details>
+          )}
         </div>
-        <Button asChild variant="outline" size="sm">
-          <Link href={`/library/similar/${candidate.id}`}>{t("similarity.compare")}</Link>
+        <Button asChild size="sm">
+          <Link
+            href={`/library/similar/${candidate.id}${returnTo ? `?returnTo=${encodeURIComponent(returnTo)}` : ""}`}
+          >
+            {t("similarity.compare")}
+          </Link>
         </Button>
       </div>
     </li>
@@ -95,63 +121,157 @@ export function SimilarityRow({ candidate }: { candidate: SimilarityCandidate })
 
 export function SimilarityQueue({ modelId }: { modelId?: number }) {
   const { t } = useI18n();
-  const [filters, setFilters] = useState<SimilarityFilters>({
-    review_state: "open",
-    freshness: "current",
-  });
-  const [threshold, setThreshold] = useState<number | null>(null);
+  const navigate = useNavigate();
+  const searchParams = useSearchParams();
+  const location = useLocation();
+  const navigationType = useNavigationType();
+  const filterOwner = useId();
+  const currentUrl = location.pathname + location.search;
+  const [filterDraft, setFilterDraft] = useState(() => ({
+    entry: location.key,
+    modelId,
+    filters: readSimilarityFilters(modelId === undefined ? searchParams : new URLSearchParams()),
+    dirty: false,
+  }));
+  // Router replacements may commit after the next input event. Only a new
+  // navigation (including Back/Forward) may replace the live draft with URL state.
+  if (filterDraft.modelId !== modelId || filterDraft.entry !== location.key) {
+    const ownReplacement =
+      modelId === undefined &&
+      filterDraft.modelId === modelId &&
+      navigationType === "REPLACE" &&
+      location.state?.similarityFilterOwner === filterOwner;
+    setFilterDraft({
+      entry: location.key,
+      modelId,
+      filters:
+        ownReplacement || (modelId !== undefined && filterDraft.modelId === modelId)
+          ? filterDraft.filters
+          : readSimilarityFilters(modelId === undefined ? searchParams : new URLSearchParams()),
+      dirty: ownReplacement && filterDraft.dirty,
+    });
+  }
+  const filters = filterDraft.filters;
+  const setFilters = useCallback((patch: Partial<SimilarityFilters>) => {
+    setFilterDraft((current) => {
+      const filters = { ...current.filters, ...patch };
+      return {
+        ...current,
+        filters,
+        dirty: true,
+      };
+    });
+  }, []);
+  const filterUrl = similarityFiltersHref(filters);
+  useEffect(() => {
+    if (modelId !== undefined || !filterDraft.dirty || currentUrl === filterUrl) return;
+    void navigate(filterUrl, {
+      replace: true,
+      state: { similarityFilterOwner: filterOwner },
+    });
+  }, [modelId, filterDraft.dirty, currentUrl, filterUrl, navigate, filterOwner]);
+
+  // Input intent is immediate. Only the bounded candidate read waits for rapid
+  // slider/key changes to settle, so route acknowledgements cannot reset it.
+  const [requestFilters, setRequestFilters] = useState(filters);
+  const filtersSettling = requestFilters !== filters;
+  useEffect(() => {
+    if (!filtersSettling) return;
+    const timer = setTimeout(() => setRequestFilters(filters), FILTER_DEBOUNCE_MS);
+    return () => clearTimeout(timer);
+  }, [filters, filtersSettling]);
+  const threshold =
+    filters.minimum_confidence === undefined ? null : Math.round(filters.minimum_confidence * 100);
+  const [filtersOpen, setFiltersOpen] = useState(false);
+  const filtersId = useId();
   const [startedRun, setStartedRun] = useState<{ modelId: number; id: number } | null>(null);
   const runId = startedRun?.modelId === modelId ? (startedRun?.id ?? null) : null;
   const [collectionChoice, setCollectionChoice] = useState<CollectionNodeRead | null>(null);
   const [choosingCollection, setChoosingCollection] = useState(false);
+  const matchingCollection =
+    collectionChoice?.id === filters.collection_id ? collectionChoice : null;
   const status = useQuery(similarityStatusOptions());
   const run = useQuery(similarityRunOptions(runId));
-  const queue = useInfiniteQuery(
-    similarityCandidatesOptions(
-      filters,
+  const queue = useInfiniteQuery({
+    ...similarityCandidatesOptions(
+      requestFilters,
       modelId,
       Boolean(run.data && isSimilarityRunActive(run.data)),
     ),
-  );
+    enabled: !filtersSettling,
+  });
   const { find } = useSimilarityCommands();
-  useEffect(() => {
-    if (threshold === null) return;
-    const timer = setTimeout(
-      () => setFilters((current) => ({ ...current, minimum_confidence: threshold / 100 })),
-      FILTER_DEBOUNCE_MS,
-    );
-    return () => clearTimeout(timer);
-  }, [threshold]);
   const { refetch: refreshCandidates } = queue;
   const runFinished = run.data ? !isSimilarityRunActive(run.data) : false;
   useEffect(() => {
     if (runFinished) void refreshCandidates();
   }, [runFinished, refreshCandidates]);
   const rows = queue.data?.pages.flatMap((page) => page.items) ?? [];
+  const activeFilters = [
+    filters.evidence_class ? evidenceLabel(filters.evidence_class) : null,
+    filters.freshness !== "current"
+      ? t(filters.freshness === "stale" ? "similarity.stale" : "similarity.allFreshness")
+      : null,
+    filters.minimum_confidence !== undefined
+      ? `${t("similarity.threshold")}: ${Math.round(filters.minimum_confidence * 100)}%`
+      : null,
+    filters.collection_id !== undefined
+      ? (matchingCollection?.display_path ??
+        t("similarity.collectionNumber", { id: filters.collection_id }))
+      : null,
+    filters.file_type?.toUpperCase(),
+    filters.source
+      ? t(filters.source === "vault" ? "similarity.vault" : "similarity.external")
+      : null,
+    filters.known_good ? t("similarity.knownGood") : null,
+  ].filter((value) => value !== null && value !== undefined);
+  function clearFilters() {
+    setCollectionChoice(null);
+    setChoosingCollection(false);
+    setFilterDraft((current) => {
+      const filters: SimilarityFilters = {
+        review_state: current.filters.review_state,
+        freshness: "current",
+      };
+      return {
+        ...current,
+        filters,
+        dirty: true,
+      };
+    });
+  }
+  const modelReturnParams = new URLSearchParams(searchParams);
+  modelReturnParams.set("tab", "similar");
+  const returnTo = modelId === undefined ? filterUrl : `/models/${modelId}?${modelReturnParams}`;
   return (
     <>
       <SimilaritySearch modelId={modelId} />
       <Card className="@container/similarity overflow-hidden">
         <div className="flex flex-wrap items-end gap-3 border-b bg-muted/30 p-3">
-          <label className="min-w-0 flex-1 basis-32 space-y-1 text-xs">
-            {t("similarity.review")}
-            <select
-              className="block w-full rounded-md border border-input bg-background p-2 text-sm"
-              value={filters.review_state}
-              onChange={(event) =>
-                setFilters({
-                  ...filters,
-                  review_state: REVIEW_STATES.find((value) => value === event.target.value),
-                })
-              }
-            >
-              {REVIEW_STATES.map((state) => (
-                <option key={state} value={state}>
-                  {t(`similarity.${state}`)}
-                </option>
-              ))}
-            </select>
-          </label>
+          <div className="min-w-0 flex-1 overflow-x-auto">
+            <TabBar
+              tabs={REVIEW_STATES.map((state) => ({ key: state, label: t(`similarity.${state}`) }))}
+              active={filters.review_state ?? "open"}
+              onChange={(review_state) => setFilters({ review_state })}
+              className="w-max min-w-full gap-1"
+              tabClassName="whitespace-nowrap rounded-md px-3 py-2 text-sm font-medium text-muted-foreground transition-colors hover:bg-popover-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              activeTabClassName="bg-accent text-accent-foreground"
+              showIndicator={false}
+            />
+          </div>
+          <Button
+            variant="outline"
+            size="sm"
+            aria-expanded={filtersOpen}
+            aria-controls={filtersId}
+            onClick={() => setFiltersOpen(!filtersOpen)}
+          >
+            <SlidersHorizontal className="h-4 w-4" aria-hidden />
+            {uiText("Filters")}
+            {activeFilters.length > 0 && (
+              <span className="font-mono text-xs">{activeFilters.length}</span>
+            )}
+          </Button>
           {modelId !== undefined && (
             <Button
               onClick={() => {
@@ -171,16 +291,17 @@ export function SimilarityQueue({ modelId }: { modelId?: number }) {
                 );
               }}
               loading={find.isPending && find.variables?.id === modelId}
-              disabled={!status.data?.enabled}
+              disabled={status.isError || !status.data?.enabled}
             >
               {t("similarity.find")}
             </Button>
           )}
-          <details className="min-w-0 basis-full">
-            <summary className="cursor-pointer text-xs font-medium">
-              {t("similarity.moreFilters")}
-            </summary>
-            <div className="mt-3 flex flex-wrap items-end gap-3">
+          <div
+            id={filtersId}
+            hidden={!filtersOpen}
+            className="min-w-0 basis-full border-t border-border pt-3"
+          >
+            <div className="flex flex-wrap items-end gap-3">
               <label className="min-w-0 flex-1 basis-32 space-y-1 text-xs">
                 {t("similarity.allClasses")}
                 <select
@@ -188,7 +309,6 @@ export function SimilarityQueue({ modelId }: { modelId?: number }) {
                   value={filters.evidence_class ?? ""}
                   onChange={(event) =>
                     setFilters({
-                      ...filters,
                       evidence_class: EVIDENCE_CLASSES.find(
                         (value) => value === event.target.value,
                       ),
@@ -210,7 +330,6 @@ export function SimilarityQueue({ modelId }: { modelId?: number }) {
                   value={filters.freshness ?? ""}
                   onChange={(event) =>
                     setFilters({
-                      ...filters,
                       freshness:
                         event.target.value === "current"
                           ? "current"
@@ -242,7 +361,9 @@ export function SimilarityQueue({ modelId }: { modelId?: number }) {
                   }
                   aria-label={t("similarity.threshold")}
                   className="block w-full accent-primary"
-                  onChange={(event) => setThreshold(Number(event.target.value))}
+                  onChange={(event) =>
+                    setFilters({ minimum_confidence: Number(event.target.value) / 100 })
+                  }
                 />
               </label>
               {!modelId && (
@@ -257,14 +378,21 @@ export function SimilarityQueue({ modelId }: { modelId?: number }) {
                       else {
                         setChoosingCollection(false);
                         setCollectionChoice(null);
-                        setFilters({ ...filters, collection_id: undefined });
+                        setFilters({ collection_id: undefined });
                       }
                     }}
                   >
                     <option value="">{t("similarity.library")}</option>
                     <option value="pick">{uiText("Choose existing collection")}</option>
-                    {collectionChoice && (
-                      <option value={collectionChoice.id}>{collectionChoice.display_path}</option>
+                    {matchingCollection && (
+                      <option value={matchingCollection.id}>
+                        {matchingCollection.display_path}
+                      </option>
+                    )}
+                    {filters.collection_id !== undefined && !matchingCollection && (
+                      <option value={filters.collection_id}>
+                        {t("similarity.collectionNumber", { id: filters.collection_id })}
+                      </option>
                     )}
                   </select>
                   {choosingCollection && (
@@ -275,7 +403,7 @@ export function SimilarityQueue({ modelId }: { modelId?: number }) {
                       onSelect={(collection) => {
                         if (collection === null) throw new Error("A collection is required");
                         setCollectionChoice(collection);
-                        setFilters({ ...filters, collection_id: collection.id });
+                        setFilters({ collection_id: collection.id });
                         setChoosingCollection(false);
                       }}
                     />
@@ -287,9 +415,7 @@ export function SimilarityQueue({ modelId }: { modelId?: number }) {
                 <select
                   className="block rounded-md border border-input bg-background p-2 text-sm"
                   value={filters.file_type ?? ""}
-                  onChange={(event) =>
-                    setFilters({ ...filters, file_type: event.target.value || undefined })
-                  }
+                  onChange={(event) => setFilters({ file_type: event.target.value || undefined })}
                 >
                   <option value="">{t("similarity.allFormats")}</option>
                   {["stl", "obj", "3mf", "step"].map((value) => (
@@ -306,7 +432,6 @@ export function SimilarityQueue({ modelId }: { modelId?: number }) {
                   value={filters.source ?? ""}
                   onChange={(event) =>
                     setFilters({
-                      ...filters,
                       source:
                         event.target.value === "vault"
                           ? "vault"
@@ -325,14 +450,24 @@ export function SimilarityQueue({ modelId }: { modelId?: number }) {
                 <Checkbox
                   ariaLabel={t("similarity.knownGood")}
                   checked={filters.known_good ?? false}
-                  onChange={(checked) =>
-                    setFilters({ ...filters, known_good: checked || undefined })
-                  }
+                  onChange={(checked) => setFilters({ known_good: checked || undefined })}
                 />
                 {t("similarity.knownGood")}
               </label>
             </div>
-          </details>
+          </div>
+        </div>
+        {activeFilters.length > 0 && (
+          <div className="flex flex-wrap items-center justify-between gap-2 border-b px-4 py-2 text-xs text-muted-foreground">
+            <p className="min-w-0 break-words">{activeFilters.join(" · ")}</p>
+            <Button variant="ghost" size="sm" onClick={clearFilters}>
+              {uiText("Clear filters")}
+            </Button>
+          </div>
+        )}
+        <div className="border-b px-4 py-3 sm:px-5">
+          <h2 className="text-sm font-semibold">{t("similarity.review")}</h2>
+          <p className="mt-1 text-xs text-muted-foreground">{t("similarity.reviewHelp")}</p>
         </div>
         {status.isError && (
           <div role="alert" className="border-b p-3 text-sm text-destructive">
@@ -377,7 +512,7 @@ export function SimilarityQueue({ modelId }: { modelId?: number }) {
             )}
           </div>
         )}
-        {queue.isPending ? (
+        {filtersSettling || queue.isPending ? (
           <p role="status" className="p-6 text-sm text-muted-foreground">
             {t("similarity.loading")}
           </p>
@@ -389,19 +524,42 @@ export function SimilarityQueue({ modelId }: { modelId?: number }) {
         ) : rows.length ? (
           <ul className="divide-y divide-border">
             {rows.map((candidate) => (
-              <SimilarityRow key={candidate.id} candidate={candidate} />
+              <SimilarityRow key={candidate.id} candidate={candidate} returnTo={returnTo} />
             ))}
           </ul>
         ) : (
           <EmptyState
             icon={ScanSearch}
-            title={t(status.data?.enabled === false ? "similarity.disabled" : "similarity.empty")}
-            description={t(
-              status.data?.enabled === false ? "similarity.disabledHelp" : "similarity.emptyHelp",
+            title={t(
+              activeFilters.length
+                ? "similarity.emptyFiltered"
+                : filters.review_state === "confirmed"
+                  ? "similarity.emptyConfirmed"
+                  : filters.review_state === "later"
+                    ? "similarity.emptyLater"
+                    : filters.review_state === "rejected"
+                      ? "similarity.emptyRejected"
+                      : "similarity.empty",
             )}
+            description={t(
+              activeFilters.length
+                ? "similarity.emptyFilteredHelp"
+                : filters.review_state !== "open"
+                  ? "similarity.emptyReviewedHelp"
+                  : status.data?.enabled === false
+                    ? "similarity.queueDisabledHelp"
+                    : "similarity.emptyHelp",
+            )}
+            action={
+              activeFilters.length > 0 ? (
+                <Button variant="outline" onClick={clearFilters}>
+                  {uiText("Clear filters")}
+                </Button>
+              ) : undefined
+            }
           />
         )}
-        {queue.isError && queue.data && (
+        {!filtersSettling && queue.isError && queue.data && (
           <div role="alert" className="space-y-2 border-t p-3 text-sm text-destructive">
             <p>{t("similarity.loadError")}</p>
             <Button
@@ -414,7 +572,7 @@ export function SimilarityQueue({ modelId }: { modelId?: number }) {
             </Button>
           </div>
         )}
-        {queue.hasNextPage && !queue.isFetchNextPageError && (
+        {!filtersSettling && queue.hasNextPage && !queue.isFetchNextPageError && (
           <div className="border-t p-3">
             <Button
               variant="outline"

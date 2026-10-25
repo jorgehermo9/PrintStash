@@ -1,5 +1,5 @@
 import { useDeferredValue, useState } from "react";
-import { useParams } from "react-router-dom";
+import { useParams, useSearchParams } from "react-router-dom";
 import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
 import { ArrowLeft, ScanSearch } from "lucide-react";
 import { SimilarityComparison } from "@/components/similarity-comparison";
@@ -118,14 +118,19 @@ function CandidateReview({
         )}
         <div className="space-y-2">
           <div className="flex flex-wrap gap-2">
-            <Badge variant="secondary">{evidenceLabel(candidate.evidence_class)}</Badge>
-            <Badge variant="outline">{number(candidate.confidence * 100, "%")}</Badge>
+            <span className="text-sm font-semibold">{evidenceLabel(candidate.evidence_class)}</span>
+            <span className="text-sm text-muted-foreground">
+              {number(candidate.confidence * 100, "%")}
+            </span>
             <Badge variant="outline">{t(stateLabels[candidate.review_state])}</Badge>
-            <Badge variant="outline">
-              {t(candidate.freshness === "current" ? "similarity.current" : "similarity.stale")}
-            </Badge>
+            {candidate.freshness === "stale" && (
+              <Badge variant="outline">{t("similarity.stale")}</Badge>
+            )}
           </div>
-          <p className="text-sm">{evidenceDescription(candidate)}</p>
+          {candidate.freshness === "stale" && (
+            <p className="text-sm text-warning">{evidenceDescription(candidate)}</p>
+          )}
+          <p className="text-sm text-muted-foreground">{t("similarity.confirmHelp")}</p>
           {candidate.resolution_kind && (
             <p className="text-sm text-muted-foreground">
               {t(
@@ -204,38 +209,48 @@ function CandidateReview({
             ),
         )}
         <SimilarityComparison candidate={candidate} models={[a.data, b.data]} />
-        <dl className="grid grid-cols-2 gap-4 rounded-lg border border-border p-4 text-sm sm:grid-cols-4">
-          {[
-            [t("similarity.chamfer"), number(proof.sampled_chamfer_mm, " mm")],
-            [t("similarity.hausdorff"), number(proof.sampled_hausdorff_mm, " mm")],
-            [
-              t("similarity.iou"),
-              number(proof.voxel_iou == null ? null : proof.voxel_iou * 100, "%"),
-            ],
-            [t("similarity.sampleCount"), number(proof.sample_points)],
-          ].map(([label, value]) => (
-            <div key={label}>
-              <dt className="text-muted-foreground">{label}</dt>
-              <dd className="mt-1 font-mono tabular-nums">{value}</dd>
-            </div>
-          ))}
-        </dl>
-        {proof.unavailable?.length ? (
-          <p className="text-sm text-muted-foreground">{t("similarity.incompleteMeasurements")}</p>
-        ) : null}
-        <details className="rounded-lg border border-border p-4 text-sm">
-          <summary className="cursor-pointer font-medium">{t("similarity.lineage")}</summary>
-          <p className="mt-3 text-muted-foreground">{candidate.algorithm_version}</p>
-          <ul className="mt-2 space-y-2">
-            {candidate.observations?.map((item) => (
-              <li key={item.id} className="break-all font-mono text-xs">
-                {item.input_hash_a} → {item.input_hash_b}
-              </li>
-            ))}
-          </ul>
-          {candidate.observations_truncated && (
-            <p className="mt-2 text-muted-foreground">{t("similarity.lineageTruncated")}</p>
-          )}
+        <details className="rounded-lg border border-border text-sm">
+          <summary className="cursor-pointer px-4 py-3 font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
+            {t("similarity.evidenceDetails")}
+          </summary>
+          <div className="space-y-4 border-t border-border p-4">
+            <p className="text-muted-foreground">{evidenceDescription(candidate)}</p>
+            <dl className="grid grid-cols-2 gap-4 sm:grid-cols-4">
+              {[
+                [t("similarity.chamfer"), number(proof.sampled_chamfer_mm, " mm")],
+                [t("similarity.hausdorff"), number(proof.sampled_hausdorff_mm, " mm")],
+                [
+                  t("similarity.iou"),
+                  number(proof.voxel_iou == null ? null : proof.voxel_iou * 100, "%"),
+                ],
+                [t("similarity.sampleCount"), number(proof.sample_points)],
+              ].map(([label, value]) => (
+                <div key={label}>
+                  <dt className="text-muted-foreground">{label}</dt>
+                  <dd className="mt-1 font-mono tabular-nums">{value}</dd>
+                </div>
+              ))}
+            </dl>
+            {proof.unavailable?.length ? (
+              <p className="text-sm text-muted-foreground">
+                {t("similarity.incompleteMeasurements")}
+              </p>
+            ) : null}
+            <details className="rounded-lg border border-border p-4 text-sm">
+              <summary className="cursor-pointer font-medium">{t("similarity.lineage")}</summary>
+              <p className="mt-3 text-muted-foreground">{candidate.algorithm_version}</p>
+              <ul className="mt-2 space-y-2">
+                {candidate.observations?.map((item) => (
+                  <li key={item.id} className="break-all font-mono text-xs">
+                    {item.input_hash_a} → {item.input_hash_b}
+                  </li>
+                ))}
+              </ul>
+              {candidate.observations_truncated && (
+                <p className="mt-2 text-muted-foreground">{t("similarity.lineageTruncated")}</p>
+              )}
+            </details>
+          </div>
         </details>
       </div>
       <Modal
@@ -440,8 +455,22 @@ function CandidateReview({
     </>
   );
 }
+function comparisonReturnHref(value: string | null): string {
+  if (
+    !value ||
+    value.includes("\\") ||
+    [...value].some((character) => character.charCodeAt(0) < 32 || character.charCodeAt(0) === 127)
+  )
+    return "/library/similar";
+  return /^\/(?:library\/similar|models\/[1-9]\d*)(?:\?[^#]*)?$/.test(value)
+    ? value
+    : "/library/similar";
+}
+
 export default function SimilarModelComparisonPage() {
   const { id } = useParams();
+  const [searchParams] = useSearchParams();
+  const returnHref = comparisonReturnHref(searchParams.get("returnTo"));
   const candidateId = Number(id);
   const validId = Number.isSafeInteger(candidateId) && candidateId > 0;
   const { t } = useI18n();
@@ -451,11 +480,11 @@ export default function SimilarModelComparisonPage() {
   return (
     <PageContainer>
       <Link
-        href="/library/similar"
+        href={returnHref}
         className="mb-4 inline-flex items-center gap-2 text-sm text-primary hover:underline"
       >
         <ArrowLeft className="h-4 w-4" />
-        {t("similarity.back")}
+        {t(returnHref.startsWith("/models/") ? "similarity.backToModel" : "similarity.back")}
       </Link>
       {candidate.isError && candidate.data && !inaccessible && (
         <div role="alert" className="text-sm text-destructive">

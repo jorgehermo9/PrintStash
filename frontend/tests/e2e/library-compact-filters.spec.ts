@@ -10,6 +10,63 @@ useMockApi();
 test.describe("compact Library filters", () => {
   test.use({ viewport: { width: 1920, height: 1080 } });
 
+  test("keeps loading feedback in the existing filter row", async ({ page }) => {
+    const pending = Promise.withResolvers<void>();
+    await page.route("**/api/v1/models/facets**", async (route) => {
+      await pending.promise;
+      await route.fulfill({
+        json: {
+          file_type: [{ value: "3mf", count: 7 }],
+          material_type: [],
+          slicer_name: [],
+          printer_model: [],
+          revision_status: [],
+          print_outcome: [],
+          storage: [],
+          printed: [],
+        },
+      });
+    });
+    try {
+      await page.goto("/?file_type=3mf");
+      const filters = page.getByRole("main").getByRole("region", { name: "Filters", exact: true });
+      const loading = filters.getByRole("status", { name: "Loading filter values…" });
+      const uploaded = filters.getByRole("button", { name: "Uploaded", exact: true });
+      await expect(loading).toBeVisible();
+      await expect(filters.getByRole("checkbox", { name: "3MF", exact: true })).toBeChecked();
+      await expect(uploaded).toBeEnabled();
+      await expect(page.getByTitle("Remove File type: 3MF", { exact: true })).toBeVisible();
+      await page.evaluate(() => document.fonts.ready);
+      const before = await uploaded.boundingBox();
+      const spinner = await loading.boundingBox();
+      const panel = await filters.boundingBox();
+      expect(before).not.toBeNull();
+      expect(spinner).not.toBeNull();
+      expect(panel).not.toBeNull();
+      expect(
+        Math.abs(spinner!.y + spinner!.height / 2 - before!.y - before!.height / 2),
+      ).toBeLessThan(2);
+      const similar = filters.getByRole("checkbox", { name: "Has similar candidates" });
+      const checkboxBox = await similar.boundingBox();
+      expect(checkboxBox).not.toBeNull();
+      await page.mouse.move(
+        checkboxBox!.x + checkboxBox!.width / 2,
+        checkboxBox!.y + checkboxBox!.height / 2,
+      );
+      await page.mouse.down();
+      pending.resolve();
+      await expect(loading).toHaveCount(0);
+      await page.mouse.up();
+      await expect(similar).toBeChecked();
+      await expect(page).toHaveURL(/has_similar_candidates=yes/);
+      await expect(filters.getByRole("checkbox", { name: "3MF", exact: true })).toBeChecked();
+      expect((await uploaded.boundingBox())!.y).toBe(before!.y);
+      expect((await filters.boundingBox())!.height).toBe(panel!.height);
+    } finally {
+      pending.resolve();
+    }
+  });
+
   test("keeps expanded dates alongside the open tree on 1080p", async ({ page }) => {
     const problems = await collectPageProblems(page);
     await page.goto(

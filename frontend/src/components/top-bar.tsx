@@ -40,7 +40,7 @@ import {
   TaskItem,
 } from "@/lib/task-center";
 
-const WIKI_URL = "https://xiao-villamor.github.io/PrintStash/";
+const WIKI_URL = "https://www.printstash.org/docs/";
 
 // `lastVaultHref` reads the remembered collection out of localStorage — an
 // external store. Same-tab writes are picked up on the next render (a route

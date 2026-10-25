@@ -19,7 +19,7 @@
  */
 
 import "@testing-library/jest-dom/vitest";
-import { render, screen } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import { useState } from "react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
@@ -317,6 +317,61 @@ describe("StructuredFilters", () => {
 });
 
 describe("StructuredFilters inline", () => {
+  it("places pending feedback alongside usable controls", async () => {
+    const user = userEvent.setup();
+    const { onChange } = renderFilters({
+      layout: "inline",
+      facets: undefined,
+      loading: true,
+      active: { file_type: ["3mf"] },
+      uploadedAfter: "2026-01-01",
+    });
+    const controls = within(screen.getByRole("group", { name: "Model filters" }));
+    expect(controls.getByRole("status", { name: "Loading filter values…" })).toBeVisible();
+    expect(controls.getByRole("checkbox", { name: "3MF" })).toBeChecked();
+    expect(controls.getByRole("button", { name: "Uploaded" })).toBeEnabled();
+    expect(screen.getByLabelText("After")).toHaveValue("2026-01-01");
+    await user.click(controls.getByRole("checkbox", { name: "3MF" }));
+    expect(onChange).toHaveBeenCalledWith("file_type", []);
+  });
+
+  it("retains available selections when pending counts become ready", () => {
+    const onChange = vi.fn<Props["onChange"]>();
+    const view = renderFilters({
+      layout: "inline",
+      facets: undefined,
+      loading: true,
+      active: { file_type: ["3mf"] },
+      onChange,
+    });
+    view.rerender(
+      <StructuredFilters
+        layout="inline"
+        facets={{
+          ...FACETS,
+          file_type: [
+            { value: "3mf", count: 7 },
+            { value: "stl", count: 12 },
+          ],
+        }}
+        active={{ file_type: ["3mf"] }}
+        onChange={onChange}
+      />,
+    );
+    expect(screen.queryByRole("status", { name: "Loading filter values…" })).toBeNull();
+    expect(screen.getByRole("checkbox", { name: "3MF" })).toBeChecked();
+    expect(screen.getByRole("checkbox", { name: "STL" })).toBeEnabled();
+    expect(onChange).not.toHaveBeenCalled();
+  });
+
+  it("keeps loaded values interactive during a refresh", async () => {
+    const user = userEvent.setup();
+    const { onChange } = renderFilters({ layout: "inline", loading: true });
+    await user.click(screen.getByRole("checkbox", { name: "STL" }));
+    expect(onChange).toHaveBeenCalledWith("file_type", ["stl"]);
+    expect(screen.getByRole("button", { name: "Material" })).toBeEnabled();
+  });
+
   function StatefulFilters({ facets = FACETS, active = {}, ...props }: Partial<Props>) {
     const [selected, setSelected] = useState(active);
     return (

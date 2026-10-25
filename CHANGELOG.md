@@ -5,7 +5,10 @@
 ### Fixed
 
 - Language choices open in a framed menu with keyboard navigation and return focus to their button. Saved views uses the full quick-access row with a visible open state and compact search focus.
-- Model title editing aligns Save and Cancel with the input, including validation errors, and keeps the actions together on narrow screens.
+- Model and collection names open a compact editor beside the title with Save and Cancel. Renaming keeps Add tags, Favorite and the page controls visible; full Model details remain a separate action.
+- Similar models opens on visual matches with direct review tabs, separate analysis settings/history, readable pair previews and clear confirmation actions. Comparison links retain review filters, and empty states describe the selected review state accurately.
+- Library filter loading stays aligned with the filter controls without adding an empty spinner row.
+- Wiki links open the PrintStash documentation site on desktop and mobile.
 
 - Desktop Library filters open beside the results with active criteria and expanded dates visible, while collection browsing keeps quick access to Favorites, Saved views, Printers and Trash.
 - Library tools opens beside its button and preserves Similar models, New collection and selection. My workspace keeps Builds and Statistics separate and avoids duplicating the Library printer shortcut.

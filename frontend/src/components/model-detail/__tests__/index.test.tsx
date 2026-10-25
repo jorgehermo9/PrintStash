@@ -20,12 +20,13 @@
 import "@testing-library/jest-dom/vitest";
 import { act, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { useLocation } from "react-router-dom";
+import { useLocation, useNavigate } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { ModelDetail } from "@/components/model-detail";
 import { queryKeys } from "@/lib/query-client";
 import { aCollection, aMetadata } from "@/test-support/factories";
+import { similarityStatus } from "@/test-support/similarity";
 import { collectionTreeRoutes } from "@/test-support/collection-tree";
 import { json, memberSession, renderApp, type RenderAppOptions } from "@/test-support/render";
 import type { FileRead, ModelRead } from "@/types";
@@ -78,8 +79,13 @@ function aModel(over: Partial<ModelRead> = {}): ModelRead {
 
 function DetailLocation() {
   const location = useLocation();
+  const navigate = useNavigate();
   return (
-    <output aria-label="Current detail location">{location.pathname + location.search}</output>
+    <>
+      <output aria-label="Current detail location">{location.pathname + location.search}</output>
+      <button onClick={() => navigate("/models/1?tab=files")}>Open Files URL</button>
+      <button onClick={() => navigate(-1)}>Previous detail</button>
+    </>
   );
 }
 
@@ -101,6 +107,8 @@ function renderDetail(options: RenderAppOptions & { model?: ModelRead } = {}) {
         "GET /api/v1/printers": json([]),
         ...collectionTreeRoutes([aCollection()]),
         "GET /api/v1/tags": json([]),
+        "GET /api/v1/similarity/status": json(similarityStatus()),
+        "GET /api/v1/similarity/candidates": json({ items: [], next_cursor: null }),
         ...routes,
       },
       ...rest,
@@ -137,7 +145,7 @@ describe("ModelDetail", () => {
 
       await user.click(await screen.findByRole("heading", { name: "Benchy", level: 1 }));
 
-      expect(screen.queryByPlaceholderText("Model name")).toBeNull();
+      expect(screen.queryByRole("textbox", { name: "Model name" })).toBeNull();
     });
 
     it("focuses the model name after a heading double-click", async () => {
@@ -146,7 +154,7 @@ describe("ModelDetail", () => {
 
       await user.dblClick(await screen.findByRole("heading", { name: "Benchy", level: 1 }));
 
-      const name = screen.getByPlaceholderText("Model name");
+      const name = screen.getByRole("textbox", { name: "Model name" });
       expect(name).toHaveValue("Benchy");
       expect(name).toHaveFocus();
     });
@@ -159,13 +167,13 @@ describe("ModelDetail", () => {
       const pencil = await screen.findByRole("button", { name: "Rename Benchy" });
       pencil.focus();
       await user.keyboard("{Enter}");
-      const name = screen.getByPlaceholderText("Model name");
+      const name = screen.getByRole("textbox", { name: "Model name" });
       await user.clear(name);
       await user.type(name, "New Benchy");
       await user.click(screen.getByRole("button", { name: "Save" }));
 
       expect(await screen.findByRole("heading", { name: "New Benchy", level: 1 })).toBeVisible();
-      expect(JSON.parse(app.requestsWithMethod("PATCH")[0].body ?? "{}")).toMatchObject({
+      expect(JSON.parse(app.requestsWithMethod("PATCH")[0].body ?? "{}")).toEqual({
         name: "New Benchy",
       });
     });
@@ -177,7 +185,250 @@ describe("ModelDetail", () => {
       await user.dblClick(await screen.findByRole("heading", { name: "Benchy", level: 1 }));
 
       expect(screen.queryByRole("button", { name: "Rename Benchy" })).toBeNull();
-      expect(screen.queryByPlaceholderText("Model name")).toBeNull();
+      expect(screen.queryByRole("textbox", { name: "Model name" })).toBeNull();
+    });
+
+    it("keeps header actions visible during title editing", async () => {
+      const user = userEvent.setup();
+      renderDetail();
+      await user.click(await screen.findByRole("button", { name: "Rename Benchy" }));
+
+      expect(screen.getByRole("dialog", { name: "Rename Benchy" })).not.toHaveAttribute(
+        "aria-modal",
+        "true",
+      );
+      expect(screen.getByRole("heading", { level: 1, name: "Benchy" })).toBeVisible();
+      expect(screen.getByRole("button", { name: "Add tags to Benchy" })).toBeVisible();
+      expect(screen.getByRole("button", { name: "Favorite" })).toBeVisible();
+      expect(screen.getByRole("button", { name: "Model actions" })).toBeVisible();
+      expect(screen.queryByPlaceholderText("Add a description…")).not.toBeInTheDocument();
+    });
+
+    it.each(["Cancel", "Escape", "outside"])(
+      "discards a title draft through %s",
+      async (dismiss) => {
+        const user = userEvent.setup();
+        const app = renderDetail();
+        await user.click(await screen.findByRole("button", { name: "Rename Benchy" }));
+        await user.clear(screen.getByRole("textbox", { name: "Model name" }));
+        await user.type(screen.getByRole("textbox", { name: "Model name" }), "Discarded title");
+        if (dismiss === "Cancel") await user.click(screen.getByRole("button", { name: "Cancel" }));
+        else if (dismiss === "Escape") await user.keyboard("{Escape}");
+        else await user.click(screen.getByRole("tab", { name: "Overview" }));
+
+        await waitFor(() =>
+          expect(screen.queryByRole("dialog", { name: "Rename Benchy" })).not.toBeInTheDocument(),
+        );
+        expect(screen.getByRole("heading", { level: 1, name: "Benchy" })).toBeVisible();
+        expect(app.requestsWithMethod("PATCH")).toHaveLength(0);
+        await user.click(screen.getByRole("button", { name: "Rename Benchy" }));
+        expect(screen.getByRole("textbox", { name: "Model name" })).toHaveValue("Benchy");
+      },
+    );
+
+    it("prevents an empty title save inside the editor", async () => {
+      const user = userEvent.setup();
+      const app = renderDetail();
+      await user.click(await screen.findByRole("button", { name: "Rename Benchy" }));
+      await user.clear(screen.getByRole("textbox", { name: "Model name" }));
+      await user.keyboard("{Enter}");
+
+      const editor = within(screen.getByRole("dialog", { name: "Rename Benchy" }));
+      expect(editor.getByRole("alert")).toHaveTextContent("Model name is required.");
+      expect(editor.getByRole("button", { name: "Save" })).toBeDisabled();
+      expect(app.requestsWithMethod("PATCH")).toHaveLength(0);
+    });
+
+    it("retains the title editing base after background metadata changes", async () => {
+      const user = userEvent.setup();
+      let version: string | null = null;
+      const app = renderDetail({
+        routes: {
+          "PATCH /api/v1/models/1": (_url, init) => {
+            version = new Headers(init?.headers).get("If-Match");
+            return json({ detail: "edit_conflict" }, 412);
+          },
+        },
+      });
+      await user.click(await screen.findByRole("button", { name: "Rename Benchy" }));
+      await user.clear(screen.getByRole("textbox", { name: "Model name" }));
+      await user.type(screen.getByRole("textbox", { name: "Model name" }), "My title");
+      act(() =>
+        app.client.setQueryData(
+          queryKeys.model(1),
+          aModel({
+            name: "Remote title",
+            tags: ["New tag"],
+            description: "Remote description",
+            edit_version: 4,
+          }),
+        ),
+      );
+      await user.click(screen.getByRole("button", { name: "Save" }));
+
+      expect(await screen.findByRole("button", { name: "Review latest version" })).toBeVisible();
+      expect(screen.getByRole("textbox", { name: "Model name" })).toHaveValue("My title");
+      expect(version).toBe('"model-1-eaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-v1"');
+      expect(JSON.parse(app.requestsWithMethod("PATCH")[0].body)).toEqual({ name: "My title" });
+    });
+
+    it("reviews a conflicting title inside its anchored editor", async () => {
+      const user = userEvent.setup();
+      const app = renderDetail({
+        routes: {
+          "PATCH /api/v1/models/1": json({ detail: "edit_conflict" }, 412),
+          "GET /api/v1/models/1": json(aModel({ name: "Remote title", edit_version: 7 })),
+        },
+      });
+      await user.click(await screen.findByRole("button", { name: "Rename Benchy" }));
+      await user.clear(screen.getByRole("textbox", { name: "Model name" }));
+      await user.type(screen.getByRole("textbox", { name: "Model name" }), "My title");
+      await user.click(screen.getByRole("button", { name: "Save" }));
+      await user.click(await screen.findByRole("button", { name: "Review latest version" }));
+
+      expect(await screen.findByText("Remote title")).toBeVisible();
+      expect(screen.getAllByRole("dialog")).toHaveLength(1);
+      expect(screen.getByRole("dialog", { name: "Rename Benchy" })).toHaveTextContent(
+        "Remote title",
+      );
+      expect(screen.getByRole("textbox", { name: "Model name" })).toHaveValue("My title");
+      expect(screen.getByRole("button", { name: "Save" })).toBeDisabled();
+      let version: string | null = null;
+      app.route({
+        "PATCH /api/v1/models/1": (_url, init) => {
+          version = new Headers(init?.headers).get("If-Match");
+          return json(aModel({ name: "My title", edit_version: 8 }));
+        },
+      });
+      await user.click(screen.getByRole("button", { name: "Save my draft against this version" }));
+      expect(await screen.findByRole("heading", { level: 1, name: "My title" })).toBeVisible();
+      expect(version).toBe('"model-1-eaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-v7"');
+      expect(JSON.parse(app.requestsWithMethod("PATCH")[1].body)).toEqual({ name: "My title" });
+    });
+
+    it("adopts a reviewed title without another write", async () => {
+      const user = userEvent.setup();
+      const app = renderDetail({
+        routes: {
+          "PATCH /api/v1/models/1": json({ detail: "unavailable" }, 503),
+          "GET /api/v1/models/1": json(aModel({ name: "Saved title", edit_version: 7 })),
+        },
+      });
+      await user.click(await screen.findByRole("button", { name: "Rename Benchy" }));
+      await user.click(screen.getByRole("button", { name: "Save" }));
+      await user.click(await screen.findByRole("button", { name: "Review latest version" }));
+      await user.click(await screen.findByRole("button", { name: "Use latest version" }));
+
+      expect(screen.getByRole("textbox", { name: "Model name" })).toHaveValue("Saved title");
+      expect(screen.getByRole("heading", { level: 1, name: "Saved title" })).toBeVisible();
+      expect(screen.getByRole("button", { name: "Save" })).toBeEnabled();
+      expect(app.requestsWithMethod("PATCH")).toHaveLength(1);
+    });
+    it("preserves a pending title save through repeated edit gestures", async () => {
+      const user = userEvent.setup();
+      let release!: (response: Response) => void;
+      const pending = new Promise<Response>((resolve) => {
+        release = resolve;
+      });
+      const app = renderDetail({ routes: { "PATCH /api/v1/models/1": () => pending } });
+      await user.click(await screen.findByRole("button", { name: "Rename Benchy" }));
+      await user.clear(screen.getByRole("textbox", { name: "Model name" }));
+      await user.type(screen.getByRole("textbox", { name: "Model name" }), "Saved title");
+      await user.click(screen.getByRole("button", { name: "Save" }));
+      await user.dblClick(screen.getByRole("heading", { level: 1, name: "Benchy" }));
+      expect(screen.getByRole("textbox", { name: "Model name" })).toHaveValue("Saved title");
+      expect(screen.getByRole("textbox", { name: "Model name" })).toBeDisabled();
+      await user.click(screen.getByRole("button", { name: "Model actions" }));
+      await user.click(screen.getByRole("menuitem", { name: "Edit details" }));
+      expect(screen.getByRole("textbox", { name: "Model name" })).toBeDisabled();
+      expect(app.requestsWithMethod("PATCH")).toHaveLength(1);
+      await act(async () => {
+        release(json(aModel({ name: "Saved title", edit_version: 2 })));
+        await pending;
+      });
+      expect(await screen.findByRole("heading", { level: 1, name: "Saved title" })).toBeVisible();
+    });
+
+    it("retires the title editor when write access is revoked", async () => {
+      const user = userEvent.setup();
+      let release!: (response: Response) => void;
+      const pending = new Promise<Response>((resolve) => {
+        release = resolve;
+      });
+      const app = renderDetail({ routes: { "PATCH /api/v1/models/1": () => pending } });
+      await user.click(await screen.findByRole("button", { name: "Rename Benchy" }));
+      await user.click(screen.getByRole("button", { name: "Save" }));
+      act(() =>
+        app.client.setQueryData(
+          queryKeys.model(1),
+          aModel({ effective_role: "view", edit_version: 3 }),
+        ),
+      );
+      await waitFor(() =>
+        expect(screen.queryByRole("dialog", { name: "Rename Benchy" })).not.toBeInTheDocument(),
+      );
+      await act(async () => {
+        release(json(aModel({ name: "Retired result", edit_version: 2 })));
+        await pending;
+      });
+      expect(screen.getByRole("heading", { level: 1, name: "Benchy" })).toBeVisible();
+      act(() =>
+        app.client.setQueryData(
+          queryKeys.model(1),
+          aModel({ effective_role: "admin", edit_version: 4 }),
+        ),
+      );
+      await user.click(await screen.findByRole("button", { name: "Rename Benchy" }));
+      expect(screen.getByRole("textbox", { name: "Model name" })).toBeEnabled();
+      expect(screen.getByRole("textbox", { name: "Model name" })).toHaveValue("Benchy");
+    });
+
+    it("ignores a late review after a new title draft begins", async () => {
+      const user = userEvent.setup();
+      let release!: (response: Response) => void;
+      const pending = new Promise<Response>((resolve) => {
+        release = resolve;
+      });
+      const app = renderDetail({
+        routes: {
+          "PATCH /api/v1/models/1": json({ detail: "edit_conflict" }, 412),
+          "GET /api/v1/models/1": () => pending,
+        },
+      });
+      await user.click(await screen.findByRole("button", { name: "Rename Benchy" }));
+      await user.click(screen.getByRole("button", { name: "Save" }));
+      await user.click(await screen.findByRole("button", { name: "Review latest version" }));
+      await user.click(screen.getByRole("button", { name: "Cancel" }));
+      await waitFor(() =>
+        expect(screen.queryByRole("dialog", { name: "Rename Benchy" })).not.toBeInTheDocument(),
+      );
+      await user.click(screen.getByRole("button", { name: "Rename Benchy" }));
+      await user.clear(screen.getByRole("textbox", { name: "Model name" }));
+      await user.type(screen.getByRole("textbox", { name: "Model name" }), "New draft");
+      await act(async () => {
+        release(json(aModel({ name: "Late review", edit_version: 7 })));
+        await pending;
+      });
+      expect(screen.queryByText("Late review")).not.toBeInTheDocument();
+      expect(screen.getByRole("textbox", { name: "Model name" })).toHaveValue("New draft");
+      expect(screen.getByRole("button", { name: "Save" })).toBeEnabled();
+      expect(app.requestsWithMethod("PATCH")).toHaveLength(1);
+    });
+
+    it("keeps a refused title draft available for correction", async () => {
+      const user = userEvent.setup();
+      const app = renderDetail({
+        routes: { "PATCH /api/v1/models/1": json({ detail: "duplicate_slug" }, 409) },
+      });
+      await user.click(await screen.findByRole("button", { name: "Rename Benchy" }));
+      await user.clear(screen.getByRole("textbox", { name: "Model name" }));
+      await user.type(screen.getByRole("textbox", { name: "Model name" }), "Taken name");
+      await user.click(screen.getByRole("button", { name: "Save" }));
+
+      expect(await screen.findByText("An item with that name already exists.")).toBeVisible();
+      expect(screen.getByRole("textbox", { name: "Model name" })).toHaveValue("Taken name");
+      expect(screen.getByRole("button", { name: "Save" })).toBeEnabled();
+      expect(app.requestsWithMethod("PATCH")).toHaveLength(1);
     });
   });
 
@@ -278,7 +529,7 @@ describe("ModelDetail", () => {
       await openEdit(user);
       await user.clear(screen.getByPlaceholderText("Model name"));
       await user.type(screen.getByPlaceholderText("Model name"), "Confirmed edit");
-      void client.invalidateQueries({ queryKey: queryKeys.model(1), exact: true });
+      void client.invalidateQueries({ queryKey: queryKeys.model(1) });
       await waitFor(() =>
         expect(requests().some((r) => r.url === "/api/v1/models/1" && r.method === "GET")).toBe(
           true,
@@ -398,6 +649,62 @@ describe("ModelDetail", () => {
   });
 
   describe("moving between tabs", () => {
+    it("restores the Similar tab from a comparison return URL", async () => {
+      renderDetail({ at: "/models/1?tab=similar&return_entry=library-position" });
+
+      expect(await screen.findByRole("tab", { name: /Similar/ })).toHaveAttribute(
+        "aria-selected",
+        "true",
+      );
+      expect(await screen.findByRole("button", { name: "Find similar" })).toBeVisible();
+    });
+
+    it("preserves the library return context while selecting a tab", async () => {
+      renderDetail({ at: "/models/1?return_entry=library-position&collection=parts" });
+      await userEvent.click(await screen.findByRole("tab", { name: /Similar/ }));
+
+      expect(screen.getByLabelText("Current detail location")).toHaveTextContent(
+        "/models/1?return_entry=library-position&collection=parts&tab=similar",
+      );
+      expect(screen.getByRole("tab", { name: /Similar/ })).toHaveAttribute("aria-selected", "true");
+    });
+
+    it("restores the tab when browser history changes the current model URL", async () => {
+      renderDetail({ at: "/models/1?tab=similar" });
+      await screen.findByRole("button", { name: "Find similar" });
+      await userEvent.click(screen.getByRole("button", { name: "Open Files URL" }));
+      expect(screen.getByRole("tab", { name: /Files/ })).toHaveAttribute("aria-selected", "true");
+
+      await userEvent.click(screen.getByRole("button", { name: "Previous detail" }));
+      expect(screen.getByRole("tab", { name: /Similar/ })).toHaveAttribute("aria-selected", "true");
+    });
+
+    it("uses Overview for an unsupported tab URL", async () => {
+      renderDetail({ at: "/models/1?tab=unknown" });
+
+      expect(await screen.findByRole("tab", { name: /Overview/ })).toHaveAttribute(
+        "aria-selected",
+        "true",
+      );
+    });
+
+    it("does not fetch Similar candidates for a view-only model tab URL", async () => {
+      const app = renderDetail({
+        at: "/models/1?tab=similar",
+        model: aModel({ effective_role: "view" }),
+        auth: memberSession(),
+      });
+
+      expect(await screen.findByRole("tab", { name: /Overview/ })).toHaveAttribute(
+        "aria-selected",
+        "true",
+      );
+      expect(screen.queryByRole("tab", { name: /Similar/ })).not.toBeInTheDocument();
+      expect(app.requests().some((request) => request.url.includes("similarity/candidates"))).toBe(
+        false,
+      );
+    });
+
     it("selects the tab the user chose", async () => {
       const user = userEvent.setup();
       renderDetail();

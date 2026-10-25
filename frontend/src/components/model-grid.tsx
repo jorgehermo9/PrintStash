@@ -77,6 +77,7 @@ import {
   TagRead,
 } from "@/types";
 import { ModelCard } from "@/components/model-card";
+import { TitleEditor } from "@/components/title-editor";
 import { DeferredDialog } from "@/components/deferred-dialog";
 import { lazyImport } from "@/lib/lazy-component";
 import { useModelMoves } from "@/features/library/moves";
@@ -1061,20 +1062,13 @@ export function ModelBrowser({ initial }: { initial?: BrowserInitialData }) {
   } | null>(null);
   const [collectionRenameName, setCollectionRenameName] = useState("");
   const [collectionRenameBusy, setCollectionRenameBusy] = useState(false);
-  const collectionNameInput = useRef<HTMLInputElement>(null);
   const renameLifetime = useRef(0);
   useLayoutEffect(
     () => () => {
       renameLifetime.current += 1;
     },
-    [entry],
+    [entry, canRenameCollection],
   );
-  useEffect(() => {
-    if (collectionRename) {
-      collectionNameInput.current?.focus();
-      collectionNameInput.current?.select();
-    }
-  }, [collectionRename]);
   if (
     collectionRename !== null &&
     (collectionRename.entry !== entry ||
@@ -1083,10 +1077,13 @@ export function ModelBrowser({ initial }: { initial?: BrowserInitialData }) {
   ) {
     setCollectionRename(null);
     setCollectionRenameName("");
+    setCollectionRenameBusy(false);
   }
 
   function openCollectionRename() {
-    if (!canRenameCollection || !displayedCollection) return;
+    if (!canRenameCollection || !displayedCollection || collectionRenameBusy || collectionRename) {
+      return;
+    }
     setCollectionRename({ entry, collection: displayedCollection });
     setCollectionRenameName(displayedCollection.name);
     setCollectionRenameBusy(false);
@@ -2028,52 +2025,6 @@ export function ModelBrowser({ initial }: { initial?: BrowserInitialData }) {
       <>
         <ModelMoveReview moves={modelMoves} />
         <Modal
-          open={collectionRename !== null}
-          onClose={() => {
-            if (!collectionRenameBusy) setCollectionRename(null);
-          }}
-          title={uiText("Rename {value1}", { value1: collectionRename?.collection.name ?? "" })}
-          className="max-w-md"
-        >
-          <form
-            className="space-y-4"
-            onSubmit={(event) => {
-              event.preventDefault();
-              void saveCollectionRename();
-            }}
-          >
-            <label className="block space-y-1.5">
-              <span className="text-sm font-medium text-foreground">
-                {uiText("inbox.collectionName")}
-              </span>
-              <Input
-                ref={collectionNameInput}
-                value={collectionRenameName}
-                onChange={(event) => setCollectionRenameName(event.target.value)}
-                maxLength={100}
-                disabled={collectionRenameBusy}
-              />
-            </label>
-            <div className="flex justify-end gap-2">
-              <Button
-                type="button"
-                variant="outline"
-                onClick={() => setCollectionRename(null)}
-                disabled={collectionRenameBusy}
-              >
-                {uiText("Cancel")}
-              </Button>
-              <Button
-                type="submit"
-                loading={collectionRenameBusy}
-                disabled={!collectionRenameName.trim()}
-              >
-                {uiText("Rename")}
-              </Button>
-            </div>
-          </form>
-        </Modal>
-        <Modal
           open={saveViewOpen && saveViewSession === savedViewsOwner.session}
           onClose={() => {
             if (!saveViewBusy) {
@@ -2410,29 +2361,51 @@ export function ModelBrowser({ initial }: { initial?: BrowserInitialData }) {
           <div className="sticky top-0 z-40 flex flex-col gap-3 border-b border-border bg-background/95 px-4 py-3 backdrop-blur sm:px-6">
             <div className="flex min-w-0 items-start justify-between gap-4">
               <div className="min-w-0 flex-1 space-y-1">
-                <div className="flex min-w-0 items-center gap-1">
-                  <h1
-                    onDoubleClick={openCollectionRename}
-                    className="min-w-0 break-words text-lg font-bold tracking-tight text-foreground sm:text-2xl"
-                  >
-                    {unavailableCollection
-                      ? uiText("library.collectionUnavailable")
-                      : (selectedName ?? uiText("All Models"))}
-                  </h1>
-                  {canRenameCollection && (
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      size="icon-sm"
-                      className="shrink-0 text-muted-foreground"
-                      aria-label={uiText("Rename {value1}", { value1: selectedName ?? "" })}
-                      title={uiText("Rename")}
-                      onClick={openCollectionRename}
-                    >
-                      <Pencil className="h-3.5 w-3.5" aria-hidden />
-                    </Button>
-                  )}
-                </div>
+                <TitleEditor
+                  open={collectionRename !== null}
+                  onOpenChange={(open) => {
+                    if (open) openCollectionRename();
+                    else if (!collectionRenameBusy) setCollectionRename(null);
+                  }}
+                  label={uiText("Rename {value1}", { value1: selectedName ?? "" })}
+                  fieldLabel={uiText("inbox.collectionName")}
+                  value={collectionRenameName}
+                  onValueChange={setCollectionRenameName}
+                  onSave={() => void saveCollectionRename()}
+                  busy={collectionRenameBusy}
+                  maxLength={100}
+                  requiredMessage={uiText("{field} is required.", {
+                    field: uiText("inbox.collectionName"),
+                  })}
+                  trigger={
+                    <div className="flex min-w-0 items-center gap-1">
+                      <h1
+                        onDoubleClick={openCollectionRename}
+                        className="min-w-0 break-words text-lg font-bold tracking-tight text-foreground sm:text-2xl"
+                      >
+                        {unavailableCollection
+                          ? uiText("library.collectionUnavailable")
+                          : (selectedName ?? uiText("All Models"))}
+                      </h1>
+                      {canRenameCollection && (
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="icon-sm"
+                          className="shrink-0 text-muted-foreground"
+                          data-menu-trigger
+                          aria-haspopup="dialog"
+                          aria-expanded={collectionRename !== null}
+                          aria-label={uiText("Rename {value1}", { value1: selectedName ?? "" })}
+                          title={uiText("Rename")}
+                          onClick={openCollectionRename}
+                        >
+                          <Pencil className="h-3.5 w-3.5" aria-hidden />
+                        </Button>
+                      )}
+                    </div>
+                  }
+                />
                 <p className="text-sm text-muted-foreground">
                   {unavailableCollection
                     ? uiText("library.collectionUnavailableHelp")

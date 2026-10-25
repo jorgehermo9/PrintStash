@@ -18,6 +18,7 @@ import { useLibraryStar } from "@/features/library/mutations";
 import { ApiError } from "@/lib/errors";
 import { getSessionVersion, requireSessionVersion } from "@/lib/session-transport";
 import { Modal } from "@/components/ui/modal";
+import { TitleEditor } from "@/components/title-editor";
 import { SubjectCaption } from "@/components/subject-caption";
 import { ModelSearchAction } from "@/components/model-search-action";
 
@@ -27,7 +28,7 @@ import { useUiLocale } from "@/lib/i18n";
 
 import { Suspense, lazy, useEffect, useMemo, useRef, useState } from "react";
 import type { PointerEvent as ReactPointerEvent } from "react";
-import { useRouter } from "@/lib/navigation";
+import { useRouter, useSearchParams } from "@/lib/navigation";
 import {
   ArrowLeft,
   Check,
@@ -179,10 +180,20 @@ function ModelDetailPresentation({
 }) {
   useUiLocale();
   const router = useRouter();
+  const searchParams = useSearchParams();
   const auth = useRequireAuth();
   const { user } = useAuth();
   const [deleting, setDeleting] = useState(false);
-  const [editing, setEditing] = useState(false);
+  const [editMode, setEditMode] = useState<"details" | "name" | null>(null);
+  const editing = editMode === "details";
+  const renaming = editMode === "name";
+  const editLifetime = useRef(0);
+  useEffect(
+    () => () => {
+      editLifetime.current += 1;
+    },
+    [],
+  );
   const [editBase, setEditBase] = useState(() => captureEditingBase(model));
   const [editProblem, setEditProblem] = useState<"conflict" | "unconfirmed" | null>(null);
   const reviewPublication = useRef<typeof setModel | null>(null);
@@ -214,7 +225,12 @@ function ModelDetailPresentation({
   // there is nothing to re-sync while this view is open.
   const [metadataPreferences] = useState(readMetadataPreferences);
   const [addRevisionOpen, setAddRevisionOpen] = useState(false);
-  const [requestedTab, setRequestedTab] = useState<TabKey>("overview");
+  const requestedTab = TABS.find((tab) => tab.key === searchParams.get("tab"))?.key ?? "overview";
+  function selectTab(tab: TabKey) {
+    const params = new URLSearchParams(searchParams);
+    params.set("tab", tab);
+    router.replace(`/models/${model.id}?${params}`);
+  }
   const [displayMode, setDisplayMode] = useState<ViewerDisplayMode>("solid");
   const [detailSidebarWidth, setDetailSidebarWidth] = useState(() => {
     try {
@@ -240,6 +256,16 @@ function ModelDetailPresentation({
   const [viewerReady, setViewerReady] = useState(false);
   const viewerControls = useRef<STLViewerControls | null>(null);
   const canEditModel = model.effective_role === "edit" || model.effective_role === "admin";
+  useEffect(() => {
+    if (!canEditModel) editLifetime.current += 1;
+  }, [canEditModel]);
+  if (!canEditModel && editMode !== null) {
+    setEditMode(null);
+    setEditProblem(null);
+    setReviewedModel(null);
+    setSaving(false);
+    setReviewing(false);
+  }
   const canViewPrinters = !!user?.is_superuser;
   const printerFileQuery = useQuery({
     ...modelPrinterFilesOptions(model.id),
@@ -339,10 +365,14 @@ function ModelDetailPresentation({
     }
   }
 
-  function enterEdit() {
+  function enterEdit(mode: "details" | "name" = "details") {
+    if (saving || mode === editMode) return;
+    editLifetime.current += 1;
     setEditBase(captureEditingBase(model));
     setEditProblem(null);
     setReviewedModel(null);
+    setReviewing(false);
+    setSaving(false);
     setEditName(model.name);
     setEditDescription(model.description || "");
     setEditSourceUrl(model.source_url || "");
@@ -351,41 +381,48 @@ function ModelDetailPresentation({
     setEditTags([...model.tags]);
     setTagInput("");
     setCatOpen(false);
-    setRequestedTab("overview");
-    setEditing(true);
+    if (mode === "details") selectTab("overview");
+    setEditMode(mode);
   }
 
   function cancelEdit() {
+    editLifetime.current += 1;
+    setSaving(false);
+    setReviewing(false);
     setEditProblem(null);
     setReviewedModel(null);
-    setEditing(false);
+    setEditMode(null);
   }
 
   async function saveEdit(version = editBase) {
     if (!editName.trim() || saving || !canEditModel || reviewedModel?.effective_role === "view")
       return;
     const session = getSessionVersion();
+    const lifetime = editLifetime.current;
+    const isCurrent = () => session === getSessionVersion() && lifetime === editLifetime.current;
     setSaving(true);
     try {
       const updated = await updateModel(
         model.id,
-        {
-          name: editName.trim() || undefined,
-          description: editDescription.trim() || null,
-          source_url: editSourceUrl.trim() || null,
-          collection: editCollection,
-          tags: editTags,
-        },
+        renaming
+          ? { name: editName.trim() }
+          : {
+              name: editName.trim() || undefined,
+              description: editDescription.trim() || null,
+              source_url: editSourceUrl.trim() || null,
+              collection: editCollection,
+              tags: editTags,
+            },
         version,
       );
       requireSessionVersion(session);
-      if (!(await setModel(updated))) return;
+      if (!isCurrent() || !(await setModel(updated)) || !isCurrent()) return;
       setEditProblem(null);
       setReviewedModel(null);
-      setEditing(false);
+      setEditMode(null);
       toast.success(uiText("Model updated"));
     } catch (e) {
-      if (session !== getSessionVersion()) return;
+      if (!isCurrent()) return;
       if (e instanceof ApiError && e.status === 412) {
         setEditProblem("conflict");
         setReviewedModel(null);
@@ -399,30 +436,34 @@ function ModelDetailPresentation({
         setReviewedModel(null);
       } else toast.error(e);
     } finally {
-      if (session === getSessionVersion()) setSaving(false);
+      if (isCurrent()) setSaving(false);
     }
   }
 
   async function reviewLatest() {
     const session = getSessionVersion();
+    const lifetime = editLifetime.current;
+    const isCurrent = () => session === getSessionVersion() && lifetime === editLifetime.current;
     setReviewing(true);
     try {
       reviewPublication.current = setModel;
       const latest = await getModel(model.id);
       requireSessionVersion(session);
-      setReviewedModel(latest);
+      if (isCurrent()) setReviewedModel(latest);
     } catch (error) {
-      if (session === getSessionVersion()) toast.error(error);
+      if (isCurrent()) toast.error(error);
     } finally {
-      if (session === getSessionVersion()) setReviewing(false);
+      if (isCurrent()) setReviewing(false);
     }
   }
 
   async function useReviewedVersion() {
+    const lifetime = editLifetime.current;
     if (
       !reviewedModel ||
       !reviewPublication.current ||
-      !(await reviewPublication.current(reviewedModel))
+      !(await reviewPublication.current(reviewedModel)) ||
+      lifetime !== editLifetime.current
     )
       return;
     setEditBase(captureEditingBase(reviewedModel));
@@ -642,7 +683,7 @@ function ModelDetailPresentation({
           </div>
         )}
         <Modal
-          open={reviewedModel !== null}
+          open={editing && reviewedModel !== null}
           onClose={() => setReviewedModel(null)}
           title={uiText("library.latestVersion")}
         >
@@ -703,29 +744,114 @@ function ModelDetailPresentation({
                   placeholder={uiText("Model name")}
                 />
               ) : (
-                <div className="flex min-w-0 items-center gap-1">
-                  <h1
-                    onDoubleClick={() => {
-                      if (auth.isAuthenticated && canEditModel) enterEdit();
-                    }}
-                    className="min-w-0 break-words text-xl font-semibold text-on-surface leading-tight"
-                  >
-                    {model.name}
-                  </h1>
-                  {auth.isAuthenticated && canEditModel && (
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      size="icon-sm"
-                      className="shrink-0 text-on-surface-variant"
-                      aria-label={uiText("Rename {value1}", { value1: model.name })}
-                      title={uiText("Rename")}
-                      onClick={enterEdit}
-                    >
-                      <Pencil className="h-3.5 w-3.5" aria-hidden />
-                    </Button>
+                <TitleEditor
+                  open={renaming && canEditModel && auth.isAuthenticated}
+                  onOpenChange={(open) => {
+                    if (!open) cancelEdit();
+                  }}
+                  label={uiText("Rename {value1}", { value1: model.name })}
+                  fieldLabel={uiText("Model name")}
+                  value={editName}
+                  onValueChange={setEditName}
+                  onSave={() => void saveEdit()}
+                  busy={saving}
+                  requiredMessage={uiText("Model name is required.")}
+                  saveDisabled={editProblem !== null || !canEditModel}
+                  trigger={
+                    <div className="flex min-w-0 items-center gap-1">
+                      <h1
+                        onDoubleClick={() => {
+                          if (auth.isAuthenticated && canEditModel) enterEdit("name");
+                        }}
+                        className="min-w-0 break-words text-xl font-semibold text-on-surface leading-tight"
+                      >
+                        {model.name}
+                      </h1>
+                      {auth.isAuthenticated && canEditModel && (
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="icon-sm"
+                          className="shrink-0 text-on-surface-variant"
+                          aria-label={uiText("Rename {value1}", { value1: model.name })}
+                          title={uiText("Rename")}
+                          onClick={() => {
+                            if (!saving) {
+                              if (renaming) cancelEdit();
+                              else enterEdit("name");
+                            }
+                          }}
+                          data-menu-trigger
+                          aria-haspopup="dialog"
+                          aria-expanded={renaming}
+                        >
+                          <Pencil className="h-3.5 w-3.5" aria-hidden />
+                        </Button>
+                      )}
+                    </div>
+                  }
+                >
+                  {renaming && editProblem && (
+                    <div className="space-y-2 border-t border-border pt-3 text-xs">
+                      <p role="alert">
+                        {uiText(
+                          editProblem === "conflict"
+                            ? "library.editConflict"
+                            : "library.saveUnconfirmed",
+                        )}
+                      </p>
+                      {reviewedModel ? (
+                        <>
+                          <p className="font-medium">{uiText("library.latestVersion")}</p>
+                          <p className="break-words">{reviewedModel.name}</p>
+                          <div className="flex flex-wrap gap-2">
+                            <Button
+                              type="button"
+                              variant="outline"
+                              size="sm"
+                              onClick={useReviewedVersion}
+                              disabled={saving}
+                            >
+                              {uiText("library.useLatest")}
+                            </Button>
+                            <Button
+                              type="button"
+                              variant="outline"
+                              size="sm"
+                              onClick={() => setReviewedModel(null)}
+                              disabled={saving}
+                            >
+                              {uiText("library.keepDraft")}
+                            </Button>
+                            <Button
+                              type="button"
+                              size="sm"
+                              className="h-auto min-h-9 whitespace-normal"
+                              loading={saving}
+                              disabled={
+                                reviewedModel.effective_role !== "edit" &&
+                                reviewedModel.effective_role !== "admin"
+                              }
+                              onClick={() => void saveEdit(reviewedModel)}
+                            >
+                              {uiText("library.retryDraft")}
+                            </Button>
+                          </div>
+                        </>
+                      ) : (
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="sm"
+                          onClick={() => void reviewLatest()}
+                          loading={reviewing}
+                        >
+                          {uiText("library.reviewLatest")}
+                        </Button>
+                      )}
+                    </div>
                   )}
-                </div>
+                </TitleEditor>
               )}
               <span className="font-mono text-xs text-on-surface-variant">
                 {(meshFile ?? sourceFiles[0]) && (
@@ -1091,7 +1217,7 @@ function ModelDetailPresentation({
                 ),
               }))}
               active={activeTab}
-              onChange={setRequestedTab}
+              onChange={selectTab}
               showIndicator={false}
               className="shrink-0 overflow-x-auto border-b border-outline-variant bg-surface-container-lowest p-1"
               tabClassName="min-w-max grow whitespace-nowrap rounded-md px-0.5 py-3 text-xs font-medium transition-colors duration-press text-on-surface-variant hover:bg-muted hover:text-on-surface focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
@@ -1135,7 +1261,7 @@ function ModelDetailPresentation({
                     revisionSaving={revisionUpdater.saving}
                     onSend={requestSend}
                     canSend={canViewPrinters}
-                    onCompare={() => setRequestedTab("revisions")}
+                    onCompare={() => selectTab("revisions")}
                     onMark={(file, patch) => void revisionUpdater.update(file, patch)}
                     onAddRevision={requestAddRevision}
                   />

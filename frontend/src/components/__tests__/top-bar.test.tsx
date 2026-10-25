@@ -86,6 +86,15 @@ afterEach(() => {
 });
 
 describe("TopBar", () => {
+  it("links Wiki to the documentation site", () => {
+    renderTopBar();
+
+    expect(screen.getByRole("link", { name: "Wiki" })).toHaveAttribute(
+      "href",
+      "https://www.printstash.org/docs/",
+    );
+  });
+
   describe("search", () => {
     it("shows the search box on the vault", () => {
       renderTopBar();

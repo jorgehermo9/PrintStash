@@ -1,9 +1,9 @@
-/** Real WebGL previews use repository geometry; API fixtures isolate display transforms. */
+/** Matches stay usable at desktop size; real WebGL geometry verifies comparison display transforms. */
 import { expect, test } from "@playwright/test";
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { aModel, aRevision } from "../../src/test-support/factories";
-import { aSimilarityCandidate } from "../../src/test-support/similarity";
+import { aSimilarityCandidate, similarityStatus } from "../../src/test-support/similarity";
 import type { MetadataRead } from "../../src/types/models";
 import { silhouetteOverlap } from "../similarity-pixels";
 import { collectPageProblems, useMockApi } from "./_setup";
@@ -84,12 +84,143 @@ function previewCube(scale: number, reflected: boolean, shear: boolean) {
 const screenshotStyle =
   '[aria-label="Open Tanstack query devtools"], [title="Open Tanstack query devtools"] { display: none !important; }';
 
+test.describe("Similarity desktop review", () => {
+  test.beforeEach(async ({ page }) => {
+    await page.setViewportSize({ width: 1920, height: 1080 });
+    await page.route("**/api/v1/similarity/status", (route) =>
+      route.fulfill({ json: similarityStatus() }),
+    );
+    await page.route("**/api/v1/similarity/runs", (route) =>
+      route.fulfill({ json: { items: [], next_cursor: null } }),
+    );
+    await page.route("**/api/v1/similarity/candidates?*", (route) =>
+      route.fulfill({
+        json: {
+          items: [
+            aSimilarityCandidate({
+              model_a: { id: 1, name: "Bracket", slug: "bracket", thumbnail_file_id: 1 },
+              model_b: { id: 2, name: "Bracket copy", slug: "bracket-copy", thumbnail_file_id: 1 },
+            }),
+          ],
+          next_cursor: null,
+        },
+      }),
+    );
+    await page.route("**/api/v1/similarity/candidates/1", (route) =>
+      route.fulfill({ json: aSimilarityCandidate() }),
+    );
+    for (const id of [1, 2]) {
+      await page.route(`**/api/v1/models/${id}`, (route) =>
+        route.fulfill({ json: aModel({ id, files: [] }) }),
+      );
+      await page.route(`**/api/v1/models/${id}/print-jobs`, (route) => route.fulfill({ json: [] }));
+    }
+  });
+
+  test("shows readable matches before analysis configuration at 1080p", async ({
+    page,
+  }, testInfo) => {
+    await page.goto("/library/similar");
+    await expect(page.getByRole("tab", { name: "Matches", exact: true })).toHaveAttribute(
+      "aria-selected",
+      "true",
+    );
+    await expect(page.getByRole("tab", { name: "To review", exact: true })).toHaveAttribute(
+      "aria-selected",
+      "true",
+    );
+    const candidate = page.getByRole("listitem").filter({ hasText: "Bracket copy" });
+    await expect(candidate.getByRole("link", { name: "Compare", exact: true })).toBeInViewport();
+    await expect(candidate.getByRole("link", { name: "Bracket", exact: true })).toBeVisible();
+    await expect(page.getByRole("form", { name: "Similar models", exact: true })).toBeHidden();
+    await expect(page.getByRole("combobox", { name: "All formats", exact: true })).toBeHidden();
+    await expect(candidate.locator("img")).toHaveCount(2);
+    for (const image of await candidate.locator("img").all()) {
+      await expect
+        .poll(() =>
+          image.evaluate(
+            (element: HTMLImageElement) => element.complete && element.naturalWidth > 0,
+          ),
+        )
+        .toBe(true);
+      const bounds = await image.boundingBox();
+      expect(bounds).not.toBeNull();
+      expect(bounds!.width).toBeGreaterThanOrEqual(64);
+      expect(bounds!.height).toBeGreaterThanOrEqual(64);
+    }
+    await page.evaluate(() => document.fonts.ready);
+    await page.screenshot({ path: testInfo.outputPath("similar-matches-1080p.png") });
+
+    await page.getByRole("tab", { name: "Analysis settings", exact: true }).click();
+    const settings = page.getByRole("form", { name: "Similar models", exact: true });
+    await expect(
+      settings.getByRole("checkbox", { name: "Enable similarity analysis" }),
+    ).toBeVisible();
+    await expect(page.getByRole("link", { name: "Compare", exact: true })).toBeHidden();
+    await page.getByRole("tab", { name: "Analysis history", exact: true }).click();
+    await expect(settings).toBeHidden();
+    await expect(page.getByRole("tab", { name: "Analysis history", exact: true })).toHaveAttribute(
+      "aria-selected",
+      "true",
+    );
+    await page.getByRole("tab", { name: "Matches", exact: true }).click();
+    await expect(candidate.getByRole("link", { name: "Compare", exact: true })).toBeInViewport();
+  });
+
+  test("restores the review filters after returning from a comparison", async ({
+    page,
+  }, testInfo) => {
+    await page.goto("/library/similar");
+    await page.getByRole("tab", { name: "Later", exact: true }).click();
+    const filters = page.getByRole("button", { name: /^Filters/ });
+    await filters.click();
+    await expect(filters).toHaveAttribute("aria-expanded", "true");
+    await page.getByRole("combobox", { name: "All formats", exact: true }).selectOption("stl");
+    await page.getByRole("combobox", { name: "All sources", exact: true }).selectOption("vault");
+    const confidence = page.getByRole("slider", { name: "Minimum confidence", exact: true });
+    await confidence.focus();
+    await confidence.press("End");
+    for (let step = 0; step < 6; step++) await confidence.press("ArrowLeft");
+    await expect(page).toHaveURL((url) => url.searchParams.get("confidence") === "94");
+    const reviewUrl = page.url();
+    const compare = page.getByRole("link", { name: "Compare", exact: true });
+    await expect(compare).toBeInViewport();
+    const sourceBox = await page
+      .getByRole("combobox", { name: "All sources", exact: true })
+      .boundingBox();
+    const compareBox = await compare.boundingBox();
+    expect(sourceBox).not.toBeNull();
+    expect(compareBox).not.toBeNull();
+    expect(compareBox!.y).toBeGreaterThan(sourceBox!.y + sourceBox!.height);
+    await page.screenshot({ path: testInfo.outputPath("similar-filters-1080p.png") });
+    await compare.click();
+    await expect(page.getByRole("heading", { name: "Compare models", exact: true })).toBeVisible();
+    await page.getByRole("link", { name: "Back to similar models", exact: true }).click();
+    await expect(page).toHaveURL(reviewUrl);
+    await expect(page.getByRole("tab", { name: "Later", exact: true })).toHaveAttribute(
+      "aria-selected",
+      "true",
+    );
+    if ((await filters.getAttribute("aria-expanded")) === "false") await filters.click();
+    await expect(page.getByRole("combobox", { name: "All formats", exact: true })).toHaveValue(
+      "stl",
+    );
+    await expect(page.getByRole("combobox", { name: "All sources", exact: true })).toHaveValue(
+      "vault",
+    );
+    await expect(page.getByRole("slider", { name: "Minimum confidence", exact: true })).toHaveValue(
+      "94",
+    );
+    await expect(compare).toBeInViewport();
+  });
+});
+
 test.describe("Similarity preview compensation", () => {
   for (const variant of ["scale", "mirror"] as const) {
     test(`shows ${variant} compensation without rewriting source geometry`, async ({ page }) => {
       test.setTimeout(60_000);
       const problems = await collectPageProblems(page);
-      await page.setViewportSize({ width: 1280, height: 800 });
+      await page.setViewportSize({ width: 1920, height: 1080 });
       const scale = variant === "scale" ? 2 : 1;
       const meshes = [
         previewCube(1, false, variant === "mirror"),
@@ -156,6 +287,20 @@ test.describe("Similarity preview compensation", () => {
         );
       await expect.poll(overlap).toBeGreaterThan(0.05);
       await expect.poll(overlap).toBeLessThan(0.9);
+      const canvasBounds = await Promise.all([first.boundingBox(), second.boundingBox()]);
+      for (const bounds of canvasBounds) {
+        expect(bounds).not.toBeNull();
+        expect(bounds!.width).toBeGreaterThanOrEqual(400);
+        expect(bounds!.height).toBeGreaterThanOrEqual(300);
+        expect(bounds!.y + bounds!.height).toBeLessThanOrEqual(1080);
+      }
+      expect(Math.abs(canvasBounds[0]!.y - canvasBounds[1]!.y)).toBeLessThanOrEqual(1);
+      await expect(page.getByRole("button", { name: "Side by side", exact: true })).toHaveAttribute(
+        "aria-pressed",
+        "true",
+      );
+      await expect(page.getByRole("table")).toBeHidden();
+      await page.getByText("Alignment options", { exact: true }).click();
       const control = page.getByRole("checkbox", {
         name: variant === "scale" ? "Compensate scale" : "Compensate reflection",
       });
@@ -164,11 +309,16 @@ test.describe("Similarity preview compensation", () => {
       await expect.poll(overlap).toBeGreaterThan(0.98);
       if (variant === "mirror") {
         const before = await first.screenshot({ style: screenshotStyle });
-        await page.getByRole("checkbox", { name: "Overlay meshes" }).click();
+        await page.getByRole("button", { name: "Overlay meshes", exact: true }).click();
+        await expect(page.locator("canvas")).toHaveCount(1);
+        await expect(
+          page.getByRole("button", { name: "Overlay meshes", exact: true }),
+        ).toHaveAttribute("aria-pressed", "true");
         await expect
           .poll(async () => (await first.screenshot({ style: screenshotStyle })).equals(before))
           .toBe(false);
-        await page.getByRole("checkbox", { name: "Overlay meshes" }).click();
+        await page.getByRole("button", { name: "Side by side", exact: true }).click();
+        await expect(page.locator("canvas")).toHaveCount(2);
         await expect.poll(overlap).toBeGreaterThan(0.98);
       }
       await control.click();

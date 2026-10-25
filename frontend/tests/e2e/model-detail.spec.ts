@@ -25,70 +25,105 @@ import { aModel } from "../../src/test-support/factories";
 useMockApi();
 
 test.describe("model detail route", () => {
-  for (const emptyName of [false, true]) {
-    test(`aligns title editing controls at 1080p with ${emptyName ? "a missing" : "a valid"} name`, async ({
-      page,
-    }) => {
-      await page.setViewportSize({ width: 1920, height: 1080 });
-      await page.goto("/models/1");
-      await page.getByRole("button", { name: "Rename skadis_kitchen-roll_screw" }).click();
+  test("anchors the title editor without shifting header actions at 1080p", async ({ page }) => {
+    await page.setViewportSize({ width: 1920, height: 1080 });
+    await page.goto("/models/1");
+    const title = page.getByRole("heading", { name: "skadis_kitchen-roll_screw", exact: true });
+    const tags = page.getByRole("button", { name: "Edit tags for skadis_kitchen-roll_screw" });
+    const favorite = page.getByRole("button", { name: "Favorite", exact: true });
+    const actions = page.getByRole("button", { name: "Model actions", exact: true });
+    await expect(tags).toBeVisible();
+    await page.evaluate(() => document.fonts.ready);
+    const header = title.locator("xpath=ancestor::header");
+    const originalHeader = await header.boundingBox();
+    const originalActions = await Promise.all(
+      [tags, favorite, actions].map((item) => item.boundingBox()),
+    );
 
-      const name = page.getByPlaceholder("Model name");
-      const save = page.getByRole("button", { name: "Save", exact: true });
-      const cancel = page.getByRole("button", { name: "Cancel", exact: true });
-      if (emptyName) {
-        await name.fill("");
-        await expect(page.getByRole("alert")).toContainText("Model name is required.");
-        await expect(save).toBeDisabled();
-      }
-      await page.evaluate(() => document.fonts.ready);
-      const nameBox = await name.boundingBox();
-      expect(nameBox).not.toBeNull();
-      for (const action of [save, cancel]) {
-        const actionBox = await action.boundingBox();
-        expect(actionBox).not.toBeNull();
-        expect(Math.abs(actionBox!.y - nameBox!.y)).toBeLessThanOrEqual(1);
-        expect(
-          Math.abs(actionBox!.y + actionBox!.height - nameBox!.y - nameBox!.height),
-        ).toBeLessThanOrEqual(1);
-        expect(actionBox!.x).toBeGreaterThanOrEqual(nameBox!.x + nameBox!.width);
-      }
+    await page.getByRole("button", { name: "Rename skadis_kitchen-roll_screw" }).click();
+    const editor = page.getByRole("dialog", {
+      name: "Rename skadis_kitchen-roll_screw",
+      exact: true,
     });
-  }
+    await expect(editor.getByRole("textbox", { name: "Model name", exact: true })).toBeFocused();
+    await expect(title).toBeVisible();
+    await expect(editor).not.toHaveAttribute("aria-modal", "true");
+    await expect(page.getByPlaceholder("Optional description")).toHaveCount(0);
+    const titleBox = await title.boundingBox();
+    const editorBox = await editor.boundingBox();
+    expect(titleBox).not.toBeNull();
+    expect(editorBox).not.toBeNull();
+    expect(editorBox!.y).toBeGreaterThanOrEqual(titleBox!.y + titleBox!.height);
+    expect(editorBox!.y - titleBox!.y - titleBox!.height).toBeLessThanOrEqual(32);
+    expect(Math.abs(editorBox!.x - titleBox!.x)).toBeLessThanOrEqual(1);
+    expect(editorBox!.width).toBeLessThan(480);
+    expect(editorBox!.height).toBeLessThan(200);
+    expect(await header.boundingBox()).toEqual(originalHeader);
+    for (const [index, action] of [tags, favorite, actions].entries()) {
+      await expect(action).toBeVisible();
+      await expect(action).toBeEnabled();
+      expect(await action.boundingBox()).toEqual(originalActions[index]);
+    }
+
+    // An ordinary header action remains usable while the title editor is open.
+    await actions.click();
+    await expect(editor).toHaveCount(0);
+    await expect(page.getByRole("menuitem", { name: /Edit details/ })).toBeVisible();
+  });
+
+  test("keeps missing-name feedback inside the compact title editor", async ({ page }) => {
+    await page.setViewportSize({ width: 1920, height: 1080 });
+    await page.goto("/models/1");
+    const title = page.getByRole("heading", { name: "skadis_kitchen-roll_screw", exact: true });
+    await page.evaluate(() => document.fonts.ready);
+    const originalHeader = await title.locator("xpath=ancestor::header").boundingBox();
+    await title.dblclick();
+    const editor = page.getByRole("dialog", {
+      name: "Rename skadis_kitchen-roll_screw",
+      exact: true,
+    });
+    await editor.getByRole("textbox", { name: "Model name", exact: true }).fill("");
+    await expect(editor.getByRole("alert")).toContainText("Model name is required.");
+    await expect(editor.getByRole("button", { name: "Save", exact: true })).toBeDisabled();
+    await expect(editor.getByRole("button", { name: "Cancel", exact: true })).toBeEnabled();
+    expect(await title.locator("xpath=ancestor::header").boundingBox()).toEqual(originalHeader);
+  });
 
   for (const width of [320, 390]) {
-    test(`keeps title editing actions together beneath the name at ${width}px`, async ({
-      page,
-    }) => {
+    test(`keeps the compact title editor inside a ${width}px viewport`, async ({ page }) => {
       await page.setViewportSize({ width, height: 844 });
       await page.goto("/models/1");
-      await page.getByRole("button", { name: "Rename skadis_kitchen-roll_screw" }).click();
-      const name = page.getByPlaceholder("Model name");
+      const rename = page.getByRole("button", { name: "Rename skadis_kitchen-roll_screw" });
+      await rename.click();
+      const editor = page.getByRole("dialog", {
+        name: "Rename skadis_kitchen-roll_screw",
+        exact: true,
+      });
+      const name = editor.getByRole("textbox", { name: "Model name", exact: true });
       await name.fill("A long model title that still needs reachable editing controls");
       await page.evaluate(() => document.fonts.ready);
-
-      const nameBox = await name.boundingBox();
-      const saveBox = await page.getByRole("button", { name: "Save", exact: true }).boundingBox();
-      const cancelBox = await page
-        .getByRole("button", { name: "Cancel", exact: true })
-        .boundingBox();
-      expect(nameBox).not.toBeNull();
-      expect(saveBox).not.toBeNull();
-      expect(cancelBox).not.toBeNull();
-      expect(cancelBox!.y).toBeGreaterThanOrEqual(nameBox!.y + nameBox!.height);
-      expect(Math.abs(saveBox!.y - cancelBox!.y)).toBeLessThanOrEqual(1);
-      expect(cancelBox!.x + cancelBox!.width).toBeLessThan(saveBox!.x);
-      expect(
-        Math.abs(saveBox!.x + saveBox!.width - nameBox!.x - nameBox!.width),
-      ).toBeLessThanOrEqual(1);
-      for (const box of [nameBox!, cancelBox!, saveBox!]) {
-        expect(box.x).toBeGreaterThanOrEqual(0);
-        expect(box.x + box.width).toBeLessThanOrEqual(width);
+      for (const control of [
+        editor,
+        name,
+        editor.getByRole("button", { name: "Cancel", exact: true }),
+        editor.getByRole("button", { name: "Save", exact: true }),
+      ]) {
+        await expect(control).toBeInViewport();
+        const bounds = await control.boundingBox();
+        expect(bounds).not.toBeNull();
+        expect(bounds!.x).toBeGreaterThanOrEqual(0);
+        expect(bounds!.x + bounds!.width).toBeLessThanOrEqual(width);
       }
-      const header = name.locator("xpath=ancestor::header");
-      expect(await header.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(
-        true,
-      );
+      await expect(page.getByRole("button", { name: "Favorite", exact: true })).toBeVisible();
+      expect(
+        await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth),
+      ).toBe(true);
+      await name.press("Escape");
+      await expect(editor).toHaveCount(0);
+      await expect(rename).toBeFocused();
+      await expect(
+        page.getByRole("heading", { name: "skadis_kitchen-roll_screw", exact: true }),
+      ).toBeVisible();
     });
   }
 

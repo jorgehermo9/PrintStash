@@ -42,9 +42,50 @@ afterEach(() => {
 });
 
 describe("SimilarModelComparisonPage", () => {
+  it.each([
+    {
+      label: "filtered matches",
+      value: "/library/similar?review_state=confirmed&file_type=stl",
+      name: "Back to similar models",
+    },
+    { label: "model context", value: "/models/17?tab=similar", name: "Back to model" },
+  ])("returns to $label", async ({ value, name }) => {
+    renderComparison(aSimilarityCandidate(), {
+      at: `/library/similar/1?${new URLSearchParams({ returnTo: value })}`,
+    });
+    expect(await screen.findByRole("link", { name })).toHaveAttribute("href", value);
+  });
+
+  it.each([
+    "https://example.com/library/similar",
+    "//example.com/library/similar",
+    "/library/similar/../../settings",
+    "/settings",
+    "/models/not-a-number",
+    "/models/17#external",
+    "/library/similar?value=\\escape",
+    "/library/similar?value=\n",
+  ])("rejects an invalid return location %s", async (value) => {
+    renderComparison(aSimilarityCandidate(), {
+      at: `/library/similar/1?${new URLSearchParams({ returnTo: value })}`,
+    });
+    expect(await screen.findByRole("link", { name: "Back to similar models" })).toHaveAttribute(
+      "href",
+      "/library/similar",
+    );
+  });
+
+  it("explains confirmation before opening a decision dialog", async () => {
+    renderComparison();
+    await screen.findByRole("button", { name: "Confirm match" });
+    expect(screen.getByText(/Models, files and print history remain separate/)).toBeVisible();
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(screen.getByText("0.03 mm")).not.toBeVisible();
+  });
+
   it("reuses the canonical Model detail snapshot", async () => {
     const app = renderComparison(aSimilarityCandidate(), { seed: [[["models", 1], aModel()]] });
-    await screen.findByRole("table");
+    await screen.findByRole("button", { name: "Side by side" });
     expect(
       app.requestsWithMethod("GET").filter((request) => request.url === "/api/v1/models/1"),
     ).toEqual([]);
@@ -58,8 +99,9 @@ describe("SimilarModelComparisonPage", () => {
       routes: { [`GET ${endpoint}`]: json({ detail: "unavailable" }, 503) },
     });
     await screen.findByRole("alert");
+    await userEvent.click(screen.getByText("Measurements and print history"));
     expect(screen.getByRole("table")).toBeVisible();
-    expect(screen.getByRole("button", { name: "Confirm evidence" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Confirm match" })).toBeEnabled();
     app.route({ [`GET ${endpoint}`]: json(response) });
     await userEvent.click(screen.getByRole("button", { name: "Try again" }));
     await waitFor(() => expect(screen.queryByRole("alert")).not.toBeInTheDocument());
@@ -69,7 +111,7 @@ describe("SimilarModelComparisonPage", () => {
   });
   it.each([403, 404])("suppresses an inaccessible cached review after %s", async (code) => {
     const app = renderComparison();
-    await screen.findByRole("button", { name: "Confirm evidence" });
+    await screen.findByRole("button", { name: "Confirm match" });
     app.route({
       "GET /api/v1/similarity/candidates/1": json({ detail: "candidate_not_found" }, code),
     });
@@ -77,7 +119,7 @@ describe("SimilarModelComparisonPage", () => {
       await app.client.invalidateQueries({ queryKey: ["similarity", "candidate", 1] });
     });
     await screen.findByText("Could not load similarity results");
-    expect(screen.queryByRole("button", { name: "Confirm evidence" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Confirm match" })).not.toBeInTheDocument();
     expect(screen.queryByRole("table")).not.toBeInTheDocument();
     expect(screen.queryByText("Bracket · Bracket copy")).not.toBeInTheDocument();
   });
@@ -118,12 +160,12 @@ describe("SimilarModelComparisonPage", () => {
   it("confirms evidence with a durable request identity", async () => {
     const user = userEvent.setup();
     const rendered = renderComparison();
-    await user.click(await screen.findByRole("button", { name: "Confirm evidence" }));
+    await user.click(await screen.findByRole("button", { name: "Confirm match" }));
     const dialog = screen.getByRole("dialog");
     expect(
-      within(dialog).getByText(/Each Model and its print context stays separate/),
+      within(dialog).getByText(/Models, files and print history remain separate/),
     ).toBeVisible();
-    await user.click(within(dialog).getByRole("button", { name: "Confirm evidence" }));
+    await user.click(within(dialog).getByRole("button", { name: "Confirm match" }));
     await waitFor(() => expect(rendered.requestsWithMethod("POST")).toHaveLength(1));
     expect(JSON.parse(rendered.requestsWithMethod("POST")[0].body)).toEqual({
       action: "confirm_evidence",
@@ -137,13 +179,15 @@ describe("SimilarModelComparisonPage", () => {
       aSimilarityCandidate({ freshness: "stale", allowed_actions: ["reject", "later", "reopen"] }),
     );
     expect(await screen.findByText("Stale evidence")).toBeVisible();
-    expect(screen.queryByRole("button", { name: "Confirm evidence" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Confirm match" })).not.toBeInTheDocument();
   });
   it("keeps the metadata table usable without previews", async () => {
     renderComparison();
-    expect(await screen.findByRole("table")).toBeVisible();
+    await userEvent.click(await screen.findByText("Measurements and print history"));
+    expect(screen.getByRole("table")).toBeVisible();
     expect(screen.getAllByText("3D preview unavailable").length).toBeGreaterThan(0);
     expect(screen.getByRole("rowheader", { name: "Original dimensions" })).toBeVisible();
+    await userEvent.click(screen.getByText("Match details"));
     expect(screen.getByText("0.03 mm")).toBeVisible();
   });
   it("submits the verified plate quantity", async () => {
@@ -176,17 +220,17 @@ describe("SimilarModelComparisonPage", () => {
         ),
       },
     });
-    await user.click(await screen.findByRole("button", { name: "Confirm evidence" }));
+    await user.click(await screen.findByRole("button", { name: "Confirm match" }));
     await user.click(
-      within(screen.getByRole("dialog")).getByRole("button", { name: "Confirm evidence" }),
+      within(screen.getByRole("dialog")).getByRole("button", { name: "Confirm match" }),
     );
     await waitFor(() =>
       expect(
-        within(screen.getByRole("dialog")).getByRole("button", { name: "Confirm evidence" }),
+        within(screen.getByRole("dialog")).getByRole("button", { name: "Confirm match" }),
       ).toBeEnabled(),
     );
     await user.click(
-      within(screen.getByRole("dialog")).getByRole("button", { name: "Confirm evidence" }),
+      within(screen.getByRole("dialog")).getByRole("button", { name: "Confirm match" }),
     );
     await waitFor(() => expect(rendered.requestsWithMethod("POST")).toHaveLength(2));
     expect(rendered.requestsWithMethod("POST")[0].body).toBe(
@@ -195,7 +239,7 @@ describe("SimilarModelComparisonPage", () => {
   });
   it("renders review controls in Spanish", async () => {
     renderComparison(aSimilarityCandidate(), { locale: "es" });
-    expect(await screen.findByRole("button", { name: "Confirmar evidencia" })).toBeVisible();
+    expect(await screen.findByRole("button", { name: "Confirmar coincidencia" })).toBeVisible();
   });
 });
 
@@ -401,7 +445,7 @@ describe("Review state controls", () => {
       });
     },
   );
-  it.each(["Confirm evidence", "Create multipart model"])(
+  it.each(["Confirm match", "Create multipart model"])(
     "cancels %s without writing",
     async (label) => {
       const user = userEvent.setup();
@@ -450,7 +494,7 @@ describe("Review state controls", () => {
     await screen.findByText("Could not load similarity results");
     failed = false;
     await user.click(screen.getByRole("button", { name: "Try again" }));
-    expect(await screen.findByRole("button", { name: "Confirm evidence" })).toBeVisible();
+    expect(await screen.findByRole("button", { name: "Confirm match" })).toBeVisible();
   });
 });
 
@@ -468,17 +512,17 @@ describe("Concurrent review recovery", () => {
         },
       },
     });
-    await user.click(await screen.findByRole("button", { name: "Confirm evidence" }));
+    await user.click(await screen.findByRole("button", { name: "Confirm match" }));
     await user.click(
-      within(screen.getByRole("dialog")).getByRole("button", { name: "Confirm evidence" }),
+      within(screen.getByRole("dialog")).getByRole("button", { name: "Confirm match" }),
     );
     expect(await screen.findByRole("alert")).toHaveTextContent(
       "This evidence changed. Review the updated comparison before confirming again.",
     );
     await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
-    await user.click(screen.getByRole("button", { name: "Confirm evidence" }));
+    await user.click(screen.getByRole("button", { name: "Confirm match" }));
     await user.click(
-      within(screen.getByRole("dialog")).getByRole("button", { name: "Confirm evidence" }),
+      within(screen.getByRole("dialog")).getByRole("button", { name: "Confirm match" }),
     );
     await waitFor(() => expect(app.requestsWithMethod("POST")).toHaveLength(2));
     const first = JSON.parse(app.requestsWithMethod("POST")[0].body);

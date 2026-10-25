@@ -1,6 +1,7 @@
-/** The queue distinguishes disabled, empty, stale and incomplete work while keeping review filters on the wire. */
+/** Review states and filters stay discoverable, accurate and restorable across comparison navigation. */
 import { act, fireEvent, screen, waitFor } from "@testing-library/react";
 import { useState } from "react";
+import { useLocation, useNavigate } from "react-router-dom";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { aCollection } from "@/test-support/factories";
@@ -9,16 +10,38 @@ import { SimilarityQueue } from "@/components/similarity-queue";
 import { aSimilarityCandidate, aSimilarityRun, similarityStatus } from "@/test-support/similarity";
 import { json, renderApp, type RenderAppOptions } from "@/test-support/render";
 
+function QueueNavigation() {
+  const location = useLocation();
+  const navigate = useNavigate();
+  return (
+    <>
+      <output aria-label="Current queue location">{location.pathname + location.search}</output>
+      <button
+        onClick={() => navigate("/library/similar?review=rejected&confidence=80&collection=9")}
+      >
+        Open another queue
+      </button>
+      <button onClick={() => navigate(-1)}>Previous queue</button>
+    </>
+  );
+}
+
 function renderQueue(options: RenderAppOptions = {}, modelId?: number) {
-  return renderApp(<SimilarityQueue modelId={modelId} />, {
-    ...options,
-    routes: {
-      "GET /api/v1/similarity/status": json(similarityStatus()),
-      ...collectionTreeRoutes([aCollection({ id: 8, name: "Parts", path: "parts" })]),
-      "GET /api/v1/similarity/candidates": json({ items: [], next_cursor: null }),
-      ...options.routes,
+  return renderApp(
+    <>
+      <SimilarityQueue modelId={modelId} />
+      <QueueNavigation />
+    </>,
+    {
+      ...options,
+      routes: {
+        "GET /api/v1/similarity/status": json(similarityStatus()),
+        ...collectionTreeRoutes([aCollection({ id: 8, name: "Parts", path: "parts" })]),
+        "GET /api/v1/similarity/candidates": json({ items: [], next_cursor: null }),
+        ...options.routes,
+      },
     },
-  });
+  );
 }
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -139,7 +162,11 @@ describe("SimilarityQueue", () => {
     renderQueue({
       routes: { "GET /api/v1/similarity/status": json(similarityStatus({ enabled: false })) },
     });
-    expect(await screen.findByText("Similarity analysis is off")).toBeVisible();
+    expect(
+      await screen.findByText(
+        "New matches are paused. An administrator can enable analysis on the Similar models page.",
+      ),
+    ).toBeVisible();
   });
   it("identifies an empty review queue", async () => {
     renderQueue();
@@ -156,10 +183,75 @@ describe("SimilarityQueue", () => {
     });
     expect(await screen.findByRole("link", { name: "Compare" })).toHaveAttribute(
       "href",
-      "/library/similar/1",
+      "/library/similar/1?returnTo=%2Flibrary%2Fsimilar",
     );
     expect(screen.getByRole("link", { name: "Bracket copy" })).toHaveAttribute("href", "/models/2");
   });
+  it("switches review states directly from tabs", async () => {
+    const app = renderQueue();
+    await screen.findByText("No candidates to review");
+
+    await userEvent.click(screen.getByRole("tab", { name: "Confirmed" }));
+
+    expect(await screen.findByText("No confirmed matches")).toBeVisible();
+    expect(screen.getByRole("tab", { name: "Confirmed" })).toHaveAttribute("aria-selected", "true");
+    expect(app.requestsWithMethod("GET").at(-1)?.url).toContain("review_state=confirmed");
+  });
+
+  it("does not mistake an empty reviewed state for disabled analysis", async () => {
+    renderQueue({
+      at: "/library/similar?review=rejected",
+      routes: { "GET /api/v1/similarity/status": json(similarityStatus({ enabled: false })) },
+    });
+
+    expect(await screen.findByText("No rejected matches")).toBeVisible();
+    expect(screen.queryByText("Similarity analysis is off")).not.toBeInTheDocument();
+    expect(
+      screen.getByText("Pairs appear here after you choose this action in their comparison."),
+    ).toBeVisible();
+  });
+
+  it("keeps active restrictions visible while filters are collapsed", async () => {
+    renderQueue({ at: "/library/similar?format=stl&source=vault" });
+
+    expect(await screen.findByText("No matches with these filters")).toBeVisible();
+    expect(screen.getByRole("button", { name: "Filters2" })).toHaveAttribute(
+      "aria-expanded",
+      "false",
+    );
+    expect(screen.getByText("STL · Vault")).toBeVisible();
+  });
+
+  it("clears restrictions without changing the selected review state", async () => {
+    const app = renderQueue({ at: "/library/similar?review=later&format=stl&confidence=95" });
+    await screen.findByText("No matches with these filters");
+
+    await userEvent.click(screen.getAllByRole("button", { name: "Clear filters" })[0]);
+
+    expect(await screen.findByText("No matches saved for later")).toBeVisible();
+    expect(screen.getByRole("tab", { name: "Later" })).toHaveAttribute("aria-selected", "true");
+    expect(app.requestsWithMethod("GET").at(-1)?.url).toContain("review_state=later");
+    expect(app.requestsWithMethod("GET").at(-1)?.url).not.toContain("minimum_confidence");
+    expect(app.requestsWithMethod("GET").at(-1)?.url).not.toContain("file_type");
+  });
+
+  it("carries the review context into the comparison link", async () => {
+    renderQueue({
+      at: "/library/similar?review=later&format=stl",
+      routes: {
+        "GET /api/v1/similarity/candidates": json({
+          items: [aSimilarityCandidate()],
+          next_cursor: null,
+        }),
+      },
+    });
+
+    expect(await screen.findByRole("link", { name: "Compare" })).toHaveAttribute(
+      "href",
+      "/library/similar/1?returnTo=%2Flibrary%2Fsimilar%3Freview%3Dlater%26format%3Dstl",
+    );
+  });
+
   it("starts only the selected Model work", async () => {
     const user = userEvent.setup();
     const rendered = renderQueue(
@@ -214,27 +306,143 @@ describe("Spanish review states", () => {
         }),
       },
     });
-    await user.click(screen.getByText("Más filtros"));
+    await user.click(screen.getByRole("button", { name: /^Filtros/ }));
     const labels = await screen.findAllByText("Evidencia desactualizada");
     expect(labels.find((element) => element.tagName !== "OPTION")).toBeVisible();
   });
 });
 
 describe("Queue navigation", () => {
+  it("retains rapid filter changes before candidate reads settle", async () => {
+    const app = renderQueue({ at: "/library/similar?review=later" });
+    await screen.findByText("No matches saved for later");
+    await userEvent.click(screen.getByRole("button", { name: /^Filters/ }));
+
+    act(() => {
+      fireEvent.change(screen.getByRole("combobox", { name: "All formats" }), {
+        target: { value: "stl" },
+      });
+      fireEvent.change(screen.getByRole("combobox", { name: "All sources" }), {
+        target: { value: "vault" },
+      });
+      const slider = screen.getByRole("slider", { name: "Minimum confidence" });
+      for (const value of [100, 99, 98, 97, 96, 95, 94])
+        fireEvent.change(slider, { target: { value } });
+    });
+
+    expect(screen.getByRole("slider", { name: "Minimum confidence" })).toHaveValue("94");
+    expect(screen.getByRole("combobox", { name: "All formats" })).toHaveValue("stl");
+    expect(screen.getByRole("combobox", { name: "All sources" })).toHaveValue("vault");
+    await waitFor(() =>
+      expect(screen.getByLabelText("Current queue location")).toHaveTextContent(
+        "/library/similar?review=later&confidence=94&format=stl&source=vault",
+      ),
+    );
+    await screen.findByText("No matches with these filters");
+    const request = app.requestsWithMethod("GET").at(-1)?.url;
+    expect(request).toContain("minimum_confidence=0.94");
+    expect(request).toContain("file_type=stl");
+    expect(request).toContain("source=vault");
+    expect(request).toContain("review_state=later");
+  });
+
+  it("clears a pending confidence change without leaving the review state", async () => {
+    const app = renderQueue({ at: "/library/similar?review=later&format=stl" });
+    await screen.findByText("No matches with these filters");
+    await userEvent.click(screen.getByRole("button", { name: /^Filters/ }));
+    fireEvent.change(screen.getByRole("slider", { name: "Minimum confidence" }), {
+      target: { value: "95" },
+    });
+    fireEvent.click(screen.getAllByRole("button", { name: "Clear filters" })[0]);
+
+    expect(await screen.findByText("No matches saved for later")).toBeVisible();
+    expect(screen.getByLabelText("Current queue location")).toHaveTextContent(
+      "/library/similar?review=later",
+    );
+    expect(screen.getByRole("tab", { name: "Later" })).toHaveAttribute("aria-selected", "true");
+    expect(app.requestsWithMethod("GET").at(-1)?.url).not.toContain("minimum_confidence");
+  });
+
+  it("restores filters from browser history", async () => {
+    renderQueue({ at: "/library/similar?review=later&format=stl" });
+    await screen.findByText("No matches with these filters");
+    await userEvent.click(screen.getByRole("button", { name: /^Filters/ }));
+    fireEvent.change(screen.getByRole("slider", { name: "Minimum confidence" }), {
+      target: { value: "94" },
+    });
+    await waitFor(() =>
+      expect(screen.getByLabelText("Current queue location")).toHaveTextContent("confidence=94"),
+    );
+    await userEvent.click(screen.getByRole("button", { name: "Open another queue" }));
+    expect(screen.getByRole("tab", { name: "Rejected" })).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByRole("slider", { name: "Minimum confidence" })).toHaveValue("80");
+    expect(screen.getByRole("combobox", { name: "All formats" })).toHaveValue("");
+
+    await userEvent.click(screen.getByRole("button", { name: "Previous queue" }));
+    expect(screen.getByRole("tab", { name: "Later" })).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByRole("slider", { name: "Minimum confidence" })).toHaveValue("94");
+    expect(screen.getByRole("combobox", { name: "All formats" })).toHaveValue("stl");
+  });
+
+  it("does not label a restored collection with the previously picked name", async () => {
+    renderQueue({ at: "/library/similar" });
+    await screen.findByText("No candidates to review");
+    await userEvent.click(screen.getByRole("button", { name: /^Filters/ }));
+    await userEvent.selectOptions(screen.getByRole("combobox", { name: "Collection" }), "pick");
+    await userEvent.click(await screen.findByRole("option", { name: /Parts/ }));
+    await waitFor(() =>
+      expect(screen.getByLabelText("Current queue location")).toHaveTextContent("collection=8"),
+    );
+
+    await userEvent.click(screen.getByRole("button", { name: "Open another queue" }));
+
+    expect(screen.getByRole("combobox", { name: "Collection" })).toHaveValue("9");
+    expect(screen.getByRole("option", { name: "Collection #9" })).toBeVisible();
+    expect(screen.queryByRole("option", { name: "Parts" })).not.toBeInTheDocument();
+  });
+
+  it("returns a model comparison to its Similar tab with library context", async () => {
+    renderQueue(
+      {
+        at: "/models/7?return_entry=abc&collection=parts&tab=similar",
+        routes: {
+          "GET /api/v1/similarity/candidates": json({
+            items: [aSimilarityCandidate()],
+            next_cursor: null,
+          }),
+        },
+      },
+      7,
+    );
+
+    const href = (await screen.findByRole("link", { name: "Compare" })).getAttribute("href")!;
+    expect(new URL(href, "http://localhost").searchParams.get("returnTo")).toBe(
+      "/models/7?return_entry=abc&collection=parts&tab=similar",
+    );
+  });
+
+  it("finishes a model filter gesture that returns to its previous threshold", async () => {
+    renderQueue({}, 7);
+    await screen.findByText("No candidates to review");
+    await userEvent.click(screen.getByRole("button", { name: /^Filters/ }));
+    const slider = screen.getByRole("slider", { name: "Minimum confidence" });
+    fireEvent.change(slider, { target: { value: "95" } });
+    await screen.findByText("No matches with these filters");
+    fireEvent.change(slider, { target: { value: "75" } });
+    fireEvent.change(slider, { target: { value: "95" } });
+
+    expect(await screen.findByText("No matches with these filters")).toBeVisible();
+    expect(slider).toHaveValue("95");
+  });
+
   it.each([
-    {
-      label: "Review candidates",
-      key: "review_state",
-      value: "rejected",
-      reset: "open",
-    },
     {
       label: "All evidence classes",
       key: "evidence_class",
       value: "remeshed",
       reset: "",
     },
-    { label: "Current evidence", key: "freshness", value: "stale", reset: "" },
+    { label: "Current evidence", key: "freshness", value: "stale", reset: "current" },
     { label: "Collection", key: "collection_id", value: "8", reset: "" },
     { label: "All formats", key: "file_type", value: "3mf", reset: "" },
     { label: "All sources", key: "source", value: "external", reset: "" },
@@ -254,7 +462,7 @@ describe("Queue navigation", () => {
       },
     });
     await screen.findByText("No candidates to review");
-    await user.click(screen.getByText("More filters"));
+    await user.click(screen.getByRole("button", { name: /^Filters/ }));
     if (key === "collection_id") {
       await user.selectOptions(screen.getByRole("combobox", { name: label }), "pick");
       await user.click(await screen.findByRole("option", { name: /Parts/ }));
@@ -331,7 +539,7 @@ describe("Queue navigation", () => {
       },
     });
     await screen.findByText("No candidates to review");
-    await user.click(screen.getByText("More filters"));
+    await user.click(screen.getByRole("button", { name: /^Filters/ }));
     const toggle = screen.getByRole("checkbox", { name: "Has a known-good Revision" });
     await user.click(toggle);
     expect(await screen.findByRole("link", { name: "Compare" })).toBeVisible();
@@ -342,7 +550,8 @@ describe("Queue navigation", () => {
   it("applies the confidence threshold", async () => {
     const app = renderQueue();
     await screen.findByText("No candidates to review");
-    fireEvent.change(screen.getByRole("slider", { name: "Minimum confidence", hidden: true }), {
+    await userEvent.click(screen.getByRole("button", { name: /^Filters/ }));
+    fireEvent.change(screen.getByRole("slider", { name: "Minimum confidence" }), {
       target: { value: "75" },
     });
     await waitFor(() =>

@@ -167,132 +167,167 @@ export function SimilarityComparison({
             </div>
           ),
       )}
-      <div className="flex flex-wrap items-center gap-4 text-sm">
-        <span className="font-medium">{t("similarity.physicalScale")}</span>
-        <label className="flex items-center gap-2">
-          <Checkbox
-            ariaLabel={t("similarity.compensateScale")}
-            checked={scale}
-            disabled={!alignment}
-            onChange={setScale}
-          />
-          {t("similarity.compensateScale")}
-        </label>
-        <label className="flex items-center gap-2">
-          <Checkbox
-            ariaLabel={t("similarity.compensateMirror")}
-            checked={mirror}
-            disabled={!alignment}
-            onChange={setMirror}
-          />
-          {t("similarity.compensateMirror")}
-        </label>
-        <label className="flex items-center gap-2">
-          <Checkbox
-            ariaLabel={t("similarity.overlay")}
-            checked={overlay}
-            disabled={!files[0] || !files[1]}
-            onChange={setOverlay}
-          />
-          {t("similarity.overlay")}
-        </label>
-      </div>
-      <div className="grid gap-3 md:grid-cols-2">
-        {files.map((file, index) => (
-          <div
-            key={modelRefs[index].id}
-            className="min-w-0 overflow-hidden rounded-lg border border-border"
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div role="group" aria-label={t("similarity.viewMode")} className="flex gap-2">
+          <Button
+            size="sm"
+            variant={overlay ? "outline" : "default"}
+            aria-pressed={!overlay}
+            onClick={() => setOverlay(false)}
           >
-            <div className="border-b border-border px-4 py-3">
-              <Link
-                className="break-words font-medium text-primary hover:underline"
-                href={`/models/${modelRefs[index].id}`}
-              >
-                {modelRefs[index].name}
-              </Link>
-              <p className="truncate text-xs text-muted-foreground">
-                {file?.original_filename ?? t("similarity.noPreview")}
-              </p>
-            </div>
-            <div className="h-64 bg-muted/30 sm:h-80">
-              {file ? (
-                <Suspense
-                  fallback={
-                    <p role="status" className="p-4 text-sm text-muted-foreground">
-                      {t("similarity.loading")}
-                    </p>
-                  }
+            {t("similarity.sideBySide")}
+          </Button>
+          <Button
+            size="sm"
+            variant={overlay ? "default" : "outline"}
+            aria-pressed={overlay}
+            disabled={!files[0] || !files[1]}
+            onClick={() => setOverlay(true)}
+          >
+            {t("similarity.overlay")}
+          </Button>
+        </div>
+        <span className="text-xs text-muted-foreground">{t("similarity.physicalScale")}</span>
+      </div>
+      <details className="rounded-lg border border-border text-sm">
+        <summary className="cursor-pointer px-4 py-3 font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
+          {t("similarity.alignmentOptions")}
+        </summary>
+        <div className="flex flex-wrap gap-4 border-t border-border px-4 py-3">
+          <label className="flex items-center gap-2">
+            <Checkbox
+              ariaLabel={t("similarity.compensateScale")}
+              checked={scale}
+              disabled={!alignment}
+              onChange={setScale}
+            />
+            {t("similarity.compensateScale")}
+          </label>
+          <label className="flex items-center gap-2">
+            <Checkbox
+              ariaLabel={t("similarity.compensateMirror")}
+              checked={mirror}
+              disabled={!alignment}
+              onChange={setMirror}
+            />
+            {t("similarity.compensateMirror")}
+          </label>
+        </div>
+      </details>
+      <div className={overlay ? "grid gap-3" : "grid gap-3 md:grid-cols-2"}>
+        {files.map((file, index) =>
+          overlay && index === 1 ? null : (
+            <div
+              key={modelRefs[index].id}
+              className="min-w-0 overflow-hidden rounded-lg border border-border"
+            >
+              <div className="border-b border-border px-4 py-3">
+                <Link
+                  className="break-words font-medium text-primary hover:underline"
+                  href={`/models/${modelRefs[index].id}`}
                 >
-                  <MeshPreviewGate
-                    key={file.id}
-                    // The overlay draws the other Model's mesh in this pane too.
-                    sizeBytes={
-                      index === 0 && overlay && files[1]
-                        ? Math.max(file.size_bytes, files[1].size_bytes)
-                        : file.size_bytes
-                    }
-                    posterUrl={null}
-                    posterAlt={modelRefs[index].name}
+                  {modelRefs[index].name}
+                </Link>
+                {overlay && (
+                  <Link
+                    className="ml-2 break-words font-medium text-primary hover:underline"
+                    href={`/models/${modelRefs[1].id}`}
                   >
-                    <STLViewer
-                      url={getAssetUrl(`/api/v1/files/${file.id}/stl`)}
-                      modelId={modelRefs[index].id}
-                      comparison={index === 0 ? left : right}
-                      comparisonCamera={camera}
-                      showGrid={false}
-                      overlay={
-                        index === 0 && overlay && files[1]
-                          ? {
-                              url: getAssetUrl(`/api/v1/files/${files[1].id}/stl`),
-                              comparison: right,
-                            }
-                          : undefined
-                      }
-                    />
-                  </MeshPreviewGate>
-                </Suspense>
-              ) : (
-                <p className="flex h-full items-center justify-center p-4 text-sm text-muted-foreground">
-                  {t("similarity.noPreview")}
+                    · {modelRefs[1].name}
+                  </Link>
+                )}
+                <p className="mt-1 text-xs text-muted-foreground">
+                  {dimensions(file)} · {file?.file_type.toUpperCase() ?? t("similarity.noPreview")}
                 </p>
-              )}
+                <p className="truncate text-xs text-muted-foreground">
+                  {file?.original_filename ?? t("similarity.noPreview")}
+                </p>
+              </div>
+              <div className="h-64 bg-muted/30 sm:h-80">
+                {file ? (
+                  <Suspense
+                    fallback={
+                      <p role="status" className="p-4 text-sm text-muted-foreground">
+                        {t("similarity.loading")}
+                      </p>
+                    }
+                  >
+                    <MeshPreviewGate
+                      key={file.id}
+                      // The overlay draws the other Model's mesh in this pane too.
+                      sizeBytes={
+                        index === 0 && overlay && files[1]
+                          ? Math.max(file.size_bytes, files[1].size_bytes)
+                          : file.size_bytes
+                      }
+                      posterUrl={null}
+                      posterAlt={modelRefs[index].name}
+                    >
+                      <STLViewer
+                        url={getAssetUrl(`/api/v1/files/${file.id}/stl`)}
+                        modelId={modelRefs[index].id}
+                        comparison={index === 0 ? left : right}
+                        comparisonCamera={camera}
+                        showGrid={false}
+                        overlay={
+                          index === 0 && overlay && files[1]
+                            ? {
+                                url: getAssetUrl(`/api/v1/files/${files[1].id}/stl`),
+                                comparison: right,
+                              }
+                            : undefined
+                        }
+                      />
+                    </MeshPreviewGate>
+                  </Suspense>
+                ) : (
+                  <p className="flex h-full items-center justify-center p-4 text-sm text-muted-foreground">
+                    {t("similarity.noPreview")}
+                  </p>
+                )}
+              </div>
             </div>
-          </div>
-        ))}
+          ),
+        )}
       </div>
       {!canAlign && (
         <p className="text-sm text-muted-foreground">{t("similarity.componentPreviewHelp")}</p>
       )}
-      <div className="overflow-x-auto rounded-lg border border-border">
-        <table className="w-full text-left text-sm">
-          <thead className="bg-muted/40">
-            <tr>
-              <th scope="col" className="p-3">
-                {t("similarity.measurement")}
-              </th>
-              {modelRefs.map((model) => (
-                <th scope="col" className="p-3" key={model.id}>
-                  {model.name}
+      <details className="rounded-lg border border-border text-sm">
+        <summary className="cursor-pointer px-4 py-3 font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
+          {t("similarity.measurements")}
+        </summary>
+        <div className="overflow-x-auto border-t border-border">
+          <table className="w-full text-left text-sm">
+            <thead className="bg-muted/40">
+              <tr>
+                <th scope="col" className="p-3">
+                  {t("similarity.measurement")}
                 </th>
-              ))}
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-border">
-            {rows.map((row) => (
-              <tr key={row.label}>
-                <th scope="row" className="p-3 font-medium">
-                  {row.label}
-                </th>
-                {row.values.map((value, index) => (
-                  <td className="p-3 tabular-nums" key={modelRefs[index].id}>
-                    {value}
-                  </td>
+                {modelRefs.map((model) => (
+                  <th scope="col" className="p-3" key={model.id}>
+                    {model.name}
+                  </th>
                 ))}
               </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
+            </thead>
+            <tbody className="divide-y divide-border">
+              {rows.map((row) => (
+                <tr key={row.label}>
+                  <th scope="row" className="p-3 font-medium">
+                    {row.label}
+                  </th>
+                  {row.values.map((value, index) => (
+                    <td className="p-3 tabular-nums" key={modelRefs[index].id}>
+                      {value}
+                    </td>
+                  ))}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </details>
     </section>
   );
 }

@@ -281,7 +281,7 @@ describe("BottomNavBar", () => {
 
       expect(screen.getByRole("link", { name: "Wiki" })).toHaveAttribute(
         "href",
-        "https://xiao-villamor.github.io/PrintStash/",
+        "https://www.printstash.org/docs/",
       );
     });
 

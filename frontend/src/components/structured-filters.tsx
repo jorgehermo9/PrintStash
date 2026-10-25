@@ -140,11 +140,7 @@ export function StructuredFilters({
   return (
     <Localized>
       <section>
-        <div
-          className={
-            inline ? "flex items-center gap-2" : "mb-2 flex items-center justify-between pl-2 pr-1"
-          }
-        >
+        <div className={inline ? "sr-only" : "mb-2 flex items-center justify-between pl-2 pr-1"}>
           <div className="flex items-center gap-2">
             <h3
               className={
@@ -155,7 +151,7 @@ export function StructuredFilters({
             >
               {uiText("Model filters")}
             </h3>
-            {loading && <Spinner size="sm" label={uiText("Loading filter values…")} />}
+            {!inline && loading && <Spinner size="sm" label={uiText("Loading filter values…")} />}
           </div>
           {!inline && count > 0 && (
             <button
@@ -174,7 +170,46 @@ export function StructuredFilters({
             {uiText("Filter values could not be loaded.")}
           </p>
         )}
-        <div className={inline ? "flex flex-wrap items-center gap-2" : "space-y-0.5"}>
+        <div
+          role={inline ? "group" : undefined}
+          aria-label={inline ? uiText("Model filters") : undefined}
+          className={inline ? "flex flex-wrap items-center gap-2" : "space-y-0.5"}
+        >
+          {inline && (
+            <>
+              <label className="flex items-center gap-2 px-1 text-xs">
+                <Checkbox
+                  ariaLabel={structuredLibraryFilterLabel("has_similar_candidates")}
+                  checked={active.has_similar_candidates?.includes("yes") ?? false}
+                  onChange={(checked) => onChange("has_similar_candidates", checked ? ["yes"] : [])}
+                />
+                {structuredLibraryFilterLabel("has_similar_candidates")}
+              </label>
+              <Button
+                variant={uploadedOpen ? "ghost" : "outline"}
+                size="xs"
+                className={uploadedOpen ? "h-8 bg-accent text-accent-foreground" : "h-8"}
+                aria-expanded={uploadedOpen}
+                aria-controls="library-uploaded-fields"
+                onClick={() => setExtraOpen((current) => ({ ...current, uploaded: !uploadedOpen }))}
+              >
+                {uiText("Uploaded")}
+                <ChevronDown className="h-3.5 w-3.5" aria-hidden />
+              </Button>
+              <Button
+                variant={historyOpen ? "ghost" : "outline"}
+                size="xs"
+                className={historyOpen ? "h-8 bg-accent text-accent-foreground" : "h-8"}
+                aria-expanded={historyOpen}
+                aria-controls="library-history-fields"
+                onClick={() => setExtraOpen((current) => ({ ...current, history: !historyOpen }))}
+              >
+                {uiText("Print history")}
+                <ChevronDown className="h-3.5 w-3.5" aria-hidden />
+              </Button>
+            </>
+          )}
+          {inline && extraControls}
           {!inline && (
             <label className="flex items-center gap-2 px-2 py-2 text-sm">
               <Checkbox
@@ -316,41 +351,8 @@ export function StructuredFilters({
               </FilterGroup>
             );
           })}
-          {extraControls}
-          {inline ? (
-            <>
-              <label className="flex items-center gap-2 px-1 text-xs">
-                <Checkbox
-                  ariaLabel={structuredLibraryFilterLabel("has_similar_candidates")}
-                  checked={active.has_similar_candidates?.includes("yes") ?? false}
-                  onChange={(checked) => onChange("has_similar_candidates", checked ? ["yes"] : [])}
-                />
-                {structuredLibraryFilterLabel("has_similar_candidates")}
-              </label>
-              <Button
-                variant={uploadedOpen ? "ghost" : "outline"}
-                size="xs"
-                className={uploadedOpen ? "h-8 bg-accent text-accent-foreground" : "h-8"}
-                aria-expanded={uploadedOpen}
-                aria-controls="library-uploaded-fields"
-                onClick={() => setExtraOpen((current) => ({ ...current, uploaded: !uploadedOpen }))}
-              >
-                {uiText("Uploaded")}
-                <ChevronDown className="h-3.5 w-3.5" aria-hidden />
-              </Button>
-              <Button
-                variant={historyOpen ? "ghost" : "outline"}
-                size="xs"
-                className={historyOpen ? "h-8 bg-accent text-accent-foreground" : "h-8"}
-                aria-expanded={historyOpen}
-                aria-controls="library-history-fields"
-                onClick={() => setExtraOpen((current) => ({ ...current, history: !historyOpen }))}
-              >
-                {uiText("Print history")}
-                <ChevronDown className="h-3.5 w-3.5" aria-hidden />
-              </Button>
-            </>
-          ) : (
+          {!inline && extraControls}
+          {!inline && (
             <>
               <FilterGroup
                 id="model-filter-history"
@@ -387,6 +389,19 @@ export function StructuredFilters({
                 {uploadFields}
               </FilterGroup>
             </>
+          )}
+          {inline && (
+            <div
+              aria-hidden={!loading}
+              className={`ml-auto flex h-8 shrink-0 items-center gap-2 text-xs text-muted-foreground${loading ? "" : " invisible"}`}
+            >
+              {loading ? (
+                <Spinner size="sm" label={uiText("Loading filter values…")} />
+              ) : (
+                <span className="h-3.5 w-3.5 shrink-0" />
+              )}
+              <span aria-hidden="true">{uiText("Loading filter values…")}</span>
+            </div>
           )}
         </div>
         {inline && (uploadedOpen || historyOpen) && (
