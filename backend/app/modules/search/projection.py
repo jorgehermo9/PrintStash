@@ -37,6 +37,7 @@ from app.modules.search.passages import PreparedSubject, prepare_subject, sync_s
 
 logger = get_logger(__name__)
 PAGE_SIZE = 128
+SOURCE_BATCH_SIZE = 8
 
 
 def _affected_query(session: Session, source: ContentSource):
@@ -177,113 +178,148 @@ class LibraryProjection:
 
 
 @dataclass(frozen=True)
-class PreparedPage:
-    """One page of one request, read and projected before the writer is taken.
-
-    It names the exact request state it was read from. ``apply_prepared`` writes
-    it only while the request is still in that state.
-    """
+class PreparedRequest:
+    """A bounded prefix guarded by its source revision and cursor."""
 
     request_id: int
     revision: int
     cursor: tuple[str, int]
-    limit: int
+    subjects: tuple[SearchSubject, ...]
+    exhausted: bool
+
+
+@dataclass(frozen=True)
+class PreparedPage:
+    """Source prefixes sharing bounded preparation, with independent recovery."""
+
+    requests: tuple[PreparedRequest, ...]
     subjects: tuple[tuple[SearchSubject, PreparedSubject], ...]
 
 
 def prepare_pending(session: Session, *, limit: int = 8) -> PreparedPage | None:
-    """Read the next due page and what its Subjects project to; writes nothing.
-
-    Everything a page reads from library content happens here, on a read
-    snapshot, so the write transaction that follows only replaces rows.
-    """
+    """Read at most limit distinct Subjects, outside the writer transaction."""
     if not 1 <= limit <= PAGE_SIZE:
         raise ValueError("search_projection_limit")
-    request = session.exec(
+    requests = session.exec(
         select(SearchProjectionRequest)
         .where(SearchProjectionRequest.next_attempt_at <= utcnow())
         .order_by(SearchProjectionRequest.next_attempt_at, SearchProjectionRequest.id)
-        .limit(1)
-    ).first()
-    if request is None or request.id is None:
+        .limit(SOURCE_BATCH_SIZE)
+    ).all()
+    if not requests:
         return None
-    cursor = (request.cursor_kind, request.cursor_id)
-    rows = _page(
-        session, ContentSource(request.source_kind, request.source_id), cursor, limit
-    )
-    subjects = tuple(SearchSubject(SubjectType(kind), id) for kind, id in rows)
+    pages: list[PreparedRequest] = []
+    subjects: list[SearchSubject] = []
+    seen: set[SearchSubject] = set()
+    for request in requests:
+        if request.id is None:
+            raise RuntimeError("search_projection_request_missing")
+        cursor = (request.cursor_kind, request.cursor_id)
+        rows = _page(
+            session,
+            ContentSource(request.source_kind, request.source_id),
+            cursor,
+            limit,
+        )
+        prefix: list[SearchSubject] = []
+        for kind, id in rows:
+            subject = SearchSubject(SubjectType(kind), id)
+            if subject not in seen:
+                if len(subjects) == limit:
+                    break
+                subjects.append(subject)
+                seen.add(subject)
+            prefix.append(subject)
+        if rows and not prefix:
+            # Never advance past an uncovered Subject. Other sources may still
+            # share the Subjects already in this bounded preparation.
+            continue
+        pages.append(
+            PreparedRequest(
+                request.id,
+                request.revision,
+                cursor,
+                tuple(prefix),
+                len(rows) < limit and len(prefix) == len(rows),
+            )
+        )
     return PreparedPage(
-        request.id,
-        request.revision,
-        cursor,
-        limit,
+        tuple(pages),
         tuple((subject, prepare_subject(session, subject)) for subject in subjects),
     )
 
 
 def apply_prepared(session: Session, page: PreparedPage) -> int | None:
-    """Write a prepared page; caller commits the page and durable checkpoint.
+    """Fence every source before publication; recover each source independently.
 
-    ``None`` when the request is no longer in the state the page was read from
-    (a newer change restarted it, or another worker advanced it): nothing is
-    written and the request stays due. Otherwise as ``process_pending``.
-
-    A page prepared before a change to some other source can write that
-    Subject's older content. That change left its own request, which this same
-    single-flight Job projects afterwards, so the older content never outlives
-    the drain. A failed page is rolled back independently and delayed, leaving
-    other sources eligible.
+    A stale batch returns None so the caller prepares fresh content. A later
+    change outside this batch remains owed through its own durable request.
     """
     begin_write(session, immediate=True)
-    # The passages written below advance the library revision; take that row
-    # before the request row, the order every library writer uses.
+    # Preserve the lock order shared by all PostgreSQL library writers.
     lock_library_revision(session)
-    claimed = session.connection().execute(
-        update(SearchProjectionRequest)
-        .where(
-            SearchProjectionRequest.id == page.request_id,
-            SearchProjectionRequest.revision == page.revision,
-            SearchProjectionRequest.cursor_kind == page.cursor[0],
-            SearchProjectionRequest.cursor_id == page.cursor[1],
+    requests: list[tuple[PreparedRequest, SearchProjectionRequest]] = []
+    for source in page.requests:
+        claimed = session.connection().execute(
+            update(SearchProjectionRequest)
+            .where(
+                SearchProjectionRequest.id == source.request_id,
+                SearchProjectionRequest.revision == source.revision,
+                SearchProjectionRequest.cursor_kind == source.cursor[0],
+                SearchProjectionRequest.cursor_id == source.cursor[1],
+            )
+            .values(revision=SearchProjectionRequest.revision)
         )
-        .values(revision=SearchProjectionRequest.revision)
-    )
-    if claimed.rowcount != 1:
-        return None
-    request = session.get(
-        SearchProjectionRequest, page.request_id, populate_existing=True
-    )
-    if request is None:
-        raise RuntimeError("search_projection_request_missing")
-    try:
-        with session.begin_nested():
-            for subject, prepared in page.subjects:
-                sync_subject(session, subject, prepared=prepared)
-            if len(page.subjects) < page.limit:
-                session.delete(request)
-            else:
-                last = page.subjects[-1][0]
-                request.cursor_kind = last.subject_type.value
-                request.cursor_id = last.subject_id
-                # Rotate large collections behind other waiting source changes.
-                request.next_attempt_at = utcnow()
-                request.updated_at = utcnow()
-                session.add(request)
+        if claimed.rowcount != 1:
+            return None
+        request = session.get(
+            SearchProjectionRequest, source.request_id, populate_existing=True
+        )
+        if request is None:
+            raise RuntimeError("search_projection_request_missing")
+        requests.append((source, request))
+
+    prepared = dict(page.subjects)
+    applied: set[SearchSubject] = set()
+    completed = False
+    for source, request in requests:
+        published: set[SearchSubject] = set()
+        try:
+            with session.begin_nested():
+                for subject in source.subjects:
+                    if subject not in applied:
+                        sync_subject(session, subject, prepared=prepared[subject])
+                        published.add(subject)
+                if source.exhausted:
+                    session.delete(request)
+                else:
+                    last = source.subjects[-1]
+                    request.cursor_kind = last.subject_type.value
+                    request.cursor_id = last.subject_id
+                    request.next_attempt_at = utcnow()
+                    request.updated_at = utcnow()
+                    session.add(request)
+                session.flush()
+        except Exception:
+            logger.exception(
+                "Search projection page deferred",
+                extra={
+                    "source_kind": request.source_kind,
+                    "source_id": request.source_id,
+                },
+            )
+            request.attempts += 1
+            request.next_attempt_at = utcnow() + timedelta(
+                seconds=min(2 ** min(request.attempts, 8), 300)
+            )
+            request.error_code = "projection_failed"
+            session.add(request)
             session.flush()
-    except Exception:
-        logger.exception(
-            "Search projection page deferred",
-            extra={"source_kind": request.source_kind, "source_id": request.source_id},
-        )
-        request.attempts += 1
-        request.next_attempt_at = utcnow() + timedelta(
-            seconds=min(2 ** min(request.attempts, 8), 300)
-        )
-        request.error_code = "projection_failed"
-        session.add(request)
-        session.flush()
-        return 0
-    return max(len(page.subjects), 1)
+            continue
+        # Rolled-back work cannot satisfy another source's overlapping prefix.
+        applied.update(published)
+        completed = True
+    return max(len(applied), 1) if completed else 0
 
 
 def process_pending(session: Session, *, limit: int = 8) -> int:

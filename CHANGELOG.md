@@ -55,6 +55,8 @@
 
 ### Performance
 
+- Search updates share bounded preparation across overlapping Model and collection changes while retaining independent retry checkpoints.
+
 - Pull request CI runs the full frontend tests in parallel shards and splits the longest backend partitions, preserving the required checks and separate Deep CI coverage.
 
 ## 0.15.0

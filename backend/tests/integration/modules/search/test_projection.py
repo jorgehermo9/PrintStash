@@ -430,6 +430,243 @@ class TestApplyPrepared:
             "Title: Unrelated",
         ]
 
+    def test_applies_overlapping_sources_once(
+        self, db_session, make_collection, make_model, make_search_projection_request
+    ):
+        from app.db.projections import ContentSource
+
+        collection = make_collection("Collection")
+        model = make_model("Bracket", collection=collection)
+        make_search_projection_request(ContentSource("collection", collection.id))
+        make_search_projection_request(ContentSource("model", model.id))
+        page = prepare_pending(db_session)
+        db_session.commit()
+
+        written = apply_prepared(db_session, page)
+        db_session.commit()
+
+        assert written == 2
+        assert len(db_session.exec(select(SearchPassage)).all()) == 2
+        assert db_session.exec(select(SearchProjectionRequest)).all() == []
+
+    def test_bounds_distinct_subjects_across_requests(
+        self, db_session, make_model, make_search_projection_request
+    ):
+        from app.db.projections import ContentSource
+
+        models = [make_model(f"Part {index}") for index in range(3)]
+        requests = [
+            make_search_projection_request(ContentSource("model", model.id))
+            for model in models
+        ]
+        page = prepare_pending(db_session, limit=2)
+        db_session.commit()
+
+        apply_prepared(db_session, page)
+        db_session.commit()
+
+        assert len(db_session.exec(select(SearchPassage)).all()) == 2
+        assert db_session.exec(select(SearchProjectionRequest.id)).all() == [
+            requests[2].id
+        ]
+
+    def test_keeps_uncovered_source_work_due(
+        self, db_session, make_collection, make_model, make_search_projection_request
+    ):
+        from app.db.projections import ContentSource
+
+        collection = make_collection("Collection")
+        first = make_model("First", collection=collection)
+        second = make_model("Second", collection=collection)
+        source = make_search_projection_request(
+            ContentSource("collection", collection.id)
+        )
+        other = make_search_projection_request(ContentSource("model", second.id))
+        page = prepare_pending(db_session, limit=2)
+        db_session.commit()
+
+        apply_prepared(db_session, page)
+        db_session.commit()
+
+        db_session.refresh(source)
+        assert (source.cursor_kind, source.cursor_id) == ("model", first.id)
+        assert db_session.get(SearchProjectionRequest, other.id) is not None
+        _drain(db_session)
+        assert len(db_session.exec(select(SearchPassage)).all()) == 3
+
+    def test_rejects_a_batch_with_a_changed_later_request(
+        self, projection, db_session, make_model, make_search_projection_request
+    ):
+        from app.db.projections import ContentSource
+
+        first = make_model("First")
+        second = make_model("Before")
+        make_search_projection_request(ContentSource("model", first.id))
+        make_search_projection_request(ContentSource("model", second.id))
+        page = prepare_pending(db_session)
+        db_session.commit()
+        second.name = "After"
+        db_session.add(second)
+        content_changed(db_session, "model", [second.id])
+        db_session.commit()
+
+        written = apply_prepared(db_session, page)
+        db_session.commit()
+
+        assert written is None
+        assert db_session.exec(select(SearchPassage)).all() == []
+        _drain(db_session)
+        assert sorted(db_session.exec(select(SearchPassage.text)).all()) == [
+            "Title: After",
+            "Title: First",
+        ]
+
+    def test_rejects_a_batch_with_a_deleted_later_request(
+        self, db_session, make_model, make_search_projection_request
+    ):
+        from app.db.projections import ContentSource
+
+        make_search_projection_request(ContentSource("model", make_model("First").id))
+        other = make_search_projection_request(
+            ContentSource("model", make_model("Second").id)
+        )
+        page = prepare_pending(db_session)
+        db_session.commit()
+        db_session.delete(other)
+        db_session.commit()
+
+        written = apply_prepared(db_session, page)
+        db_session.commit()
+
+        assert written is None
+        assert db_session.exec(select(SearchPassage)).all() == []
+
+    def test_rolls_back_all_source_progress(
+        self, db_session, make_model, make_search_projection_request
+    ):
+        from app.db.projections import ContentSource
+
+        models = [make_model(f"Part {index}") for index in range(2)]
+        requests = [
+            make_search_projection_request(ContentSource("model", model.id))
+            for model in models
+        ]
+        page = prepare_pending(db_session)
+        db_session.commit()
+
+        apply_prepared(db_session, page)
+        db_session.rollback()
+
+        assert db_session.exec(select(SearchPassage)).all() == []
+        assert set(db_session.exec(select(SearchProjectionRequest.id)).all()) == {
+            request.id for request in requests
+        }
+
+    def test_a_failed_source_leaves_other_sources_progressing(
+        self, db_session, make_model, make_search_projection_request, monkeypatch
+    ):
+        from app.db.projections import ContentSource
+        from app.modules.search import projection
+
+        broken = make_model("Broken")
+        good = make_model("Good")
+        request = make_search_projection_request(ContentSource("model", broken.id))
+        make_search_projection_request(ContentSource("model", good.id))
+        page = prepare_pending(db_session)
+        db_session.commit()
+        original = projection.sync_subject
+
+        def fail_one(session, subject, **prepared):
+            result = original(session, subject, **prepared)
+            if subject.subject_id == broken.id:
+                raise RuntimeError("projection unavailable")
+            return result
+
+        with monkeypatch.context() as patch:
+            patch.setattr(projection, "sync_subject", fail_one)
+            apply_prepared(db_session, page)
+            db_session.commit()
+
+        assert db_session.exec(select(SearchPassage.text)).all() == ["Title: Good"]
+        retained = db_session.exec(select(SearchProjectionRequest)).one()
+        assert (retained.id, retained.attempts, retained.error_code) == (
+            request.id,
+            1,
+            "projection_failed",
+        )
+
+    def test_bounds_the_source_batch(
+        self, db_session, make_model, make_search_projection_request
+    ):
+        from app.db.projections import ContentSource
+
+        models = [make_model(f"Part {index}") for index in range(12)]
+        requests = [
+            make_search_projection_request(ContentSource("model", model.id))
+            for model in models
+        ]
+        page = prepare_pending(db_session, limit=128)
+        db_session.commit()
+
+        apply_prepared(db_session, page)
+        db_session.commit()
+
+        assert len(db_session.exec(select(SearchPassage)).all()) == 8
+        assert (
+            len(db_session.exec(select(SearchProjectionRequest)).all())
+            == len(requests) - 8
+        )
+
+    @pytest.mark.parametrize("collection_first", [True, False])
+    def test_shared_subject_survives_an_overlapping_source_failure(
+        self,
+        db_session,
+        make_collection,
+        make_model,
+        make_search_projection_request,
+        monkeypatch,
+        collection_first,
+    ):
+        from app.db.projections import ContentSource
+        from app.modules.search import projection
+
+        collection = make_collection("Collection")
+        shared = make_model("Shared", collection=collection)
+        broken = make_model("Broken", collection=collection)
+        sources = [
+            ContentSource("collection", collection.id),
+            ContentSource("model", shared.id),
+        ]
+        for source in sources if collection_first else reversed(sources):
+            make_search_projection_request(source)
+        page = prepare_pending(db_session)
+        db_session.commit()
+        original = projection.sync_subject
+
+        def fail_late(session, subject, **prepared):
+            result = original(session, subject, **prepared)
+            if (
+                subject.subject_type.value == "model"
+                and subject.subject_id == broken.id
+            ):
+                raise RuntimeError("projection unavailable")
+            return result
+
+        with monkeypatch.context() as patch:
+            patch.setattr(projection, "sync_subject", fail_late)
+            apply_prepared(db_session, page)
+            db_session.commit()
+
+        assert db_session.exec(select(SearchPassage.text)).all() == [
+            f"Title: Shared\nCollection: {collection.path}"
+        ]
+        retained = db_session.exec(select(SearchProjectionRequest)).one()
+        assert (retained.source_kind, retained.source_id, retained.attempts) == (
+            "collection",
+            collection.id,
+            1,
+        )
+
 
 class TestProcessPending:
     def test_retries_a_failed_page_atomically(
