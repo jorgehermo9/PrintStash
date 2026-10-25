@@ -25,6 +25,73 @@ import { aModel } from "../../src/test-support/factories";
 useMockApi();
 
 test.describe("model detail route", () => {
+  for (const emptyName of [false, true]) {
+    test(`aligns title editing controls at 1080p with ${emptyName ? "a missing" : "a valid"} name`, async ({
+      page,
+    }) => {
+      await page.setViewportSize({ width: 1920, height: 1080 });
+      await page.goto("/models/1");
+      await page.getByRole("button", { name: "Rename skadis_kitchen-roll_screw" }).click();
+
+      const name = page.getByPlaceholder("Model name");
+      const save = page.getByRole("button", { name: "Save", exact: true });
+      const cancel = page.getByRole("button", { name: "Cancel", exact: true });
+      if (emptyName) {
+        await name.fill("");
+        await expect(page.getByRole("alert")).toContainText("Model name is required.");
+        await expect(save).toBeDisabled();
+      }
+      await page.evaluate(() => document.fonts.ready);
+      const nameBox = await name.boundingBox();
+      expect(nameBox).not.toBeNull();
+      for (const action of [save, cancel]) {
+        const actionBox = await action.boundingBox();
+        expect(actionBox).not.toBeNull();
+        expect(Math.abs(actionBox!.y - nameBox!.y)).toBeLessThanOrEqual(1);
+        expect(
+          Math.abs(actionBox!.y + actionBox!.height - nameBox!.y - nameBox!.height),
+        ).toBeLessThanOrEqual(1);
+        expect(actionBox!.x).toBeGreaterThanOrEqual(nameBox!.x + nameBox!.width);
+      }
+    });
+  }
+
+  for (const width of [320, 390]) {
+    test(`keeps title editing actions together beneath the name at ${width}px`, async ({
+      page,
+    }) => {
+      await page.setViewportSize({ width, height: 844 });
+      await page.goto("/models/1");
+      await page.getByRole("button", { name: "Rename skadis_kitchen-roll_screw" }).click();
+      const name = page.getByPlaceholder("Model name");
+      await name.fill("A long model title that still needs reachable editing controls");
+      await page.evaluate(() => document.fonts.ready);
+
+      const nameBox = await name.boundingBox();
+      const saveBox = await page.getByRole("button", { name: "Save", exact: true }).boundingBox();
+      const cancelBox = await page
+        .getByRole("button", { name: "Cancel", exact: true })
+        .boundingBox();
+      expect(nameBox).not.toBeNull();
+      expect(saveBox).not.toBeNull();
+      expect(cancelBox).not.toBeNull();
+      expect(cancelBox!.y).toBeGreaterThanOrEqual(nameBox!.y + nameBox!.height);
+      expect(Math.abs(saveBox!.y - cancelBox!.y)).toBeLessThanOrEqual(1);
+      expect(cancelBox!.x + cancelBox!.width).toBeLessThan(saveBox!.x);
+      expect(
+        Math.abs(saveBox!.x + saveBox!.width - nameBox!.x - nameBox!.width),
+      ).toBeLessThanOrEqual(1);
+      for (const box of [nameBox!, cancelBox!, saveBox!]) {
+        expect(box.x).toBeGreaterThanOrEqual(0);
+        expect(box.x + box.width).toBeLessThanOrEqual(width);
+      }
+      const header = name.locator("xpath=ancestor::header");
+      expect(await header.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(
+        true,
+      );
+    });
+  }
+
   for (const width of [320, 1280]) {
     test(`wraps the full nested collection path in Overview at ${width}px`, async ({ page }) => {
       const collectionLabel = "PrintStash/Organization/Gridfinity/" + "NestedCollection".repeat(20);

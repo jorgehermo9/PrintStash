@@ -20,7 +20,7 @@ import { cn } from "../lib/utils";
 const GUTTER = 8;
 const GAP = 8;
 const ITEMS =
-  ':is([role="menuitem"], [role="menuitemcheckbox"], [role="option"]):not(:disabled):not([aria-disabled="true"])';
+  ':is([role="menuitem"], [role="menuitemcheckbox"], [role="menuitemradio"], [role="option"]):not(:disabled):not([aria-disabled="true"])';
 const FOCUSABLE =
   'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
 

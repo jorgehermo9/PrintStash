@@ -4,6 +4,9 @@
 
 ### Fixed
 
+- Language choices open in a framed menu with keyboard navigation and return focus to their button. Saved views uses the full quick-access row with a visible open state and compact search focus.
+- Model title editing aligns Save and Cancel with the input, including validation errors, and keeps the actions together on narrow screens.
+
 - Desktop Library filters open beside the results with active criteria and expanded dates visible, while collection browsing keeps quick access to Favorites, Saved views, Printers and Trash.
 - Library tools opens beside its button and preserves Similar models, New collection and selection. My workspace keeps Builds and Statistics separate and avoids duplicating the Library printer shortcut.
 - Keep the rename pen vertically aligned with Model and collection titles, including wrapped names.

@@ -9,6 +9,7 @@ import {
   Bookmark,
   BookmarkPlus,
   Check,
+  ChevronDown,
   Copy,
   Pencil,
   RefreshCw,
@@ -58,6 +59,7 @@ export function SavedViewSelector({
   onRename,
   onDuplicate,
   onDelete,
+  align = "end",
   triggerClassName,
   triggerRole,
   triggerSize = "xs",
@@ -73,6 +75,7 @@ export function SavedViewSelector({
   onRename: (view: SavedViewRead, name: string) => Promise<void>;
   onDuplicate: (view: SavedViewRead) => Promise<void>;
   onDelete: (view: SavedViewRead) => Promise<void>;
+  align?: "start" | "end";
   triggerClassName?: string;
   triggerRole?: "menuitem";
   triggerSize?: "xs" | "sm";
@@ -141,6 +144,7 @@ export function SavedViewSelector({
       <>
         <DropdownMenu
           portal
+          align={align}
           open={open}
           onOpenChange={setMenuOpen}
           role="dialog"
@@ -156,9 +160,13 @@ export function SavedViewSelector({
               aria-haspopup="dialog"
               aria-expanded={open}
               onClick={() => setMenuOpen(!open)}
-              className={cn("max-w-44", triggerClassName)}
+              className={cn(
+                "max-w-44",
+                open && "bg-accent text-accent-foreground",
+                triggerClassName,
+              )}
             >
-              <Bookmark className="h-4 w-4" />
+              <Bookmark className="h-4 w-4 shrink-0" />
               <span className="truncate">{active?.name ?? uiText("Saved views")}</span>
               {active && modified && (
                 <span className="text-warning" aria-label={uiText("Modified saved view")}>
@@ -166,6 +174,10 @@ export function SavedViewSelector({
                 </span>
               )}
               {views.length > 0 && <span className="text-muted-foreground">{views.length}</span>}
+              <ChevronDown
+                aria-hidden
+                className={cn("ml-auto h-3.5 w-3.5 shrink-0", open && "rotate-180")}
+              />
             </Button>
           }
         >
@@ -178,7 +190,7 @@ export function SavedViewSelector({
                 onChange={(event) => setQuery(event.target.value)}
                 placeholder={uiText("Find a saved view...")}
                 aria-label={uiText("Find a saved view")}
-                className="pl-8"
+                className="h-9 pl-8 focus-visible:ring-1 focus-visible:ring-offset-0"
               />
             </div>
           </div>

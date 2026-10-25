@@ -2288,7 +2288,8 @@ export function ModelBrowser({ initial }: { initial?: BrowserInitialData }) {
                   onDelete={(view) =>
                     manageSavedView({ kind: "delete", id: view.id }, "savedView.deleteSuccess")
                   }
-                  triggerClassName="h-8 w-full justify-start px-3 text-sm"
+                  align="start"
+                  triggerClassName="h-8 w-full max-w-none justify-start px-3 text-sm"
                   triggerVariant="ghost"
                 />
               </>

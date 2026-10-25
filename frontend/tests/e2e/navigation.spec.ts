@@ -196,14 +196,64 @@ test.describe("desktop Saved views quick access", () => {
     const panel = page.getByRole("dialog");
     await expect(panel.getByRole("textbox", { name: "Find a saved view" })).toBeVisible();
     const triggerBox = await trigger.boundingBox();
+    const favoriteBox = await page
+      .getByRole("navigation", { name: "Quick access" })
+      .getByRole("button", { name: "Favorites", exact: true })
+      .boundingBox();
     const panelBox = await panel.boundingBox();
     expect(triggerBox).not.toBeNull();
     expect(panelBox).not.toBeNull();
     expect(panelBox!.y + panelBox!.height).toBeLessThanOrEqual(triggerBox!.y);
     expect(panelBox!.x).toBeGreaterThanOrEqual(0);
+    expect(Math.abs(panelBox!.x - triggerBox!.x)).toBeLessThanOrEqual(1);
+    expect(favoriteBox).not.toBeNull();
+    expect(Math.abs(triggerBox!.width - favoriteBox!.width)).toBeLessThanOrEqual(1);
+    expect(panelBox!.x + panelBox!.width).toBeLessThanOrEqual(1920);
+    await expect(trigger).toHaveAttribute("aria-expanded", "true");
     expect(panelBox!.y).toBeGreaterThanOrEqual(64);
     await page.keyboard.press("Escape");
     await expect(panel).toHaveCount(0);
     await expect(trigger).toBeFocused();
+  });
+});
+
+test.describe("language dropdown", () => {
+  test("frames language choices beside the header trigger", async ({ page }, testInfo) => {
+    await page.setViewportSize({ width: 1920, height: 1080 });
+    await page.goto("/");
+    await expect(page.getByRole("main")).toHaveAttribute("aria-busy", "false");
+    const trigger = page.getByRole("button", { name: "Language: English", exact: true });
+    await trigger.click();
+    const menu = page.getByRole("menu", { name: "Language", exact: true });
+    await expect(menu.getByRole("menuitemradio", { name: "English", exact: true })).toBeFocused();
+    const surface = await menu.evaluate((element) => {
+      const style = getComputedStyle(element);
+      return {
+        background: style.backgroundColor,
+        border: parseFloat(style.borderTopWidth),
+        shadow: style.boxShadow,
+      };
+    });
+    expect(surface.background).not.toBe("rgba(0, 0, 0, 0)");
+    expect(surface.border).toBeGreaterThan(0);
+    expect(surface.shadow).not.toBe("none");
+    const triggerBox = await trigger.boundingBox();
+    const menuBox = await menu.boundingBox();
+    expect(triggerBox).not.toBeNull();
+    expect(menuBox).not.toBeNull();
+    expect(menuBox!.y).toBeGreaterThanOrEqual(triggerBox!.y + triggerBox!.height);
+    expect(menuBox!.y - triggerBox!.y - triggerBox!.height).toBeLessThanOrEqual(10);
+    expect(
+      Math.abs(menuBox!.x + menuBox!.width - triggerBox!.x - triggerBox!.width),
+    ).toBeLessThanOrEqual(1);
+    await page.screenshot({
+      path: testInfo.outputPath("language-menu-1080p.png"),
+      animations: "disabled",
+    });
+    await page.keyboard.press("ArrowDown");
+    await expect(menu.getByRole("menuitemradio", { name: "Español", exact: true })).toBeFocused();
+    await page.keyboard.press("Enter");
+    await expect(page.getByRole("button", { name: "Idioma: Español", exact: true })).toBeFocused();
+    await expect(menu).toHaveCount(0);
   });
 });

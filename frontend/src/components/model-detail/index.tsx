@@ -60,6 +60,7 @@ import { ModelPrinterFileRead, ModelRead, TagRead } from "@/types";
 
 import { ConfirmModal } from "@/components/ui/confirm-modal";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import { DropdownMenu } from "@/components/ui/dropdown-menu";
 import { TabBar } from "@/components/ui/tabs";
 import { AddGcodeRevisionModal } from "./add-revision-modal";
@@ -692,13 +693,13 @@ function ModelDetailPresentation({
             </LibraryBackLink>
             <div className="min-w-0 flex-1">
               {editing ? (
-                <input
+                <Input
                   ref={nameInput}
                   value={editName}
                   onChange={(e) => setEditName(e.target.value)}
                   aria-invalid={!editName.trim()}
                   aria-describedby={!editName.trim() ? "model-name-error" : undefined}
-                  className="w-full bg-surface text-on-surface font-mono text-lg border border-outline-variant rounded px-2 py-0.5 focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent"
+                  className="h-9 bg-surface text-on-surface font-mono text-lg px-2 py-0.5"
                   placeholder={uiText("Model name")}
                 />
               ) : (
@@ -772,7 +773,9 @@ function ModelDetailPresentation({
               )}
             </div>
           </div>
-          <div className="flex items-center gap-2">
+          <div
+            className={`flex items-center gap-2 ${editing ? "w-full justify-end md:w-auto md:self-start" : ""}`}
+          >
             {editing ? (
               <>
                 <Button variant="outline" size="sm" onClick={cancelEdit}>

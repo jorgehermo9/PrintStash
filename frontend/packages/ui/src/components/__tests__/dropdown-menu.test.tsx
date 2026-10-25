@@ -538,19 +538,19 @@ describe("DropdownMenu", () => {
       expect(onOpenChange).not.toHaveBeenCalled();
     });
   });
-  describe("a checkbox item", () => {
+  describe.each(["menuitemcheckbox", "menuitemradio"] as const)("a %s item", (role) => {
     it("takes focus when the menu opens", () => {
       // A menu whose only items are toggles would otherwise open with focus
       // nowhere, and a keyboard user has nothing to arrow from.
       openMenu(
         <DropdownMenu open={true} onOpenChange={vi.fn<(open: boolean) => void>()} trigger={TRIGGER}>
-          <button type="button" role="menuitemcheckbox" aria-checked="false">
+          <button type="button" role={role} aria-checked="false">
             Favorites
           </button>
         </DropdownMenu>,
       );
 
-      expect(screen.getByRole("menuitemcheckbox", { name: "Favorites" })).toHaveFocus();
+      expect(screen.getByRole(role, { name: "Favorites" })).toHaveFocus();
     });
 
     it("joins the arrow-key rotation", () => {
@@ -559,7 +559,7 @@ describe("DropdownMenu", () => {
           <button type="button" role="menuitem">
             Rename
           </button>
-          <button type="button" role="menuitemcheckbox" aria-checked="false">
+          <button type="button" role={role} aria-checked="false">
             Favorites
           </button>
         </DropdownMenu>,
@@ -567,7 +567,7 @@ describe("DropdownMenu", () => {
 
       fireEvent.keyDown(screen.getByRole("menu"), { key: "ArrowDown" });
 
-      expect(screen.getByRole("menuitemcheckbox", { name: "Favorites" })).toHaveFocus();
+      expect(screen.getByRole(role, { name: "Favorites" })).toHaveFocus();
     });
   });
 
