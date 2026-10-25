@@ -420,9 +420,7 @@ test.describe("Model detail Similar controls", () => {
 
 test.describe("Similarity comparison layout", () => {
   test.describe.configure({ timeout: 60_000 });
-  test("shows review actions, ready previews, measurements and evidence together at 1080p", async ({
-    page,
-  }, testInfo) => {
+  test("fits the complete comparison workspace at 1080p", async ({ page }, testInfo) => {
     await page.setViewportSize({ width: 1920, height: 1080 });
     await mockComparison(page, ["Bracket", "Bracket copy"]);
     await page.goto("/library/similar/1");
@@ -475,9 +473,7 @@ test.describe("Similarity comparison layout", () => {
     await page.screenshot({ path: testInfo.outputPath("comparison-visible-details-1080p.png") });
   });
 
-  test("contains long model names in the comparison on desktop and mobile", async ({
-    page,
-  }, testInfo) => {
+  test("contains long model names across viewport sizes", async ({ page }, testInfo) => {
     const names: [string, string] = ["A".repeat(255), "B".repeat(255)];
     await page.setViewportSize({ width: 1920, height: 1080 });
     await mockComparison(page, names);

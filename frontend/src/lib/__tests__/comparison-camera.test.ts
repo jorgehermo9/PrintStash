@@ -142,7 +142,7 @@ describe("comparison geometry framing", () => {
     );
   });
 
-  it("keeps physical dimensions and applies only selected scale compensation", () => {
+  it("applies scale compensation only to displayed geometry", () => {
     const geometry = new BoxGeometry(20, 10, 4);
     const positions = Array.from(geometry.getAttribute("position").array);
     const options = {
@@ -164,7 +164,7 @@ describe("comparison geometry framing", () => {
     geometry.dispose();
   });
 
-  it("fits every registered viewer together and removes retired bounds", () => {
+  it("fits only registered viewers", () => {
     const camera = createComparisonCamera();
     const first = Symbol("first");
     const second = Symbol("second");
