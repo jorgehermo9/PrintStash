@@ -7,6 +7,7 @@
 - Language choices open in a framed menu with keyboard navigation and return focus to their button. Saved views uses the full quick-access row with a visible open state and compact search focus.
 - Model and collection names open a compact editor beside the title with Save and Cancel. Renaming keeps Add tags, Favorite and the page controls visible; full Model details remain a separate action.
 - Similar models opens on visual matches with direct review tabs, separate analysis settings/history, readable pair previews and clear confirmation actions. Comparison links retain review filters, and empty states describe the selected review state accurately.
+- The Model Similar tab keeps every review state visible without a horizontal scrollbar, with consistently sized action buttons aligned below the states in narrow panels.
 - Library filter loading stays aligned with the filter controls without adding an empty spinner row.
 - Wiki links open the PrintStash documentation site on desktop and mobile.
 

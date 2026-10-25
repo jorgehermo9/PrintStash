@@ -215,6 +215,137 @@ test.describe("Similarity desktop review", () => {
   });
 });
 
+test.describe("Model detail Similar controls", () => {
+  for (const scenario of [
+    {
+      label: "default480desktop",
+      width: 1920,
+      height: 1080,
+      pane: 480,
+      locale: "en",
+      tab: "Similar",
+      states: ["To review", "Confirmed", "Later", "Rejected"],
+      filters: "Filters",
+      find: "Find similar",
+      resize: "Resize details panel",
+    },
+    {
+      label: "minimum400desktopSpanish",
+      width: 1920,
+      height: 1080,
+      pane: 400,
+      locale: "es",
+      tab: "Similares",
+      states: ["Por revisar", "Confirmados", "Más tarde", "Rechazados"],
+      filters: "Filtros",
+      find: "Buscar similares",
+      resize: "Cambiar el tamaño del panel de detalles",
+    },
+    {
+      label: "390mobileSpanish",
+      width: 390,
+      height: 844,
+      pane: 390,
+      locale: "es",
+      tab: "Similares",
+      states: ["Por revisar", "Confirmados", "Más tarde", "Rechazados"],
+      filters: "Filtros",
+      find: "Buscar similares",
+      resize: "Cambiar el tamaño del panel de detalles",
+    },
+    {
+      label: "320mobile",
+      width: 320,
+      height: 844,
+      pane: 320,
+      locale: "en",
+      tab: "Similar",
+      states: ["To review", "Confirmed", "Later", "Rejected"],
+      filters: "Filters",
+      find: "Find similar",
+      resize: "Resize details panel",
+    },
+  ]) {
+    test(`keeps every review action reachable in ${scenario.label}`, async ({ page }, testInfo) => {
+      await page.setViewportSize({ width: scenario.width, height: scenario.height });
+      await page.addInitScript(
+        (locale) => localStorage.setItem("printstash.locale", locale),
+        scenario.locale,
+      );
+      await page.route("**/api/v1/similarity/status", (route) =>
+        route.fulfill({ json: similarityStatus() }),
+      );
+      await page.route("**/api/v1/similarity/candidates?*", (route) =>
+        route.fulfill({ json: { items: [aSimilarityCandidate()], next_cursor: null } }),
+      );
+      await page.goto("/models/1");
+      const pane = page.getByTestId("model-detail-sidebar");
+      if (scenario.pane === 400) {
+        const resize = page.getByRole("separator", { name: scenario.resize, exact: true });
+        await resize.focus();
+        for (let step = 0; step < 5; step++) await resize.press("ArrowRight");
+      }
+      await expect
+        .poll(async () => (await pane.boundingBox())!.width)
+        .toBeCloseTo(scenario.pane, 0);
+      await pane.getByRole("tab", { name: scenario.tab, exact: true }).click();
+      const firstState = pane.getByRole("tab", { name: scenario.states[0], exact: true });
+      await firstState.scrollIntoViewIfNeeded();
+      await page.evaluate(() => document.fonts.ready);
+      const filters = pane.getByRole("button", { name: scenario.filters, exact: true });
+      const find = pane.getByRole("button", { name: scenario.find, exact: true });
+      await find.scrollIntoViewIfNeeded();
+      const review = firstState.locator("..");
+      expect(
+        await review.evaluate((element) => element.scrollWidth <= element.clientWidth + 1),
+      ).toBe(true);
+      expect(
+        await review
+          .locator("..")
+          .evaluate((element) => element.scrollWidth <= element.clientWidth + 1),
+      ).toBe(true);
+      for (const state of scenario.states) {
+        const tab = pane.getByRole("tab", { name: state, exact: true });
+        await expect(tab).toBeInViewport({ ratio: 1 });
+        expect(
+          await tab.evaluate((element) => element.scrollWidth <= element.clientWidth + 1),
+        ).toBe(true);
+      }
+      await expect(filters).toBeInViewport({ ratio: 1 });
+      await expect(find).toBeInViewport({ ratio: 1 });
+      await expect(find).toBeEnabled();
+      const filtersBox = await filters.boundingBox();
+      const findBox = await find.boundingBox();
+      expect(filtersBox).not.toBeNull();
+      expect(findBox).not.toBeNull();
+      expect(Math.abs(filtersBox!.y - findBox!.y)).toBeLessThanOrEqual(1);
+      expect(Math.abs(filtersBox!.height - findBox!.height)).toBeLessThanOrEqual(1);
+      await find.click({ trial: true });
+      const later = pane.getByRole("tab", { name: scenario.states[2], exact: true });
+      const [response] = await Promise.all([
+        page.waitForResponse((response) => {
+          const url = new URL(response.url());
+          return (
+            url.pathname === "/api/v1/similarity/candidates" &&
+            url.searchParams.get("review_state") === "later" &&
+            url.searchParams.get("model_id") === "1"
+          );
+        }),
+        later.click(),
+      ]);
+      expect(response.ok()).toBe(true);
+      await expect(later).toHaveAttribute("aria-selected", "true");
+      expect(await pane.evaluate((element) => element.scrollWidth <= element.clientWidth + 1)).toBe(
+        true,
+      );
+      await page.screenshot({ path: testInfo.outputPath(`model-similar-${scenario.label}.png`) });
+      await filters.click();
+      await expect(filters).toHaveAttribute("aria-expanded", "true");
+      await expect(pane.getByRole("combobox").first()).toBeVisible();
+    });
+  }
+});
+
 test.describe("Similarity preview compensation", () => {
   for (const variant of ["scale", "mirror"] as const) {
     test(`shows ${variant} compensation without rewriting source geometry`, async ({ page }) => {

@@ -247,55 +247,58 @@ export function SimilarityQueue({ modelId }: { modelId?: number }) {
     <>
       <SimilaritySearch modelId={modelId} />
       <Card className="@container/similarity overflow-hidden">
-        <div className="flex flex-wrap items-end gap-3 border-b bg-muted/30 p-3">
-          <div className="min-w-0 flex-1 overflow-x-auto">
+        <div className="flex flex-wrap items-center gap-3 border-b bg-muted/30 p-3">
+          <div className="min-w-0 basis-full @3xl/similarity:flex-1 @3xl/similarity:basis-auto">
             <TabBar
               tabs={REVIEW_STATES.map((state) => ({ key: state, label: t(`similarity.${state}`) }))}
               active={filters.review_state ?? "open"}
               onChange={(review_state) => setFilters({ review_state })}
-              className="w-max min-w-full gap-1"
-              tabClassName="whitespace-nowrap rounded-md px-3 py-2 text-sm font-medium text-muted-foreground transition-colors hover:bg-popover-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              className="grid w-full grid-cols-2 gap-1 @sm/similarity:grid-cols-4 @3xl/similarity:flex"
+              tabClassName="h-9 min-w-0 whitespace-nowrap rounded-md px-2 text-sm font-medium text-muted-foreground transition-colors hover:bg-popover-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring @sm/similarity:px-0 @3xl/similarity:px-3"
               activeTabClassName="bg-accent text-accent-foreground"
               showIndicator={false}
             />
           </div>
-          <Button
-            variant="outline"
-            size="sm"
-            aria-expanded={filtersOpen}
-            aria-controls={filtersId}
-            onClick={() => setFiltersOpen(!filtersOpen)}
-          >
-            <SlidersHorizontal className="h-4 w-4" aria-hidden />
-            {uiText("Filters")}
-            {activeFilters.length > 0 && (
-              <span className="font-mono text-xs">{activeFilters.length}</span>
-            )}
-          </Button>
-          {modelId !== undefined && (
+          <div className="flex w-full flex-wrap items-center justify-end gap-2 @3xl/similarity:w-auto">
             <Button
-              onClick={() => {
-                if (modelId === undefined) throw new Error("A Model is required");
-                const session = getSessionVersion();
-                find.mutate(
-                  { id: modelId, session },
-                  {
-                    onSuccess: (result) => {
-                      if (session === getSessionVersion())
-                        setStartedRun({ modelId, id: result.run.id });
-                    },
-                    onError: (error) => {
-                      if (session === getSessionVersion()) toast.error(error);
-                    },
-                  },
-                );
-              }}
-              loading={find.isPending && find.variables?.id === modelId}
-              disabled={status.isError || !status.data?.enabled}
+              variant="outline"
+              size="sm"
+              aria-expanded={filtersOpen}
+              aria-controls={filtersId}
+              onClick={() => setFiltersOpen(!filtersOpen)}
             >
-              {t("similarity.find")}
+              <SlidersHorizontal className="h-4 w-4" aria-hidden />
+              {uiText("Filters")}
+              {activeFilters.length > 0 && (
+                <span className="font-mono text-xs">{activeFilters.length}</span>
+              )}
             </Button>
-          )}
+            {modelId !== undefined && (
+              <Button
+                size="sm"
+                onClick={() => {
+                  if (modelId === undefined) throw new Error("A Model is required");
+                  const session = getSessionVersion();
+                  find.mutate(
+                    { id: modelId, session },
+                    {
+                      onSuccess: (result) => {
+                        if (session === getSessionVersion())
+                          setStartedRun({ modelId, id: result.run.id });
+                      },
+                      onError: (error) => {
+                        if (session === getSessionVersion()) toast.error(error);
+                      },
+                    },
+                  );
+                }}
+                loading={find.isPending && find.variables?.id === modelId}
+                disabled={status.isError || !status.data?.enabled}
+              >
+                {t("similarity.find")}
+              </Button>
+            )}
+          </div>
           <div
             id={filtersId}
             hidden={!filtersOpen}
