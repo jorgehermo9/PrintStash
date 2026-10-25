@@ -4,7 +4,7 @@
 
 ### Fixed
 
-- Similar comparisons keep aligned review actions, larger shared-scale previews, measurements and match evidence together without nested information dropdowns. Match pairs use larger previews with two-line names and an attached explanation/Compare footer; wide queues show two pairs per row.
+- Similar comparisons keep aligned review actions, larger shared-scale previews, measurements and match evidence together without nested information dropdowns. Match rows show their explanation directly beside a clear Compare action, without the misleading exchange-arrow separator.
 
 - Language choices open in a framed menu with keyboard navigation and return focus to their button. Saved views uses the full quick-access row with a visible open state and compact search focus.
 - Model and collection names open a compact editor beside the title with Save and Cancel. Renaming keeps Add tags, Favorite and the page controls visible; full Model details remain a separate action.

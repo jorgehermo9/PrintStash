@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useId, useState } from "react";
 import { useLocation, useNavigate, useNavigationType } from "react-router-dom";
 import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
-import { ArrowLeftRight, Box, ScanSearch, SlidersHorizontal } from "lucide-react";
+import { Box, ScanSearch, SlidersHorizontal } from "lucide-react";
 
 import { SimilaritySearch } from "@/components/similarity-search";
 import { CollectionPicker } from "@/components/collection-picker";
@@ -43,18 +43,18 @@ import {
 const REVIEW_STATES: ReviewState[] = ["open", "confirmed", "later", "rejected"];
 const FILTER_DEBOUNCE_MS = 250;
 
-function ModelLabel({ model, label }: { model: SimilarityModel; label: string }) {
+function ModelLabel({ model }: { model: SimilarityModel }) {
   const { url: image, ref } = useViewportAssetUrl(
     model.thumbnail_file_id ? `/api/v1/files/${model.thumbnail_file_id}/thumbnail` : null,
   );
   return (
     <Link
       href={`/models/${model.id}`}
-      className="flex min-w-0 flex-col gap-2 rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+      className="flex min-w-0 items-center gap-3 rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
     >
       <span
         ref={ref}
-        className="flex h-24 w-full items-center justify-center overflow-hidden rounded-md bg-muted @lg/pair:h-32"
+        className="flex h-16 w-16 shrink-0 items-center justify-center overflow-hidden rounded-md bg-muted"
       >
         {image ? (
           <img src={image} alt="" className="h-full w-full object-contain" />
@@ -62,17 +62,7 @@ function ModelLabel({ model, label }: { model: SimilarityModel; label: string })
           <Box className="h-6 w-6 text-muted-foreground" aria-hidden />
         )}
       </span>
-      <span className="flex w-full min-w-0 items-start gap-2">
-        <span aria-hidden className="pt-0.5 font-mono text-xs text-muted-foreground">
-          {label}
-        </span>
-        <span
-          className="line-clamp-2 min-h-10 min-w-0 break-words text-sm font-medium"
-          title={model.name}
-        >
-          {model.name}
-        </span>
-      </span>
+      <span className="min-w-0 break-words text-sm font-medium">{model.name}</span>
     </Link>
   );
 }
@@ -86,14 +76,13 @@ export function SimilarityRow({
 }) {
   const { t } = useI18n();
   return (
-    <li className="@container/pair flex min-w-0 flex-col gap-3 border-border p-4 [&:not(:first-child)]:border-t @5xl/similarity:[&:nth-child(2)]:border-t-0 @5xl/similarity:odd:border-r">
-      <div className="grid grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center gap-3">
-        <ModelLabel model={candidate.model_a} label={t("similarity.modelA")} />
-        <ArrowLeftRight className="h-4 w-4 text-muted-foreground" aria-hidden />
-        <ModelLabel model={candidate.model_b} label={t("similarity.modelB")} />
-      </div>
-      <div className="mt-auto flex flex-wrap items-end justify-between gap-3 border-t border-border pt-3">
-        <div className="min-w-0 flex-1 basis-40 space-y-1">
+    <li className="grid gap-4 px-4 py-4 sm:px-5 @3xl/similarity:grid-cols-[minmax(0,1fr)_auto] @3xl/similarity:items-center">
+      <div className="min-w-0 space-y-3">
+        <div className="grid gap-3 @lg/similarity:grid-cols-2 @lg/similarity:items-center">
+          <ModelLabel model={candidate.model_a} />
+          <ModelLabel model={candidate.model_b} />
+        </div>
+        <div className="min-w-0 space-y-1">
           <div className="flex flex-wrap items-center gap-2">
             <span className="text-sm font-medium">{evidenceLabel(candidate.evidence_class)}</span>
             <span className="font-mono text-xs tabular-nums text-muted-foreground">
@@ -113,14 +102,14 @@ export function SimilarityRow({
             {evidenceDescription(candidate)}
           </p>
         </div>
-        <Button asChild size="sm" className="ml-auto shrink-0">
-          <Link
-            href={`/library/similar/${candidate.id}${returnTo ? `?returnTo=${encodeURIComponent(returnTo)}` : ""}`}
-          >
-            {t("similarity.compare")}
-          </Link>
-        </Button>
       </div>
+      <Button asChild size="sm" className="justify-self-end">
+        <Link
+          href={`/library/similar/${candidate.id}${returnTo ? `?returnTo=${encodeURIComponent(returnTo)}` : ""}`}
+        >
+          {t("similarity.compare")}
+        </Link>
+      </Button>
     </li>
   );
 }
@@ -531,7 +520,7 @@ export function SimilarityQueue({ modelId }: { modelId?: number }) {
             action={<Button onClick={() => void queue.refetch()}>{t("similarity.retry")}</Button>}
           />
         ) : rows.length ? (
-          <ul className="grid @5xl/similarity:grid-cols-2">
+          <ul className="divide-y divide-border">
             {rows.map((candidate) => (
               <SimilarityRow key={candidate.id} candidate={candidate} returnTo={returnTo} />
             ))}
