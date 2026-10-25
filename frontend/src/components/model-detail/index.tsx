@@ -29,6 +29,7 @@ import { useUiLocale } from "@/lib/i18n";
 import { Suspense, lazy, useEffect, useMemo, useRef, useState } from "react";
 import type { PointerEvent as ReactPointerEvent } from "react";
 import { useRouter, useSearchParams } from "@/lib/navigation";
+import { useLocation, useNavigate } from "react-router-dom";
 import {
   ArrowLeft,
   Check,
@@ -181,6 +182,8 @@ function ModelDetailPresentation({
   useUiLocale();
   const router = useRouter();
   const searchParams = useSearchParams();
+  const location = useLocation();
+  const navigate = useNavigate();
   const auth = useRequireAuth();
   const { user } = useAuth();
   const [deleting, setDeleting] = useState(false);
@@ -229,7 +232,7 @@ function ModelDetailPresentation({
   function selectTab(tab: TabKey) {
     const params = new URLSearchParams(searchParams);
     params.set("tab", tab);
-    router.replace(`/models/${model.id}?${params}`);
+    void navigate(`/models/${model.id}?${params}`, { replace: true, state: location.state });
   }
   const [displayMode, setDisplayMode] = useState<ViewerDisplayMode>("solid");
   const [detailSidebarWidth, setDetailSidebarWidth] = useState(() => {

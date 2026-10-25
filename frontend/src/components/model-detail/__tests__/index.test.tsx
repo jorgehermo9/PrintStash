@@ -24,6 +24,8 @@ import { useLocation, useNavigate } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { ModelDetail } from "@/components/model-detail";
+import { LibraryItemLink } from "@/features/library/navigation";
+import { knownOrigin, useLibraryEntry } from "@/features/library/navigation-state";
 import { queryKeys } from "@/lib/query-client";
 import { aCollection, aMetadata } from "@/test-support/factories";
 import { similarityStatus } from "@/test-support/similarity";
@@ -89,12 +91,30 @@ function DetailLocation() {
   );
 }
 
-function renderDetail(options: RenderAppOptions & { model?: ModelRead } = {}) {
-  const { model = aModel(), seed = [], routes = {}, ...rest } = options;
+function LibraryOriginProbe() {
+  const location = useLocation();
+  const origin = useLibraryEntry("/?c=parts", location.pathname === "/");
+  return (
+    <>
+      <LibraryItemLink href="/models/1" origin={origin}>
+        Open model from library
+      </LibraryItemLink>
+      <output aria-label="Registered library origin">
+        {knownOrigin(location.state)?.href ?? "none"}
+      </output>
+    </>
+  );
+}
+
+function renderDetail(
+  options: RenderAppOptions & { model?: ModelRead; libraryOrigin?: boolean } = {},
+) {
+  const { model = aModel(), seed = [], routes = {}, libraryOrigin = false, ...rest } = options;
   return renderApp(
     <>
       <ModelDetail model={model} />
       <DetailLocation />
+      {libraryOrigin && <LibraryOriginProbe />}
     </>,
     {
       seed: [[queryKeys.tags, []], [queryKeys.printers, []], ...seed],
@@ -649,6 +669,19 @@ describe("ModelDetail", () => {
   });
 
   describe("moving between tabs", () => {
+    it("preserves the registered Library origin through tab changes", async () => {
+      renderDetail({ at: "/?c=parts", libraryOrigin: true });
+      await userEvent.click(screen.getByRole("link", { name: "Open model from library" }));
+      expect(screen.getByLabelText("Registered library origin")).toHaveTextContent("/?c=parts");
+
+      await userEvent.click(await screen.findByRole("tab", { name: /Files/ }));
+      expect(screen.getByLabelText("Registered library origin")).toHaveTextContent("/?c=parts");
+      expect(screen.getByLabelText("Current detail location")).toHaveTextContent(
+        "return=%2F%3Fc%3Dparts&tab=files",
+      );
+      await userEvent.click(screen.getByRole("tab", { name: /Similar/ }));
+      expect(screen.getByLabelText("Registered library origin")).toHaveTextContent("/?c=parts");
+    });
     it("restores the Similar tab from a comparison return URL", async () => {
       renderDetail({ at: "/models/1?tab=similar&return_entry=library-position" });
 
