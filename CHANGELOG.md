@@ -4,6 +4,17 @@
 
 ### Fixed
 
+- Similar comparisons keep aligned review actions, larger shared-scale previews, measurements and match evidence together without nested information dropdowns. Match rows show their explanation directly beside a clear Compare action, with a side-by-side comparison pictogram in place of the exchange arrows.
+
+- Language choices open in a framed menu with keyboard navigation and return focus to their button. Saved views uses the full quick-access row with a visible open state and compact search focus.
+- Model and collection names open a compact editor beside the title with Save and Cancel. Renaming keeps Add tags, Favorite and the page controls visible; full Model details remain a separate action.
+- Similar models opens on visual matches with direct review tabs, separate analysis settings/history, readable pair previews and clear confirmation actions. Comparison links retain review filters, and empty states describe the selected review state accurately.
+- The Model Similar tab keeps every review state visible without a horizontal scrollbar, with consistently sized action buttons aligned below the states in narrow panels.
+- Library filter loading stays aligned with the filter controls without adding an empty spinner row.
+- Wiki links open the PrintStash documentation site on desktop and mobile.
+
+- Desktop Library filters open beside the results with active criteria and expanded dates visible, while collection browsing keeps quick access to Favorites, Saved views, Printers and Trash.
+- Library tools opens beside its button and preserves Similar models, New collection and selection. My workspace keeps Builds and Statistics separate and avoids duplicating the Library printer shortcut.
 - Keep the rename pen vertically aligned with Model and collection titles, including wrapped names.
 - Empty collections offer an upload into the current folder; read-only members see permission guidance, and active filters offer filter recovery.
 - Multipart member cards keep Model names readable when file badges wrap on desktop.
@@ -41,6 +52,10 @@
 - Completed uploads identify whether they created a Model or saved to an existing
   one, with a visible completion notice and Open Model action. The result link
   remains available in Notifications after reloading.
+
+### Performance
+
+- Pull request CI runs the full frontend tests in parallel shards and splits the longest backend partitions, preserving the required checks and separate Deep CI coverage.
 
 ## 0.15.0
 

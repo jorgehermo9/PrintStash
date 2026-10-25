@@ -25,6 +25,108 @@ import { aModel } from "../../src/test-support/factories";
 useMockApi();
 
 test.describe("model detail route", () => {
+  test("anchors the title editor without shifting header actions at 1080p", async ({ page }) => {
+    await page.setViewportSize({ width: 1920, height: 1080 });
+    await page.goto("/models/1");
+    const title = page.getByRole("heading", { name: "skadis_kitchen-roll_screw", exact: true });
+    const tags = page.getByRole("button", { name: "Edit tags for skadis_kitchen-roll_screw" });
+    const favorite = page.getByRole("button", { name: "Favorite", exact: true });
+    const actions = page.getByRole("button", { name: "Model actions", exact: true });
+    await expect(tags).toBeVisible();
+    await page.evaluate(() => document.fonts.ready);
+    const header = title.locator("xpath=ancestor::header");
+    const originalHeader = await header.boundingBox();
+    const originalActions = await Promise.all(
+      [tags, favorite, actions].map((item) => item.boundingBox()),
+    );
+
+    await page.getByRole("button", { name: "Rename skadis_kitchen-roll_screw" }).click();
+    const editor = page.getByRole("dialog", {
+      name: "Rename skadis_kitchen-roll_screw",
+      exact: true,
+    });
+    await expect(editor.getByRole("textbox", { name: "Model name", exact: true })).toBeFocused();
+    await expect(title).toBeVisible();
+    await expect(editor).not.toHaveAttribute("aria-modal", "true");
+    await expect(page.getByPlaceholder("Optional description")).toHaveCount(0);
+    const titleBox = await title.boundingBox();
+    const editorBox = await editor.boundingBox();
+    expect(titleBox).not.toBeNull();
+    expect(editorBox).not.toBeNull();
+    expect(editorBox!.y).toBeGreaterThanOrEqual(titleBox!.y + titleBox!.height);
+    expect(editorBox!.y - titleBox!.y - titleBox!.height).toBeLessThanOrEqual(32);
+    expect(Math.abs(editorBox!.x - titleBox!.x)).toBeLessThanOrEqual(1);
+    expect(editorBox!.width).toBeLessThan(480);
+    expect(editorBox!.height).toBeLessThan(200);
+    expect(await header.boundingBox()).toEqual(originalHeader);
+    for (const [index, action] of [tags, favorite, actions].entries()) {
+      await expect(action).toBeVisible();
+      await expect(action).toBeEnabled();
+      expect(await action.boundingBox()).toEqual(originalActions[index]);
+    }
+
+    // An ordinary header action remains usable while the title editor is open.
+    await actions.click();
+    await expect(editor).toHaveCount(0);
+    await expect(page.getByRole("menuitem", { name: /Edit details/ })).toBeVisible();
+  });
+
+  test("keeps missing-name feedback inside the compact title editor", async ({ page }) => {
+    await page.setViewportSize({ width: 1920, height: 1080 });
+    await page.goto("/models/1");
+    const title = page.getByRole("heading", { name: "skadis_kitchen-roll_screw", exact: true });
+    await page.evaluate(() => document.fonts.ready);
+    const originalHeader = await title.locator("xpath=ancestor::header").boundingBox();
+    await title.dblclick();
+    const editor = page.getByRole("dialog", {
+      name: "Rename skadis_kitchen-roll_screw",
+      exact: true,
+    });
+    await editor.getByRole("textbox", { name: "Model name", exact: true }).fill("");
+    await expect(editor.getByRole("alert")).toContainText("Model name is required.");
+    await expect(editor.getByRole("button", { name: "Save", exact: true })).toBeDisabled();
+    await expect(editor.getByRole("button", { name: "Cancel", exact: true })).toBeEnabled();
+    expect(await title.locator("xpath=ancestor::header").boundingBox()).toEqual(originalHeader);
+  });
+
+  for (const width of [320, 390]) {
+    test(`keeps the compact title editor inside a ${width}px viewport`, async ({ page }) => {
+      await page.setViewportSize({ width, height: 844 });
+      await page.goto("/models/1");
+      const rename = page.getByRole("button", { name: "Rename skadis_kitchen-roll_screw" });
+      await rename.click();
+      const editor = page.getByRole("dialog", {
+        name: "Rename skadis_kitchen-roll_screw",
+        exact: true,
+      });
+      const name = editor.getByRole("textbox", { name: "Model name", exact: true });
+      await name.fill("A long model title that still needs reachable editing controls");
+      await page.evaluate(() => document.fonts.ready);
+      for (const control of [
+        editor,
+        name,
+        editor.getByRole("button", { name: "Cancel", exact: true }),
+        editor.getByRole("button", { name: "Save", exact: true }),
+      ]) {
+        await expect(control).toBeInViewport();
+        const bounds = await control.boundingBox();
+        expect(bounds).not.toBeNull();
+        expect(bounds!.x).toBeGreaterThanOrEqual(0);
+        expect(bounds!.x + bounds!.width).toBeLessThanOrEqual(width);
+      }
+      await expect(page.getByRole("button", { name: "Favorite", exact: true })).toBeVisible();
+      expect(
+        await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth),
+      ).toBe(true);
+      await name.press("Escape");
+      await expect(editor).toHaveCount(0);
+      await expect(rename).toBeFocused();
+      await expect(
+        page.getByRole("heading", { name: "skadis_kitchen-roll_screw", exact: true }),
+      ).toBeVisible();
+    });
+  }
+
   for (const width of [320, 1280]) {
     test(`wraps the full nested collection path in Overview at ${width}px`, async ({ page }) => {
       const collectionLabel = "PrintStash/Organization/Gridfinity/" + "NestedCollection".repeat(20);

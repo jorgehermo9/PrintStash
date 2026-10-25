@@ -133,14 +133,16 @@ class TestPythonRuntime:
             "backend",
             "printer-core",
             "frontend",
+            "frontend-tests",
             "browser-smoke",
             "browser-extension",
             "gate",
         }
-        assert len(jobs["backend"]["strategy"]["matrix"]["include"]) == 12
-        assert (
-            len(jobs) - 1 + len(jobs["backend"]["strategy"]["matrix"]["include"]) == 17
-        )
+        backend_partitions = jobs["backend"]["strategy"]["matrix"]["include"]
+        frontend_shards = jobs["frontend-tests"]["strategy"]["matrix"]["shard"]
+        assert len(backend_partitions) == 15
+        assert frontend_shards == [1, 2]
+        assert len(jobs) - 2 + len(backend_partitions) + len(frontend_shards) == 22
 
     @pytest.mark.parametrize(
         "dockerfile",

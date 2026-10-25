@@ -39,7 +39,7 @@ const mainItems: NavItem[] = [
   { href: "/printers", labelKey: "nav.printers", icon: Printer, adminOnly: true },
   { href: "/profiles", labelKey: "nav.profiles", icon: SlidersHorizontal },
   {
-    href: "https://xiao-villamor.github.io/PrintStash/",
+    href: "https://www.printstash.org/docs/",
     labelKey: "nav.wiki",
     icon: BookOpen,
     external: true,

@@ -14,6 +14,7 @@ import {
   createCollectionViaVault,
   gcodeFor,
   modelCard,
+  libraryTool,
   openLibraryTools,
   uploadModel,
 } from "./util";
@@ -44,6 +45,7 @@ test.describe("collections", () => {
   });
 
   test("quick-renames a populated nested collection from its heading", async ({ page }) => {
+    await page.setViewportSize({ width: 1920, height: 1080 });
     const stamp = Date.now();
     const parent = `e2e-rename-parent-${stamp}`;
     const name = `e2e-rename-child-${stamp}`;
@@ -58,11 +60,26 @@ test.describe("collections", () => {
     const sameModel = new RegExp(`^${modelPath}(?:\\?|$)`);
 
     // ── Double-click the heading to rename the selected collection ──
-    await page.getByRole("heading", { name, exact: true }).dblclick();
+    const heading = page.getByRole("heading", { name, exact: true });
+    await page.evaluate(() => document.fonts.ready);
+    const headingBox = await heading.boundingBox();
+    await heading.dblclick();
     const dialog = page.getByRole("dialog", { name: `Rename ${name}`, exact: true });
     const input = dialog.getByRole("textbox", { name: "Collection name", exact: true });
     await expect(input).toBeFocused();
     await expect(input).toHaveValue(name);
+    await expect(dialog).not.toHaveAttribute("aria-modal", "true");
+    await expect(page.locator("aside").getByRole("button", { name, exact: true })).toBeVisible();
+    await expect(modelCard(page, model)).toBeVisible();
+    expect(await heading.boundingBox()).toEqual(headingBox);
+    const editorBox = await dialog.boundingBox();
+    expect(headingBox).not.toBeNull();
+    expect(editorBox).not.toBeNull();
+    expect(editorBox!.y).toBeGreaterThanOrEqual(headingBox!.y + headingBox!.height);
+    expect(editorBox!.y - headingBox!.y - headingBox!.height).toBeLessThanOrEqual(32);
+    expect(Math.abs(editorBox!.x - headingBox!.x)).toBeLessThanOrEqual(1);
+    expect(editorBox!.width).toBeLessThan(480);
+    expect(editorBox!.height).toBeLessThan(200);
     await input.fill(renamed);
     await input.press("Enter");
     await expect(dialog).toHaveCount(0);
@@ -170,7 +187,7 @@ test.describe("collections", () => {
     // ── Bulk rename resolves persisted Recent entries through the same identity ──
     await page.goto("/");
     await openLibraryTools(page);
-    await page.getByRole("button", { name: "Select", exact: true }).click();
+    await libraryTool(page, "Select").click();
     await page.getByRole("checkbox", { name: `Select folder ${headingName}`, exact: true }).check();
     await page.getByRole("button", { name: "Rename", exact: true }).click();
     const rename = page.getByRole("dialog");

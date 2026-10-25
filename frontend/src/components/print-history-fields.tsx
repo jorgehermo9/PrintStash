@@ -9,16 +9,26 @@ export function PrintHistoryFields({
   value,
   onChange,
   compact = false,
+  layout = "default",
 }: {
   /** The filters panel's narrow column: one field per row, the panel's dense inputs. */
   compact?: boolean;
+  layout?: "default" | "inline";
   value: Pick<SavedViewFilters, (typeof historyKeys)[number]>;
   onChange: (key: (typeof historyKeys)[number], value: string) => void;
 }) {
   useUiLocale();
   const t = uiText;
   return (
-    <div className={compact ? "grid gap-2 py-1" : "grid gap-3 sm:grid-cols-2"}>
+    <div
+      className={
+        layout === "inline"
+          ? "grid grid-cols-2 gap-2 xl:grid-cols-4"
+          : compact
+            ? "grid gap-2 py-1"
+            : "grid gap-3 sm:grid-cols-2"
+      }
+    >
       {historyKeys.map((key) => (
         <label key={key} className="min-w-0 space-y-1 text-xs text-muted-foreground">
           {t(`aiSearch.filter.${key}`)}
@@ -31,7 +41,7 @@ export function PrintHistoryFields({
             placeholder={
               key.includes("duration") ? t("aiSearch.seconds") : t("aiSearch.dateExample")
             }
-            className={compact ? FILTER_INPUT : undefined}
+            className={compact || layout === "inline" ? FILTER_INPUT : undefined}
             value={value[key] ?? ""}
             onChange={(event) => onChange(key, event.target.value)}
           />

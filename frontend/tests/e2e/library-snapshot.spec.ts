@@ -278,7 +278,7 @@ test.describe("Library snapshots", () => {
     await expectSnapshot(page, "C");
     await scrollToEnd(page);
     await late.started.promise;
-    await page.getByRole("button", { name: /tester/ }).click();
+    await page.getByRole("button", { name: "My workspace" }).click();
     await page.getByRole("menuitem", { name: "Log out", exact: true }).click();
     await logout.started.promise;
     await expectPrivateRetired(page);

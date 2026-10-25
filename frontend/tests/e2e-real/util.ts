@@ -100,6 +100,13 @@ export async function openLibraryTools(page: Page): Promise<void> {
   }
 }
 
+/** The same command is a desktop menu item or a mobile disclosure button. */
+export function libraryTool(page: Page, name: "New collection" | "Select") {
+  return page
+    .getByRole("button", { name, exact: true })
+    .or(page.getByRole(name === "Select" ? "menuitemcheckbox" : "menuitem", { name, exact: true }));
+}
+
 // The backend dedupes files by content hash, so the bytes must be unique per
 // model — embed the name so each upload creates a distinct model.
 export function gcodeFor(name: string): string {
@@ -182,7 +189,7 @@ export async function createCollectionViaVault(
 ): Promise<void> {
   await page.goto(parent ? `/?c=${encodeURIComponent(parent)}` : "/");
   await openLibraryTools(page);
-  await page.getByRole("button", { name: "New collection" }).click();
+  await libraryTool(page, "New collection").click();
   const input = page.getByPlaceholder(parent ? /New subcollection in/ : "Collection name...");
   await input.fill(name);
   await input.press("Enter");

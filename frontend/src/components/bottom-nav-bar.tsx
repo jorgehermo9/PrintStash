@@ -53,7 +53,7 @@ const NAV_ITEMS: NavItem[] = [
   { href: "/statistics", labelKey: "nav.stats", icon: BarChart3, adminOnly: true },
   { href: "/settings", labelKey: "nav.settings", icon: Settings },
   {
-    href: "https://xiao-villamor.github.io/PrintStash/",
+    href: "https://www.printstash.org/docs/",
     labelKey: "nav.wiki",
     icon: BookOpen,
     external: true,

@@ -45,6 +45,25 @@ function handlerSpies() {
 }
 
 describe("SavedViewSelector", () => {
+  it("names its dialog independently of the active view", async () => {
+    const user = userEvent.setup();
+    render(<SavedViewSelector views={[view(1, "Workshop")]} activeId={1} {...handlerSpies()} />);
+
+    await user.click(screen.getByRole("button", { name: /Workshop/ }));
+
+    expect(screen.getByRole("dialog", { name: "Saved views" })).toBeVisible();
+  });
+
+  it("returns focus from the portaled panel after Escape", async () => {
+    const user = userEvent.setup();
+    render(<SavedViewSelector views={[]} activeId={null} {...handlerSpies()} />);
+    const trigger = screen.getByRole("button", { name: "Saved views" });
+    await user.click(trigger);
+    await user.keyboard("{Escape}");
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    expect(trigger).toHaveFocus();
+  });
+
   it("searches a long saved-view list and applies the chosen view", async () => {
     const user = userEvent.setup();
     const handlers = handlerSpies();

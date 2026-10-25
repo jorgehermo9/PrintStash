@@ -9,8 +9,19 @@ gate** only: it fails if any of those jobs fails or is skipped. Do not add path
 filters to this required workflow.
 
 Migration upgrade tests run in three alphabetic shards so a slow runner does
-not cancel the entire suite at the 15-minute per-job limit. The repository
-test suite checks that every backend test file belongs to exactly one shard.
+not cancel the entire suite at the 15-minute per-job limit. The largest domain
+group runs as three partitions (ingestion/derivatives, library/media, and
+administration/backups/identity/inference), and E2E tests run in two alphabetic
+partitions. Each reports its twenty slowest cases to guide future balancing.
+The repository test suite checks that every backend test file belongs to
+exactly one shard; all fifteen partitions use the same PR marker exclusions.
+
+Frontend formatting, lint, production build (including type checking), and both
+workspace-package test suites run separately from two Vitest app-test shards.
+The shards cover the complete app and repository suite once, without changed-file
+selection. None waits for the other jobs, and `PR gate` requires all of them.
+This removes the serial app-test run from the build job without moving validation
+to Deep CI. Coverage collection and its floors remain unchanged in Deep CI.
 
 `Deep CI` runs nightly or by manual dispatch. It checks branch coverage and
 area/module floors, the `scale` lane (library reads timed at 25,000
@@ -42,9 +53,11 @@ runs the complete resource set unless `PRINTSTASH_TEST_RESOURCE_EXPRESSION`
 narrows it. Resource markers are excluded from every ordinary partition; each
 test executes once across the matrix. Repository tests enforce
 that every ordinary test file belongs to exactly one partition. The twelve
-ordinary partitions reuse the required CI file sets: unit, contract, E2E, two
-API groups, three migration groups, platform, two domain groups and repository
-contracts. Deep CI includes their slow tests and measures them under coverage.
+ordinary coverage partitions cover the same test tree as required CI: unit,
+contract, E2E, two API groups, three migration groups, platform, two domain groups
+and repository contracts. Required CI subdivides its slowest ordinary groups;
+Deep CI retains its independent coverage partitions, includes their slow tests,
+and measures them under coverage.
 
 Every shard measures branches and uploads uniquely named raw coverage data,
 using relative source paths so results from different checkout locations refer

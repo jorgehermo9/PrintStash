@@ -146,6 +146,51 @@ async function openFolder(user: ReturnType<typeof userEvent.setup>, name: string
 }
 
 describe("FilterSidebar", () => {
+  it("keeps supplied quick actions available during outliner loading", () => {
+    renderSidebar({ loading: true, quickAccess: <button type="button">Favorites</button> });
+    expect(
+      within(screen.getByRole("navigation", { name: "Quick access" })).getByRole("button", {
+        name: "Favorites",
+      }),
+    ).toBeVisible();
+  });
+
+  it("links permitted printer access from the fixed footer", () => {
+    renderSidebar({ canViewPrinters: true });
+    expect(
+      within(screen.getByRole("navigation", { name: "Quick access" })).getByRole("link", {
+        name: "Printers",
+      }),
+    ).toHaveAttribute("href", "/printers");
+  });
+
+  it("omits printer quick access without printer permission", () => {
+    renderSidebar({ canViewPrinters: false });
+    expect(
+      within(screen.getByRole("navigation", { name: "Quick access" })).queryByRole("link", {
+        name: "Printers",
+      }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("links permitted trash access to the existing settings section", () => {
+    renderSidebar({ canManageLibrary: true });
+    expect(
+      within(screen.getByRole("navigation", { name: "Quick access" })).getByRole("link", {
+        name: "Trash",
+      }),
+    ).toHaveAttribute("href", "/settings?section=trash");
+  });
+
+  it("omits trash quick access without management permission", () => {
+    renderSidebar({ canManageLibrary: false });
+    expect(
+      within(screen.getByRole("navigation", { name: "Quick access" })).queryByRole("link", {
+        name: "Trash",
+      }),
+    ).not.toBeInTheDocument();
+  });
+
   it("resolves a restored sidebar selection by identity", async () => {
     const app = renderSidebar({
       selectedCollection: "former/brackets",

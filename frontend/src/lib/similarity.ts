@@ -1,6 +1,13 @@
 import { uiText } from "@/lib/locale";
 import type { MessageKey } from "@/lib/locale";
-import type { EvidenceClass, SimilarityCandidate, SimilarityRun } from "@/types/similarity";
+import {
+  EVIDENCE_CLASSES,
+  type EvidenceClass,
+  type ReviewState,
+  type SimilarityCandidate,
+  type SimilarityFilters,
+  type SimilarityRun,
+} from "@/types/similarity";
 
 const LABELS = {
   identical_geometry: "similarity.identical",
@@ -36,4 +43,45 @@ export function evidenceDescription(candidate: SimilarityCandidate): string {
 }
 export function isSimilarityRunActive(run: SimilarityRun) {
   return run.state === "queued" || run.state === "running" || run.state === "cancelling";
+}
+
+const REVIEW_STATES: ReviewState[] = ["open", "confirmed", "later", "rejected"];
+
+/** Read only supported review filters; malformed URLs never reach the API. */
+export function readSimilarityFilters(params: URLSearchParams): SimilarityFilters {
+  const confidence = Number(params.get("confidence"));
+  const collection = Number(params.get("collection"));
+  const freshness = params.get("freshness");
+  const format = params.get("format");
+  const source = params.get("source");
+  return {
+    review_state: REVIEW_STATES.find((state) => state === params.get("review")) ?? "open",
+    freshness: freshness === "any" ? undefined : freshness === "stale" ? "stale" : "current",
+    evidence_class: EVIDENCE_CLASSES.find((value) => value === params.get("match")),
+    minimum_confidence:
+      Number.isInteger(confidence) && confidence >= 50 && confidence <= 100
+        ? confidence / 100
+        : undefined,
+    collection_id: Number.isSafeInteger(collection) && collection > 0 ? collection : undefined,
+    file_type:
+      format !== null && ["stl", "obj", "3mf", "step"].includes(format) ? format : undefined,
+    source: source === "vault" || source === "external" ? source : undefined,
+    known_good: params.get("known_good") === "1" ? true : undefined,
+  };
+}
+
+export function similarityFiltersHref(filters: SimilarityFilters): string {
+  const params = new URLSearchParams();
+  if (filters.review_state && filters.review_state !== "open")
+    params.set("review", filters.review_state);
+  if (filters.evidence_class) params.set("match", filters.evidence_class);
+  if (filters.freshness !== "current") params.set("freshness", filters.freshness ?? "any");
+  if (filters.minimum_confidence !== undefined)
+    params.set("confidence", String(Math.round(filters.minimum_confidence * 100)));
+  if (filters.collection_id !== undefined) params.set("collection", String(filters.collection_id));
+  if (filters.file_type) params.set("format", filters.file_type);
+  if (filters.source) params.set("source", filters.source);
+  if (filters.known_good) params.set("known_good", "1");
+  const query = params.toString();
+  return query ? `/library/similar?${query}` : "/library/similar";
 }

@@ -45,6 +45,31 @@ function MenuItems() {
   );
 }
 
+function PermissionLimitedItems() {
+  return (
+    <>
+      <button type="button" role="menuitem" disabled>
+        Rename
+      </button>
+      <button type="button" role="menuitem">
+        Similar models
+      </button>
+      <button type="button" role="menuitem" disabled>
+        New collection
+      </button>
+      <button type="button" role="menuitem" aria-disabled="true">
+        Pending imports
+      </button>
+      <button type="button" role="menuitemcheckbox" aria-checked="false">
+        Select
+      </button>
+      <button type="button" role="menuitem" aria-disabled="true">
+        Delete
+      </button>
+    </>
+  );
+}
+
 /** Open the panel and let the entrance frames run, as a browser would. */
 function openMenu(ui: React.ReactElement) {
   const result = render(ui);
@@ -96,6 +121,24 @@ describe("DropdownMenu", () => {
 
       expect(screen.getByRole("listbox")).toContainElement(
         screen.getByRole("option", { name: "Only" }),
+      );
+    });
+
+    it("exposes the provided accessible dialog name", () => {
+      openMenu(
+        <DropdownMenu
+          open
+          onOpenChange={vi.fn<(open: boolean) => void>()}
+          trigger={TRIGGER}
+          role="dialog"
+          aria-label="Tags"
+        >
+          <input aria-label="Search tags" />
+        </DropdownMenu>,
+      );
+
+      expect(screen.getByRole("dialog", { name: "Tags" })).toContainElement(
+        screen.getByRole("textbox", { name: "Search tags" }),
       );
     });
 
@@ -255,6 +298,99 @@ describe("DropdownMenu", () => {
       expect(screen.getByRole("menuitem", { name: "Rename" })).toHaveFocus();
     });
 
+    it("focuses the first enabled item when disabled actions precede it", () => {
+      openMenu(
+        <DropdownMenu open={true} onOpenChange={vi.fn<(open: boolean) => void>()} trigger={TRIGGER}>
+          <PermissionLimitedItems />
+        </DropdownMenu>,
+      );
+
+      expect(screen.getByRole("menuitem", { name: "Similar models" })).toHaveFocus();
+    });
+
+    it.each([
+      {
+        label: "ArrowDown",
+        key: "ArrowDown",
+        from: "Similar models",
+        fromRole: "menuitem",
+        to: "Select",
+        toRole: "menuitemcheckbox",
+      },
+      {
+        label: "ArrowUp",
+        key: "ArrowUp",
+        from: "Select",
+        fromRole: "menuitemcheckbox",
+        to: "Similar models",
+        toRole: "menuitem",
+      },
+      {
+        label: "Home",
+        key: "Home",
+        from: "Select",
+        fromRole: "menuitemcheckbox",
+        to: "Similar models",
+        toRole: "menuitem",
+      },
+      {
+        label: "End",
+        key: "End",
+        from: "Similar models",
+        fromRole: "menuitem",
+        to: "Select",
+        toRole: "menuitemcheckbox",
+      },
+      {
+        label: "ArrowDown wrapping",
+        key: "ArrowDown",
+        from: "Select",
+        fromRole: "menuitemcheckbox",
+        to: "Similar models",
+        toRole: "menuitem",
+      },
+      {
+        label: "ArrowUp wrapping",
+        key: "ArrowUp",
+        from: "Similar models",
+        fromRole: "menuitem",
+        to: "Select",
+        toRole: "menuitemcheckbox",
+      },
+    ])("skips disabled actions with $label", ({ key, from, fromRole, to, toRole }) => {
+      openMenu(
+        <DropdownMenu open={true} onOpenChange={vi.fn<(open: boolean) => void>()} trigger={TRIGGER}>
+          <PermissionLimitedItems />
+        </DropdownMenu>,
+      );
+      screen.getByRole(fromRole, { name: from }).focus();
+
+      fireEvent.keyDown(screen.getByRole("menu"), { key });
+
+      expect(screen.getByRole(toRole, { name: to })).toHaveFocus();
+    });
+
+    it("leaves focus on the trigger when every action is disabled", () => {
+      openMenu(
+        <DropdownMenu open={true} onOpenChange={vi.fn<(open: boolean) => void>()} trigger={TRIGGER}>
+          <button type="button" role="menuitem" disabled>
+            Rename
+          </button>
+          <button type="button" role="menuitem" aria-disabled="true">
+            Delete
+          </button>
+        </DropdownMenu>,
+      );
+      screen.getByRole("button", { name: "Actions" }).focus();
+
+      const notCancelled = fireEvent.keyDown(screen.getByRole("button", { name: "Actions" }), {
+        key: "ArrowDown",
+      });
+
+      expect(screen.getByRole("button", { name: "Actions" })).toHaveFocus();
+      expect(notCancelled).toBe(true);
+    });
+
     it("leaves focus alone for a dialog panel", () => {
       openMenu(
         <DropdownMenu
@@ -402,19 +538,19 @@ describe("DropdownMenu", () => {
       expect(onOpenChange).not.toHaveBeenCalled();
     });
   });
-  describe("a checkbox item", () => {
+  describe.each(["menuitemcheckbox", "menuitemradio"] as const)("a %s item", (role) => {
     it("takes focus when the menu opens", () => {
       // A menu whose only items are toggles would otherwise open with focus
       // nowhere, and a keyboard user has nothing to arrow from.
       openMenu(
         <DropdownMenu open={true} onOpenChange={vi.fn<(open: boolean) => void>()} trigger={TRIGGER}>
-          <button type="button" role="menuitemcheckbox" aria-checked="false">
+          <button type="button" role={role} aria-checked="false">
             Favorites
           </button>
         </DropdownMenu>,
       );
 
-      expect(screen.getByRole("menuitemcheckbox", { name: "Favorites" })).toHaveFocus();
+      expect(screen.getByRole(role, { name: "Favorites" })).toHaveFocus();
     });
 
     it("joins the arrow-key rotation", () => {
@@ -423,7 +559,7 @@ describe("DropdownMenu", () => {
           <button type="button" role="menuitem">
             Rename
           </button>
-          <button type="button" role="menuitemcheckbox" aria-checked="false">
+          <button type="button" role={role} aria-checked="false">
             Favorites
           </button>
         </DropdownMenu>,
@@ -431,7 +567,7 @@ describe("DropdownMenu", () => {
 
       fireEvent.keyDown(screen.getByRole("menu"), { key: "ArrowDown" });
 
-      expect(screen.getByRole("menuitemcheckbox", { name: "Favorites" })).toHaveFocus();
+      expect(screen.getByRole(role, { name: "Favorites" })).toHaveFocus();
     });
   });
 
@@ -545,6 +681,29 @@ describe("DropdownMenu portals", () => {
       </>
     );
   }
+
+  it.each([
+    { label: "display none", style: "display: none" },
+    { label: "visibility hidden", style: "visibility: hidden" },
+  ])("dismisses a portaled picker when its ancestor becomes $label on resize", ({ style }) => {
+    const { container } = openMenu(<Picker />);
+    container.setAttribute("style", style);
+
+    fireEvent(window, new Event("resize"));
+    act(() => vi.advanceTimersByTime(DURATION.press));
+
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+  });
+
+  it("keeps a zero-sized visible anchor open on resize", () => {
+    openMenu(<Picker />);
+
+    fireEvent(window, new Event("resize"));
+    act(() => vi.advanceTimersByTime(DURATION.press));
+
+    expect(screen.getByRole("dialog")).toBeVisible();
+    expect(screen.getByRole("button", { name: "Choose" })).toHaveAttribute("aria-expanded", "true");
+  });
 
   it("keeps a portaled choice open during pointer selection", () => {
     openMenu(<Picker />);

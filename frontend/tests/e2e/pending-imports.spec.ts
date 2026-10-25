@@ -12,7 +12,7 @@ test.describe("pending imports", () => {
   test("desktop navigation reaches Pending Imports on nested routes", async ({ page }) => {
     await page.setViewportSize({ width: 1280, height: 800 });
     await page.goto("/");
-    await page.getByRole("button", { name: "tester" }).click();
+    await page.getByRole("button", { name: "My workspace" }).click();
 
     const pending = page.getByRole("menuitem", { name: "Pending" });
     await expect(pending).toHaveAttribute("href", "/inbox");
@@ -20,7 +20,7 @@ test.describe("pending imports", () => {
     await expect(page).toHaveURL(/\/inbox$/);
     await expect(page.getByRole("heading", { name: "Pending Imports" })).toBeVisible();
 
-    await page.getByRole("button", { name: "tester" }).click();
+    await page.getByRole("button", { name: "My workspace" }).click();
     await expect(page.getByRole("menuitem", { name: "Pending" })).toHaveAttribute(
       "aria-current",
       "page",
@@ -28,7 +28,7 @@ test.describe("pending imports", () => {
 
     await page.goto("/inbox/41");
     await expect(page).toHaveURL(/\/inbox\/41$/);
-    await page.getByRole("button", { name: "tester" }).click();
+    await page.getByRole("button", { name: "My workspace" }).click();
     await expect(page.getByRole("menuitem", { name: "Pending" })).toHaveAttribute(
       "aria-current",
       "page",

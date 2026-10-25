@@ -1,15 +1,14 @@
 import { useEffect, useState } from "react";
 import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
-import { ScanSearch } from "lucide-react";
+import { History, ScanSearch, SlidersHorizontal } from "lucide-react";
 
-import { Badge } from "@/components/ui/badge";
 import { CollectionPicker } from "@/components/collection-picker";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Checkbox } from "@/components/ui/checkbox";
 import { EmptyState } from "@/components/ui/empty-state";
 import { Input } from "@/components/ui/input";
-import { uiText } from "@/lib/locale";
+import { currentLocale, uiText } from "@/lib/locale";
 import {
   similarityHistoryOptions,
   similarityModelChoicesOptions,
@@ -253,7 +252,15 @@ type ScopeChoice =
   | { kind: "chooseCollection" }
   | { kind: "source"; id: number; name: string }
   | { kind: "collection"; collection: CollectionNodeRead };
-export function SimilaritySettingsPanel() {
+export type SimilaritySettingsView = "scan" | "settings" | "history";
+
+export function SimilaritySettingsPanel({
+  view = "scan",
+  onOpenSettings,
+}: {
+  view?: SimilaritySettingsView;
+  onOpenSettings?: () => void;
+}) {
   const { t } = useI18n();
   const status = useQuery(similarityStatusOptions());
   const history = useInfiniteQuery(similarityHistoryOptions());
@@ -318,19 +325,216 @@ export function SimilaritySettingsPanel() {
     );
   const { start, cancel } = useSimilarityCommands();
   return (
-    <Card className="overflow-hidden">
-      <div className="flex items-start gap-3 border-b px-4 py-4 sm:px-5">
-        <ScanSearch className="h-8 w-8 shrink-0 rounded-md bg-muted p-1.5" aria-hidden />
-        <div>
-          <h3 className="text-sm font-semibold">{t("similarity.runTitle")}</h3>
-          <p className="mt-1 text-xs text-muted-foreground">{t("similarity.runHelp")}</p>
+    <>
+      <Card hidden={view !== "scan"} className="overflow-hidden">
+        <div className="flex items-start gap-3 border-b px-4 py-3 sm:px-5">
+          <ScanSearch className="h-8 w-8 shrink-0 rounded-md bg-muted p-1.5" aria-hidden />
+          <div>
+            <h2 className="text-sm font-semibold">{t("similarity.runTitle")}</h2>
+            <p className="mt-1 text-xs text-muted-foreground">{t("similarity.runHelp")}</p>
+          </div>
         </div>
-      </div>
-      <details className="border-b">
-        <summary className="cursor-pointer px-4 py-3 text-sm font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
-          {t("similarity.analysisOptions")}
-        </summary>
-        {status.isError && (
+
+        {view === "scan" && status.isError && (
+          <EmptyState
+            title={t("similarity.loadError")}
+            action={<Button onClick={() => void status.refetch()}>{t("similarity.retry")}</Button>}
+          />
+        )}
+        {status.isPending && (
+          <p role="status" className="px-3 pt-3 text-xs text-muted-foreground">
+            {t("similarity.loading")}
+          </p>
+        )}
+        {status.data && !status.data.enabled && (
+          <div className="flex flex-wrap items-center gap-2 border-b bg-muted/30 px-3 py-2 text-xs">
+            <p className="min-w-0 flex-1 text-muted-foreground">{t("similarity.disabledHelp")}</p>
+            {onOpenSettings && (
+              <Button type="button" size="sm" variant="outline" onClick={onOpenSettings}>
+                {t("similarity.openSettings")}
+              </Button>
+            )}
+          </div>
+        )}
+        <div className="flex flex-wrap items-end gap-3 bg-muted/30 p-3">
+          <div className="min-w-0 basis-full space-y-1 text-xs sm:basis-72">
+            {t("similarity.scope")}
+            <select
+              className="block w-full rounded-md border border-input bg-background p-2 text-sm"
+              value={scopeValue}
+              onChange={(event) => {
+                const value = event.target.value;
+                if (value === "library" || value === "models") setScope({ kind: value });
+                else if (value === "pick") setScope({ kind: "chooseCollection" });
+                else if (value.startsWith("source:")) {
+                  const source = availableSources.find(
+                    (item) => item.id === Number(value.slice(7)),
+                  );
+                  if (!source) throw new Error("A current source choice is required");
+                  setScope({ kind: "source", id: source.id, name: source.name });
+                } else {
+                  if (!scopeCollection || value !== String(scopeCollection.id))
+                    throw new Error("A captured collection choice is required");
+                  setScope({ kind: "collection", collection: scopeCollection });
+                }
+              }}
+              aria-label={t("similarity.scope")}
+            >
+              <option value="library">{t("similarity.library")}</option>
+              <option value="models">{t("similarity.modelSet")}</option>
+              {scope.kind === "source" &&
+                !availableSources.some((item) => item.id === scope.id) && (
+                  <option value={`source:${scope.id}`}>
+                    {t("similarity.sourceScope", { name: scope.name })}
+                  </option>
+                )}
+              {availableSources.map((source) => (
+                <option key={`source:${source.id}`} value={`source:${source.id}`}>
+                  {t("similarity.sourceScope", { name: source.name })}
+                </option>
+              ))}
+              <option value="pick">{uiText("Choose existing collection")}</option>
+              {scopeCollection && (
+                <option value={scopeCollection.id}>{scopeCollection.display_path}</option>
+              )}
+            </select>
+            {scope.kind === "chooseCollection" && (
+              <CollectionPicker
+                minRole="edit"
+                selectedPath={null}
+                emptyLabel={uiText("No editable collections.")}
+                onSelect={(collection) => {
+                  if (collection === null) throw new Error("A collection is required");
+                  setScopeCollection(collection);
+                  setScope({ kind: "collection", collection });
+                }}
+              />
+            )}
+          </div>
+          <Button
+            loading={start.isPending}
+            disabled={
+              status.isError ||
+              !status.data?.enabled ||
+              command === null ||
+              (scope.kind === "source" &&
+                !availableSources.some((source) => source.id === scope.id)) ||
+              (scope.kind === "models" && command.ids.length === 0) ||
+              !!activeRun
+            }
+            onClick={() => {
+              if (command === null) throw new Error("An analysis scope is required");
+              const session = getSessionVersion();
+              start.mutate(
+                { ...command, session },
+                {
+                  onSuccess: (run) => {
+                    if (session === getSessionVersion()) trackSimilarityRun(run);
+                  },
+                  onError: (error) => {
+                    if (session === getSessionVersion()) toast.error(error);
+                  },
+                },
+              );
+            }}
+          >
+            {t("similarity.start")}
+          </Button>
+          {activeRun && (
+            <p role="status" className="text-xs text-muted-foreground">
+              {t("similarity.activeScope")}
+            </p>
+          )}
+        </div>
+        {sources.isError && (
+          <div role="alert" className="p-3 text-sm text-destructive">
+            {t("similarity.loadError")}{" "}
+            <Button variant="ghost" size="sm" onClick={() => void sources.refetch()}>
+              {t("similarity.retry")}
+            </Button>
+          </div>
+        )}
+        {scope.kind === "models" && (
+          <div className="space-y-3 border-b p-4">
+            <label className="block space-y-1 text-sm">
+              {t("similarity.selectModels")}
+              <Input value={modelQuery} onChange={(event) => setModelQuery(event.target.value)} />
+            </label>
+            <p className="text-xs text-muted-foreground">
+              {t("similarity.selectedModels", { count: Object.keys(selectedModels).length })}
+            </p>
+            {modelChoices.isPending && (
+              <p role="status" className="text-xs text-muted-foreground">
+                {t("similarity.loading")}
+              </p>
+            )}
+            {modelChoices.isError && (
+              <p role="alert" className="text-xs text-destructive">
+                {t("similarity.loadError")}
+                <Button variant="ghost" size="sm" onClick={() => void modelChoices.refetch()}>
+                  {t("similarity.retry")}
+                </Button>
+              </p>
+            )}
+            {modelChoices.data?.length === 0 && (
+              <p className="text-xs text-muted-foreground">{t("similarity.noModelMatches")}</p>
+            )}
+            <ul className="grid gap-2 sm:grid-cols-2">
+              {modelChoices.data?.map((model) => (
+                <li key={model.id}>
+                  <label className="flex items-center gap-2 text-sm">
+                    <Checkbox
+                      ariaLabel={model.name}
+                      checked={model.id in selectedModels}
+                      disabled={
+                        !(model.id in selectedModels) && Object.keys(selectedModels).length >= 1000
+                      }
+                      onChange={(checked) =>
+                        setSelectedModels((current) => {
+                          const next = { ...current };
+                          if (checked) next[model.id] = model.name;
+                          else delete next[model.id];
+                          return next;
+                        })
+                      }
+                    />
+                    {model.name}
+                  </label>
+                </li>
+              ))}
+            </ul>
+            <div className="flex flex-wrap gap-2">
+              {Object.keys(selectedModels).length > 0 && (
+                <Button variant="ghost" size="sm" onClick={() => setSelectedModels({})}>
+                  {t("similarity.clearSelection")}
+                </Button>
+              )}
+              <Button
+                variant="outline"
+                size="sm"
+                disabled={modelOffset === 0}
+                onClick={() => setModelOffset(Math.max(0, modelOffset - 25))}
+              >
+                {t("similarity.previous")}
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                disabled={(modelChoices.data?.length ?? 0) < 25}
+                onClick={() => setModelOffset(modelOffset + 25)}
+              >
+                {t("Next")}
+              </Button>
+            </div>
+          </div>
+        )}
+      </Card>
+      <Card hidden={view !== "settings"} className="overflow-hidden">
+        <div className="flex items-center gap-3 border-b px-4 py-3 sm:px-5">
+          <SlidersHorizontal className="h-8 w-8 shrink-0 rounded-md bg-muted p-1.5" aria-hidden />
+          <h2 className="text-sm font-semibold">{t("similarity.settingsTab")}</h2>
+        </div>
+        {view === "settings" && status.isError && (
           <EmptyState
             title={t("similarity.loadError")}
             action={<Button onClick={() => void status.refetch()}>{t("similarity.retry")}</Button>}
@@ -346,196 +550,29 @@ export function SimilaritySettingsPanel() {
           )
         )}
         {status.data && (
-          <div className="flex flex-wrap gap-2 border-t px-4 py-3">
-            <Badge variant="outline">
+          <div className="space-y-1 border-t px-4 py-3">
+            <p className="text-xs text-muted-foreground">
               {t(
                 status.data.capabilities.step
                   ? "similarity.stepReady"
                   : "similarity.stepUnavailable",
               )}
-            </Badge>
-            <Badge variant="outline">
+            </p>
+            <p className="text-xs text-muted-foreground">
               {t(
                 status.data.capabilities.local_embeddings
                   ? "similarity.embeddingsReady"
                   : "similarity.embeddingsUnavailable",
               )}
-            </Badge>
+            </p>
           </div>
         )}
-      </details>
-      <div className="flex flex-wrap items-end gap-3 border-y bg-muted/30 p-3">
-        <div className="min-w-0 basis-full space-y-1 text-xs sm:basis-72">
-          {t("similarity.scope")}
-          <select
-            className="block w-full rounded-md border border-input bg-background p-2 text-sm"
-            value={scopeValue}
-            onChange={(event) => {
-              const value = event.target.value;
-              if (value === "library" || value === "models") setScope({ kind: value });
-              else if (value === "pick") setScope({ kind: "chooseCollection" });
-              else if (value.startsWith("source:")) {
-                const source = availableSources.find((item) => item.id === Number(value.slice(7)));
-                if (!source) throw new Error("A current source choice is required");
-                setScope({ kind: "source", id: source.id, name: source.name });
-              } else {
-                if (!scopeCollection || value !== String(scopeCollection.id))
-                  throw new Error("A captured collection choice is required");
-                setScope({ kind: "collection", collection: scopeCollection });
-              }
-            }}
-            aria-label={t("similarity.scope")}
-          >
-            <option value="library">{t("similarity.library")}</option>
-            <option value="models">{t("similarity.modelSet")}</option>
-            {scope.kind === "source" && !availableSources.some((item) => item.id === scope.id) && (
-              <option value={`source:${scope.id}`}>
-                {t("similarity.sourceScope", { name: scope.name })}
-              </option>
-            )}
-            {availableSources.map((source) => (
-              <option key={`source:${source.id}`} value={`source:${source.id}`}>
-                {t("similarity.sourceScope", { name: source.name })}
-              </option>
-            ))}
-            <option value="pick">{uiText("Choose existing collection")}</option>
-            {scopeCollection && (
-              <option value={scopeCollection.id}>{scopeCollection.display_path}</option>
-            )}
-          </select>
-          {scope.kind === "chooseCollection" && (
-            <CollectionPicker
-              minRole="edit"
-              selectedPath={null}
-              emptyLabel={uiText("No editable collections.")}
-              onSelect={(collection) => {
-                if (collection === null) throw new Error("A collection is required");
-                setScopeCollection(collection);
-                setScope({ kind: "collection", collection });
-              }}
-            />
-          )}
+      </Card>
+      <Card hidden={view !== "history"} className="overflow-hidden">
+        <div className="flex items-center gap-3 border-b px-4 py-3 sm:px-5">
+          <History className="h-8 w-8 shrink-0 rounded-md bg-muted p-1.5" aria-hidden />
+          <h2 className="text-sm font-semibold">{t("similarity.history")}</h2>
         </div>
-        <Button
-          loading={start.isPending}
-          disabled={
-            !status.data?.enabled ||
-            command === null ||
-            (scope.kind === "source" &&
-              !availableSources.some((source) => source.id === scope.id)) ||
-            (scope.kind === "models" && command.ids.length === 0) ||
-            !!activeRun
-          }
-          onClick={() => {
-            if (command === null) throw new Error("An analysis scope is required");
-            const session = getSessionVersion();
-            start.mutate(
-              { ...command, session },
-              {
-                onSuccess: (run) => {
-                  if (session === getSessionVersion()) trackSimilarityRun(run);
-                },
-                onError: (error) => {
-                  if (session === getSessionVersion()) toast.error(error);
-                },
-              },
-            );
-          }}
-        >
-          {t("similarity.start")}
-        </Button>
-        {activeRun && (
-          <p role="status" className="text-xs text-muted-foreground">
-            {t("similarity.activeScope")}
-          </p>
-        )}
-      </div>
-      {sources.isError && (
-        <div role="alert" className="p-3 text-sm text-destructive">
-          {t("similarity.loadError")}{" "}
-          <Button variant="ghost" size="sm" onClick={() => void sources.refetch()}>
-            {t("similarity.retry")}
-          </Button>
-        </div>
-      )}
-      {scope.kind === "models" && (
-        <div className="space-y-3 border-b p-4">
-          <label className="block space-y-1 text-sm">
-            {t("similarity.selectModels")}
-            <Input value={modelQuery} onChange={(event) => setModelQuery(event.target.value)} />
-          </label>
-          <p className="text-xs text-muted-foreground">
-            {t("similarity.selectedModels", { count: Object.keys(selectedModels).length })}
-          </p>
-          {modelChoices.isPending && (
-            <p role="status" className="text-xs text-muted-foreground">
-              {t("similarity.loading")}
-            </p>
-          )}
-          {modelChoices.isError && (
-            <p role="alert" className="text-xs text-destructive">
-              {t("similarity.loadError")}
-              <Button variant="ghost" size="sm" onClick={() => void modelChoices.refetch()}>
-                {t("similarity.retry")}
-              </Button>
-            </p>
-          )}
-          {modelChoices.data?.length === 0 && (
-            <p className="text-xs text-muted-foreground">{t("similarity.noModelMatches")}</p>
-          )}
-          <ul className="grid gap-2 sm:grid-cols-2">
-            {modelChoices.data?.map((model) => (
-              <li key={model.id}>
-                <label className="flex items-center gap-2 text-sm">
-                  <Checkbox
-                    ariaLabel={model.name}
-                    checked={model.id in selectedModels}
-                    disabled={
-                      !(model.id in selectedModels) && Object.keys(selectedModels).length >= 1000
-                    }
-                    onChange={(checked) =>
-                      setSelectedModels((current) => {
-                        const next = { ...current };
-                        if (checked) next[model.id] = model.name;
-                        else delete next[model.id];
-                        return next;
-                      })
-                    }
-                  />
-                  {model.name}
-                </label>
-              </li>
-            ))}
-          </ul>
-          <div className="flex flex-wrap gap-2">
-            {Object.keys(selectedModels).length > 0 && (
-              <Button variant="ghost" size="sm" onClick={() => setSelectedModels({})}>
-                {t("similarity.clearSelection")}
-              </Button>
-            )}
-            <Button
-              variant="outline"
-              size="sm"
-              disabled={modelOffset === 0}
-              onClick={() => setModelOffset(Math.max(0, modelOffset - 25))}
-            >
-              {t("similarity.previous")}
-            </Button>
-            <Button
-              variant="outline"
-              size="sm"
-              disabled={(modelChoices.data?.length ?? 0) < 25}
-              onClick={() => setModelOffset(modelOffset + 25)}
-            >
-              {t("Next")}
-            </Button>
-          </div>
-        </div>
-      )}
-      <details className="border-t">
-        <summary className="cursor-pointer px-4 py-3 text-sm font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
-          {t("similarity.history")}
-        </summary>
         {history.isError && (
           <p role="alert" className="px-4 pb-4 text-sm text-destructive">
             {t("similarity.loadError")}
@@ -548,6 +585,11 @@ export function SimilaritySettingsPanel() {
             >
               {t("similarity.retry")}
             </Button>
+          </p>
+        )}
+        {history.isPending && (
+          <p role="status" className="p-4 text-sm text-muted-foreground">
+            {t("similarity.loading")}
           </p>
         )}
         {history.data?.pages[0]?.items.length === 0 && (
@@ -563,6 +605,19 @@ export function SimilaritySettingsPanel() {
               >
                 <div className="min-w-0 space-y-1">
                   <p className="text-sm font-medium">{t(`similarity.run.${run.state}`)}</p>
+                  <p className="text-xs text-muted-foreground">
+                    {run.scope === "library"
+                      ? t("similarity.library")
+                      : run.scope === "models"
+                        ? t("similarity.runModels", { count: run.scope_ids.length })
+                        : run.scope === "collections"
+                          ? t("similarity.runCollections", { count: run.scope_ids.length })
+                          : t("similarity.runSources", { count: run.scope_ids.length })}
+                    {" · "}
+                    <time dateTime={run.created_at}>
+                      {new Date(run.created_at).toLocaleString(currentLocale())}
+                    </time>
+                  </p>
                   <p className="text-xs text-muted-foreground">
                     {t("similarity.progress", {
                       processed: run.counters.artifacts_processed ?? 0,
@@ -628,7 +683,7 @@ export function SimilaritySettingsPanel() {
             </Button>
           </div>
         )}
-      </details>
-    </Card>
+      </Card>
+    </>
   );
 }

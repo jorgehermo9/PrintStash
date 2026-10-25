@@ -23,9 +23,8 @@ test.describe("structured filters", () => {
     await settleLibraryRead(page, modelCard(page, gcode));
     await expect(modelCard(page, mesh)).toBeVisible();
     await openFilters(page);
-    const sidebar = page.locator("aside");
-    await sidebar.getByRole("button", { name: "File type", exact: true }).click();
-    await sidebar.getByText("G-code", { exact: true }).click();
+    const filters = page.getByRole("region", { name: "Filters", exact: true });
+    await filters.getByRole("checkbox", { name: "G-code", exact: true }).click();
     await expect(page).toHaveURL(/file_type=gcode/);
     await expect(modelCard(page, gcode)).toBeVisible();
     await expect(modelCard(page, mesh)).toHaveCount(0);
@@ -37,7 +36,7 @@ test.describe("structured filters", () => {
     await expect(modelCard(page, gcode)).toBeVisible();
     await expect(modelCard(page, mesh)).toHaveCount(0);
 
-    await sidebar.getByRole("button", { name: /Clear 1/ }).click();
+    await page.getByRole("button", { name: "Clear all", exact: true }).click();
     await expect(page).not.toHaveURL(/file_type=/);
     await expect(modelCard(page, gcode)).toBeVisible();
     await expect(modelCard(page, mesh)).toBeVisible();
