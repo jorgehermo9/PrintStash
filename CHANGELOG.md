@@ -4,6 +4,8 @@
 
 ### Fixed
 
+- Desktop Library filters open beside the results with active criteria and expanded dates visible, while collection browsing keeps quick access to Favorites, Saved views, Printers and Trash.
+- Library tools opens beside its button and preserves Similar models, New collection and selection. My workspace keeps Builds and Statistics separate and avoids duplicating the Library printer shortcut.
 - Keep the rename pen vertically aligned with Model and collection titles, including wrapped names.
 - Empty collections offer an upload into the current folder; read-only members see permission guidance, and active filters offer filter recovery.
 - Multipart member cards keep Model names readable when file badges wrap on desktop.
@@ -41,6 +43,10 @@
 - Completed uploads identify whether they created a Model or saved to an existing
   one, with a visible completion notice and Open Model action. The result link
   remains available in Notifications after reloading.
+
+### Performance
+
+- Pull request CI runs the full frontend tests in parallel shards and splits the longest backend partitions, preserving the required checks and separate Deep CI coverage.
 
 ## 0.15.0
 

@@ -2,6 +2,7 @@
 
 import {
   createContext,
+  type AriaAttributes,
   type KeyboardEvent,
   type ReactNode,
   useContext,
@@ -18,7 +19,8 @@ import { cn } from "../lib/utils";
 
 const GUTTER = 8;
 const GAP = 8;
-const ITEMS = '[role="menuitem"], [role="menuitemcheckbox"], [role="option"]';
+const ITEMS =
+  ':is([role="menuitem"], [role="menuitemcheckbox"], [role="option"]):not(:disabled):not([aria-disabled="true"])';
 const FOCUSABLE =
   'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
 
@@ -34,6 +36,7 @@ export interface DropdownMenuProps {
   trigger: ReactNode;
   align?: "start" | "end";
   role?: "menu" | "listbox" | "dialog";
+  "aria-label"?: AriaAttributes["aria-label"];
   /** Escape a clipping ancestor while retaining the enclosing modal layer. */
   portal?: boolean;
   className?: string;
@@ -48,6 +51,7 @@ export function DropdownMenu({
   trigger,
   align = "end",
   role = "menu",
+  "aria-label": ariaLabel,
   portal = false,
   className,
   contentClassName,
@@ -123,6 +127,19 @@ export function DropdownMenu({
       panel.style.transformOrigin =
         (align === "end" ? "right" : "left") + (upward ? " bottom" : " top");
     }
+    function onResize() {
+      // A responsive toolbar can disappear while its portaled menu is open.
+      // Check CSS visibility, not layout size: a zero rect is also valid during
+      // initial layout and in non-layout renderers such as jsdom.
+      for (let node: HTMLElement | null = wrapper; node; node = node.parentElement) {
+        const style = getComputedStyle(node);
+        if (node.hidden || style.display === "none" || style.visibility === "hidden") {
+          onOpenChange(false);
+          return;
+        }
+      }
+      position();
+    }
     position();
     // A panel can change size when its available height changes. Defer the
     // observer's style writes so they cannot invalidate its own delivery frame.
@@ -131,24 +148,24 @@ export function DropdownMenu({
       "ResizeObserver" in globalThis
         ? new ResizeObserver(() => {
             cancelAnimationFrame(resizeFrame);
-            resizeFrame = requestAnimationFrame(position);
+            resizeFrame = requestAnimationFrame(onResize);
           })
         : null;
     observer?.observe(wrapper);
     observer?.observe(panel);
-    window.addEventListener("resize", position);
+    window.addEventListener("resize", onResize);
     window.addEventListener("scroll", position, true);
-    window.visualViewport?.addEventListener("resize", position);
+    window.visualViewport?.addEventListener("resize", onResize);
     window.visualViewport?.addEventListener("scroll", position);
     return () => {
       observer?.disconnect();
       cancelAnimationFrame(resizeFrame);
-      window.removeEventListener("resize", position);
+      window.removeEventListener("resize", onResize);
       window.removeEventListener("scroll", position, true);
-      window.visualViewport?.removeEventListener("resize", position);
+      window.visualViewport?.removeEventListener("resize", onResize);
       window.visualViewport?.removeEventListener("scroll", position);
     };
-  }, [mounted, align, portal, portalHost]);
+  }, [mounted, align, portal, portalHost, onOpenChange]);
 
   function contains(target: Node) {
     return (
@@ -254,6 +271,7 @@ export function DropdownMenu({
     <div
       ref={panelRef}
       role={role}
+      aria-label={ariaLabel}
       data-state={state}
       className={cn(
         portal ? "fixed z-dropdown" : "absolute top-full z-dropdown mt-2",

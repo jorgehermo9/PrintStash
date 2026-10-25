@@ -92,6 +92,7 @@ import { FilterSidebar } from "@/components/filter-sidebar";
 import { readLibraryLocation, type LibraryViewMode } from "@/features/library/url";
 import { MobileFilterDrawer } from "@/components/mobile-filter-drawer";
 import { StructuredFilters } from "@/components/structured-filters";
+import { LibraryBaseFilters } from "@/components/library-base-filters";
 import type { UploadMode } from "@/components/upload-modal";
 import { Skeleton } from "@/components/ui/skeleton";
 import { EmptyState } from "@/components/ui/empty-state";
@@ -106,6 +107,7 @@ import { useI18n } from "@/lib/i18n";
 import { useMobileFilterDrawer } from "@/lib/mobile-filter-context";
 import {
   SlidersHorizontal,
+  Settings2,
   Grid,
   List,
   FileText,
@@ -623,6 +625,7 @@ export function ModelBrowser({ initial }: { initial?: BrowserInitialData }) {
   const [displayOpen, setDisplayOpen] = useState(false);
   const [moreOpen, setMoreOpen] = useState(false);
   const [libraryToolsOpen, setLibraryToolsOpen] = useState(false);
+  const [desktopLibraryToolsOpen, setDesktopLibraryToolsOpen] = useState(false);
   const [filtersExpanded, setFiltersExpanded] = useState<boolean | null>(null);
   const [compact, setCompact] = useState(
     () => readVaultPreference("ps-vault-density") === "compact",
@@ -2212,7 +2215,7 @@ export function ModelBrowser({ initial }: { initial?: BrowserInitialData }) {
 
         {/* Stitch layout: filter sidebar + main content */}
         <FilterSidebar
-          filtersOpen={filtersExpanded ?? activeFilterItems.length > Number(!!query.trim())}
+          filtersOpen={false}
           outlinerFilters={baseFilters}
           tags={tags}
           printers={printers}
@@ -2231,24 +2234,65 @@ export function ModelBrowser({ initial }: { initial?: BrowserInitialData }) {
           onMoveCollection={handleMoveCollection}
           onDeleteCollection={handleDeleteCollection}
           canViewPrinters={canViewPrinters}
-          structuredFilters={
-            <StructuredFilters
-              facets={facetQuery.data}
-              loading={facetQuery.isLoading}
-              error={facetQuery.isError}
-              active={structured}
-              onChange={setStructuredFilter}
-              uploadedAfter={searchParams.get("uploaded_after") ?? undefined}
-              uploadedBefore={searchParams.get("uploaded_before") ?? undefined}
-              history={historyFilters(searchParams)}
-              onDateChange={(key, value) => {
-                const params = new URLSearchParams(searchParams.toString());
-                if (value) params.set(key, value);
-                else params.delete(key);
-                router.replace(params.size ? `/?${params}` : "/");
-              }}
-              onClearAll={clearAllFilters}
-            />
+          canManageLibrary={!!user?.is_superuser}
+          quickAccess={
+            auth.isAuthenticated ? (
+              <>
+                <Button
+                  variant="ghost"
+                  size="xs"
+                  aria-pressed={favoritesOnly}
+                  onClick={toggleFavorites}
+                  className={cn(
+                    "h-8 w-full justify-start px-3 text-sm",
+                    favoritesOnly && "bg-accent text-accent-foreground",
+                  )}
+                >
+                  <Star className={cn("h-4 w-4", favoritesOnly && "fill-current")} aria-hidden />
+                  {uiText("Favorites")}
+                </Button>
+                <SavedViewSelector
+                  key={savedViewsOwner.session}
+                  readState={savedViewReadState}
+                  views={savedViews}
+                  activeId={activeSavedViewId}
+                  modified={savedViewModified}
+                  onSelect={applySavedView}
+                  onCreate={openSaveView}
+                  onUpdate={(view) =>
+                    manageSavedView(
+                      {
+                        kind: "update",
+                        id: view.id,
+                        payload: { filters: currentFilters },
+                      },
+                      "savedView.updateSuccess",
+                    )
+                  }
+                  onRename={(view, name) =>
+                    manageSavedView(
+                      { kind: "update", id: view.id, payload: { name } },
+                      "savedView.renameSuccess",
+                    )
+                  }
+                  onDuplicate={(view) =>
+                    manageSavedView(
+                      {
+                        kind: "create",
+                        name: duplicateViewName(view.name),
+                        filters: effectiveLibraryView(view.filters, canViewPrinters),
+                      },
+                      "savedView.duplicateSuccess",
+                    )
+                  }
+                  onDelete={(view) =>
+                    manageSavedView({ kind: "delete", id: view.id }, "savedView.deleteSuccess")
+                  }
+                  triggerClassName="h-8 w-full justify-start px-3 text-sm"
+                  triggerVariant="ghost"
+                />
+              </>
+            ) : null
           }
           libraryView={libraryView}
           onLibraryViewChange={handleLibraryViewChange}
@@ -2435,6 +2479,7 @@ export function ModelBrowser({ initial }: { initial?: BrowserInitialData }) {
                 variant="outline"
                 onClick={toggleStructuredFilters}
                 aria-expanded={filtersExpanded ?? activeFilterItems.length > Number(!!query.trim())}
+                aria-controls="library-filter-panel"
                 className="hidden w-full min-w-0 px-2 md:inline-flex"
               >
                 <SlidersHorizontal className="h-4 w-4 text-muted-foreground" />
@@ -2607,6 +2652,7 @@ export function ModelBrowser({ initial }: { initial?: BrowserInitialData }) {
                 className="hidden h-8 md:inline-flex"
                 aria-label={uiText("Filters")}
                 aria-expanded={filtersExpanded ?? activeFilterItems.length > Number(!!query.trim())}
+                aria-controls="library-filter-panel"
                 onClick={toggleStructuredFilters}
               >
                 <SlidersHorizontal className="h-4 w-4" aria-hidden />
@@ -2637,18 +2683,71 @@ export function ModelBrowser({ initial }: { initial?: BrowserInitialData }) {
                 </Button>
               )}
 
-              <Button
-                variant={showLibraryTools ? "secondary" : "outline"}
-                size="xs"
-                className="h-8"
-                aria-expanded={showLibraryTools}
-                aria-controls="library-tools"
-                aria-label={t("vault.libraryTools")}
-                onClick={() => setLibraryToolsOpen(!showLibraryTools)}
+              <DropdownMenu
+                open={desktopLibraryToolsOpen}
+                onOpenChange={setDesktopLibraryToolsOpen}
+                align="start"
+                portal
+                trigger={
+                  <Button
+                    type="button"
+                    variant={desktopLibraryToolsOpen ? "secondary" : "outline"}
+                    size="xs"
+                    className="h-8"
+                    data-menu-trigger
+                    aria-haspopup="menu"
+                    aria-expanded={desktopLibraryToolsOpen}
+                    aria-label={t("vault.libraryTools")}
+                    onClick={() => setDesktopLibraryToolsOpen(!desktopLibraryToolsOpen)}
+                  >
+                    <Settings2 className="h-4 w-4" aria-hidden />
+                    {t("vault.libraryTools")}
+                    <ChevronDown className="h-3.5 w-3.5 text-muted-foreground" aria-hidden />
+                  </Button>
+                }
+                contentClassName="w-60 rounded border border-border bg-popover p-1 text-popover-foreground shadow-lg"
               >
-                <SlidersHorizontal className="h-4 w-4" aria-hidden />
-                {t("vault.libraryTools")}
-              </Button>
+                <Button variant="ghost" role="menuitem" className="w-full justify-start" asChild>
+                  <Link href="/library/similar" onClick={() => setDesktopLibraryToolsOpen(false)}>
+                    <ScanSearch className="h-4 w-4" aria-hidden />
+                    {t("similarity.title")}
+                  </Link>
+                </Button>
+                <Button
+                  variant="ghost"
+                  role="menuitem"
+                  className="w-full justify-start"
+                  disabled={!canAdminSelectedCollection}
+                  title={
+                    canAdminSelectedCollection
+                      ? uiText("Create a collection")
+                      : uiText("Admin access required for this collection")
+                  }
+                  onClick={() => {
+                    setDesktopLibraryToolsOpen(false);
+                    handleOpenCreateCollection();
+                  }}
+                >
+                  <Plus className="h-4 w-4" aria-hidden />
+                  {uiText("New collection")}
+                </Button>
+                {auth.isAuthenticated && (
+                  <Button
+                    variant="ghost"
+                    role="menuitemcheckbox"
+                    aria-checked={selectMode}
+                    className="w-full justify-start"
+                    title={uiText("Select Models and folders (S)")}
+                    onClick={() => {
+                      setDesktopLibraryToolsOpen(false);
+                      toggleSelectMode();
+                    }}
+                  >
+                    <CheckSquare className="h-4 w-4" aria-hidden />
+                    {selectMode ? uiText("Done") : uiText("Select")}
+                  </Button>
+                )}
+              </DropdownMenu>
               <div className="ml-auto flex shrink-0 items-center gap-2">
                 <SortMenu
                   open={sortOpen}
@@ -2674,6 +2773,74 @@ export function ModelBrowser({ initial }: { initial?: BrowserInitialData }) {
             </div>
           </div>
 
+          {(filtersExpanded ?? activeFilterItems.length > Number(!!query.trim())) && (
+            <div
+              id="library-filter-panel"
+              role="region"
+              aria-label={uiText("Filters")}
+              className="hidden border-b border-border bg-muted/30 px-4 py-3 md:block sm:px-6"
+              onFocusCapture={() => startup.request("filters")}
+              onPointerDownCapture={() => startup.request("filters")}
+            >
+              <StructuredFilters
+                layout="inline"
+                extraControls={
+                  <LibraryBaseFilters
+                    tags={tags}
+                    printers={printers}
+                    selectedTags={selectedTags}
+                    selectedPrinterId={selectedPrinterId}
+                    selectedPrinterPresence={selectedPrinterPresence}
+                    onTagsChange={setSelectedTags}
+                    onPrinterChange={setSelectedPrinterId}
+                    onPrinterPresenceChange={setSelectedPrinterPresence}
+                    canViewPrinters={canViewPrinters}
+                  />
+                }
+                facets={facetQuery.data}
+                loading={facetQuery.isLoading}
+                error={facetQuery.isError}
+                active={structured}
+                onChange={setStructuredFilter}
+                uploadedAfter={searchParams.get("uploaded_after") ?? undefined}
+                uploadedBefore={searchParams.get("uploaded_before") ?? undefined}
+                history={historyFilters(searchParams)}
+                onDateChange={(key, value) => {
+                  const params = new URLSearchParams(searchParams.toString());
+                  if (value) params.set(key, value);
+                  else params.delete(key);
+                  router.replace(params.size ? `/?${params}` : "/");
+                }}
+                onClearAll={clearAllFilters}
+              />
+            </div>
+          )}
+
+          {activeFilterItems.length > 0 && (
+            <div className="flex flex-wrap items-center gap-2 border-b border-border px-4 py-3 sm:px-6">
+              <span className="text-3xs font-mono uppercase tracking-wider text-muted-foreground">
+                {uiText("Filters")}
+              </span>
+              {activeFilterItems.map((item) => (
+                <Button
+                  key={item.label}
+                  type="button"
+                  variant="ghost"
+                  size="xs"
+                  onClick={item.onRemove}
+                  className="gap-1.5 bg-accent text-accent-foreground"
+                  title={uiText("Remove {value1}", { value1: String(item.label) })}
+                >
+                  {item.label}
+                  <X className="h-3 w-3" aria-hidden />
+                </Button>
+              ))}
+              <Button type="button" variant="ghost" size="xs" onClick={clearAllFilters}>
+                {uiText("Clear all")}
+              </Button>
+            </div>
+          )}
+
           {selectedCollection !== null && !displayedCollection ? (
             <CollectionHeaderSkeleton />
           ) : (
@@ -2698,31 +2865,6 @@ export function ModelBrowser({ initial }: { initial?: BrowserInitialData }) {
                 />
               </div>
             )
-          )}
-
-          {activeFilterItems.length > 0 && (
-            <div className="flex flex-wrap items-center gap-2 border-b border-border px-4 py-3 sm:px-6">
-              <span className="text-3xs font-mono uppercase tracking-wider text-muted-foreground">
-                {uiText("Filters")}
-              </span>
-              {activeFilterItems.map((item) => (
-                <Button
-                  key={item.label}
-                  type="button"
-                  variant="outline"
-                  size="xs"
-                  onClick={item.onRemove}
-                  className="gap-1.5"
-                  title={uiText("Remove {value1}", { value1: String(item.label) })}
-                >
-                  {item.label}
-                  <X className="h-3 w-3" aria-hidden />
-                </Button>
-              ))}
-              <Button type="button" variant="ghost" size="xs" onClick={clearAllFilters}>
-                {uiText("Clear all")}
-              </Button>
-            </div>
           )}
 
           {/* Models / Documents tabs */}
@@ -2792,7 +2934,7 @@ export function ModelBrowser({ initial }: { initial?: BrowserInitialData }) {
             <section
               id="library-tools"
               aria-label={t("vault.libraryTools")}
-              className="space-y-3 border-b border-border bg-muted/20 px-4 py-3 sm:px-6"
+              className="space-y-3 border-b border-border bg-muted/20 px-4 py-3 sm:px-6 @3xl/library:hidden"
             >
               <div className="flex flex-wrap items-center gap-2">
                 <Button variant="outline" size="xs" asChild className="h-9">

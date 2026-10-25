@@ -29,6 +29,21 @@ def _commands(job: dict) -> str:
     return "\n".join(str(step.get("run", "")) for step in job["steps"])
 
 
+def _selected_test_files(rows: list[dict]) -> set[Path]:
+    backend = REPO_ROOT / "backend"
+    paths = [path for row in rows for path in row["paths"].split()]
+    return {
+        file.relative_to(backend)
+        for file in (backend / "tests").rglob("test_*.py")
+        if any(
+            fnmatch(str(file.relative_to(backend)), path)
+            if "*" in path
+            else file.relative_to(backend).is_relative_to(path)
+            for path in paths
+        )
+    }
+
+
 def _verifier_module():
     path = REPO_ROOT / "scripts/verify-ci-run.py"
     spec = importlib.util.spec_from_file_location("verify_ci_run", path)
@@ -105,6 +120,7 @@ class TestQuickGate:
             "backend",
             "printer-core",
             "frontend",
+            "frontend-tests",
             "browser-smoke",
             "browser-extension",
         }
@@ -113,6 +129,46 @@ class TestQuickGate:
         assert all(
             jobs[name].get("continue-on-error") is not True for name in gate["needs"]
         )
+
+    def test_frontend_app_partitions_cover_every_shard_once(self) -> None:
+        job = _workflow("ci.yml")["jobs"]["frontend-tests"]
+        commands = _commands(job)
+
+        assert job["strategy"]["matrix"] == {"shard": [1, 2]}
+        assert [
+            step["run"] for step in job["steps"] if "vitest run" in step.get("run", "")
+        ] == ["pnpm exec vitest run --shard=${{ matrix.shard }}/2"]
+        assert commands.count("vitest run") == 1
+        assert not any(
+            option in commands
+            for option in ("--changed", "--related", "--passWithNoTests", "--exclude")
+        )
+        assert job["strategy"]["fail-fast"] is False
+
+    def test_frontend_checks_retain_complete_quality_gate(self) -> None:
+        commands = _commands(_workflow("ci.yml")["jobs"]["frontend"])
+        package = json.loads((REPO_ROOT / "frontend/package.json").read_text())
+
+        assert "pnpm format:check" in commands
+        assert "pnpm lint" in commands
+        assert "pnpm build" in commands
+        assert package["scripts"]["build"].startswith("pnpm run typecheck && ")
+        assert package["scripts"]["test"].split(" && ") == [
+            "vitest run",
+            "pnpm --filter @printstash/ui test",
+            "pnpm --filter @printstash/domain test",
+        ]
+        assert commands.count("pnpm --filter @printstash/ui test") == 1
+        assert commands.count("pnpm --filter @printstash/domain test") == 1
+        assert "pnpm test\n" not in commands
+
+    @pytest.mark.parametrize("name", ["backend", "frontend", "frontend-tests"], ids=str)
+    def test_runs_quick_partitions_without_dependencies(self, name: str) -> None:
+        job = _workflow("ci.yml")["jobs"][name]
+
+        assert not job.get("needs")
+        assert not job.get("if")
+        assert not job.get("continue-on-error", False)
 
     def test_runs_backend_pr_lane_once(self) -> None:
         jobs = _workflow("ci.yml")["jobs"]
@@ -296,7 +352,8 @@ class TestDeepSuite:
             "include"
         ]
         assert len(ordinary) == 12
-        assert ordinary == [dict(row, lane="full-ordinary") for row in quick_rows]
+        # PR jobs may use smaller partitions without changing the covered tree.
+        assert _selected_test_files(ordinary) == _selected_test_files(quick_rows)
         assert len({row["suite"] for row in rows}) == len(rows)
         resources = [row for row in rows if row["lane"] == "full-resources"]
         assert {row["suite"] for row in resources} == {

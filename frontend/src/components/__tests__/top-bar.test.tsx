@@ -45,7 +45,11 @@ function CurrentLocation() {
   return <output data-testid="location">{`${usePathname()}${search ? `?${search}` : ""}`}</output>;
 }
 
-function renderTopBar({ at = "/", auth = session() }: { at?: string; auth?: AuthState } = {}) {
+function renderTopBar({
+  at = "/",
+  auth = session(),
+  matchesMedia,
+}: { at?: string; auth?: AuthState; matchesMedia?: (query: string) => boolean } = {}) {
   return renderApp(
     <>
       <TopBar />
@@ -54,6 +58,7 @@ function renderTopBar({ at = "/", auth = session() }: { at?: string; auth?: Auth
     {
       at,
       auth,
+      matchesMedia,
       routes: {
         "GET /api/v1/search/status": json(searchStatus()),
         "GET /api/v1/jobs": json([]),
@@ -63,7 +68,7 @@ function renderTopBar({ at = "/", auth = session() }: { at?: string; auth?: Auth
 }
 
 function openProfileMenu(user: ReturnType<typeof userEvent.setup>) {
-  return user.click(screen.getByRole("button", { name: /admin/ }));
+  return user.click(screen.getByRole("button", { name: "My workspace" }));
 }
 
 beforeEach(() => {
@@ -170,10 +175,65 @@ describe("TopBar", () => {
       expect(screen.getByRole("link", { name: "Log in" })).toHaveAttribute("href", "/login");
     });
 
-    it("names the signed-in user", () => {
+    it("names the signed-in user inside My workspace", async () => {
+      const user = userEvent.setup();
       renderTopBar();
+      await openProfileMenu(user);
+      expect(screen.getByRole("menu")).toHaveTextContent("admin");
+    });
 
-      expect(screen.getByRole("button", { name: /admin/ })).toBeInTheDocument();
+    it("does not duplicate the Library printer quick access", async () => {
+      const user = userEvent.setup();
+      renderTopBar();
+      await openProfileMenu(user);
+      expect(screen.queryByRole("menuitem", { name: "Printers" })).not.toBeInTheDocument();
+    });
+
+    it.each(["/settings", "/models/1", "/library/similar"])(
+      "keeps Printers reachable away from the sidebar at %s",
+      async (at) => {
+        const user = userEvent.setup();
+        renderTopBar({ at });
+        await openProfileMenu(user);
+        expect(screen.getByRole("menuitem", { name: "Printers" })).toHaveAttribute(
+          "href",
+          "/printers",
+        );
+      },
+    );
+
+    it("keeps Printers reachable when the desktop sidebar is hidden", async () => {
+      const user = userEvent.setup();
+      renderTopBar({ matchesMedia: () => false });
+      await openProfileMenu(user);
+      expect(screen.getByRole("menuitem", { name: "Printers" })).toHaveAttribute(
+        "href",
+        "/printers",
+      );
+    });
+
+    it("retains the existing workspace destination names", async () => {
+      const user = userEvent.setup();
+      renderTopBar();
+      await openProfileMenu(user);
+      expect(screen.getAllByRole("menuitem").map((item) => item.textContent)).toEqual([
+        "Vault",
+        "Pending",
+        "Builds",
+        "Statistics",
+        "Profiles",
+        "Settings",
+        "Log out",
+      ]);
+    });
+
+    it("returns focus to My workspace after Escape", async () => {
+      const user = userEvent.setup();
+      renderTopBar();
+      await openProfileMenu(user);
+      await user.keyboard("{Escape}");
+      await waitFor(() => expect(screen.queryByRole("menu")).not.toBeInTheDocument());
+      expect(screen.getByRole("button", { name: "My workspace" })).toHaveFocus();
     });
 
     it.each([
@@ -237,12 +297,14 @@ describe("TopBar", () => {
     it("drops the admin-only destinations for an ordinary user", async () => {
       const user = userEvent.setup();
       renderTopBar({
+        at: "/settings",
         auth: session({ user: { id: 2, username: "maker", email: null, is_superuser: false } }),
       });
 
-      await user.click(screen.getByRole("button", { name: /maker/ }));
+      await user.click(screen.getByRole("button", { name: "My workspace" }));
 
       expect(screen.queryByRole("menuitem", { name: "Printers" })).toBeNull();
+      expect(screen.queryByRole("menuitem", { name: "Statistics" })).toBeNull();
     });
 
     it("signs the user out", async () => {

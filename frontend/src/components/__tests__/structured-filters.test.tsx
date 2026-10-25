@@ -20,6 +20,7 @@
 
 import "@testing-library/jest-dom/vitest";
 import { render, screen } from "@testing-library/react";
+import { useState } from "react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 
@@ -312,5 +313,101 @@ describe("StructuredFilters", () => {
 
       expect(screen.getByText("Filter values could not be loaded.")).toBeInTheDocument();
     });
+  });
+});
+
+describe("StructuredFilters inline", () => {
+  function StatefulFilters({ facets = FACETS, active = {}, ...props }: Partial<Props>) {
+    const [selected, setSelected] = useState(active);
+    return (
+      <StructuredFilters
+        layout="inline"
+        facets={facets}
+        active={selected}
+        onChange={(key, values) => setSelected((current) => ({ ...current, [key]: values }))}
+        {...props}
+      />
+    );
+  }
+
+  it("keeps multiple file types selected in the visible controls", async () => {
+    const user = userEvent.setup();
+    render(<StatefulFilters />);
+    await user.click(screen.getByRole("checkbox", { name: "STL" }));
+    await user.click(screen.getByRole("checkbox", { name: "G-code" }));
+    expect(screen.getByRole("checkbox", { name: "STL" })).toBeChecked();
+    expect(screen.getByRole("checkbox", { name: "G-code" })).toBeChecked();
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+  });
+
+  it("allows removing an active value before its facet count arrives", async () => {
+    const user = userEvent.setup();
+    render(
+      <StatefulFilters
+        facets={{ ...FACETS, file_type: [] }}
+        active={{ file_type: ["3mf"] }}
+        loading
+      />,
+    );
+    await user.click(screen.getByRole("checkbox", { name: "3MF" }));
+    expect(screen.queryByRole("group", { name: "File type" })).not.toBeInTheDocument();
+  });
+
+  it("restores active upload dates as inline fields", () => {
+    render(<StatefulFilters uploadedAfter="2026-01-01" uploadedBefore="2026-02-01" />);
+    expect(screen.getByLabelText("After")).toHaveValue("2026-01-01");
+    expect(screen.getByLabelText("Before")).toHaveValue("2026-02-01");
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+  });
+
+  it("reveals inactive upload dates without a floating panel", async () => {
+    render(<StatefulFilters />);
+    await userEvent.setup().click(screen.getByRole("button", { name: "Uploaded" }));
+    expect(screen.getByLabelText("After")).toBeVisible();
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+  });
+
+  it("restores active print history fields", () => {
+    render(<StatefulFilters history={{ printed_after: "2026-01-01", print_duration_min_s: 60 }} />);
+    expect(screen.getByLabelText(/Finished on or after/)).toHaveValue("2026-01-01");
+    expect(screen.getByLabelText(/Actual duration ≥/)).toHaveValue(60);
+  });
+
+  it("replaces the printed status without requiring a menu", async () => {
+    const user = userEvent.setup();
+    render(
+      <StatefulFilters
+        facets={{
+          ...FACETS,
+          printed: [
+            { value: "yes", count: 2 },
+            { value: "no", count: 4 },
+          ],
+        }}
+      />,
+    );
+    await user.click(screen.getByRole("button", { name: /Yes/ }));
+    await user.click(screen.getByRole("button", { name: /No/ }));
+    expect(screen.getByRole("button", { name: /Yes/ })).toHaveAttribute("aria-pressed", "false");
+    expect(screen.getByRole("button", { name: /No/ })).toHaveAttribute("aria-pressed", "true");
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+  });
+
+  it("clears the printed status by deselecting its segment", async () => {
+    const user = userEvent.setup();
+    render(<StatefulFilters active={{ printed: ["no"] }} />);
+    await user.click(screen.getByRole("button", { name: "No" }));
+    expect(screen.queryByRole("group", { name: "Printed" })).not.toBeInTheDocument();
+  });
+
+  it("returns keyboard focus to the facet picker on Escape", async () => {
+    const user = userEvent.setup();
+    render(<StatefulFilters />);
+    const trigger = screen.getByRole("button", { name: "Material" });
+    await user.click(trigger);
+    await user.tab();
+    await user.keyboard("{Escape}");
+    expect(trigger).toHaveFocus();
+    expect(trigger).toHaveAttribute("aria-expanded", "false");
   });
 });

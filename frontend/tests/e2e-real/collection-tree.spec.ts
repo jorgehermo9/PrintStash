@@ -1,6 +1,6 @@
 /** A nested destination appears through the lazy sidebar before a real move persists. */
 import { test, expect } from "./helpers";
-import { modelCard, openLibraryTools, uploadModel } from "./util";
+import { modelCard, libraryTool, openLibraryTools, uploadModel } from "./util";
 
 test.describe("collection tree", () => {
   test("moves a Model into a newly expanded nested folder", async ({ page }) => {
@@ -49,7 +49,7 @@ test.describe("collection tree", () => {
       await expect(childRow).toBeVisible();
 
       await openLibraryTools(page);
-      await page.getByRole("button", { name: "Select", exact: true }).click();
+      await libraryTool(page, "Select").click();
       await page.getByRole("checkbox", { name: `Select ${model}` }).check();
       await page.locator("div.fixed.bottom-4").getByRole("button", { name: "Move" }).click();
       const moveDialog = page.getByRole("dialog", { name: /^Move \d+ item/ });

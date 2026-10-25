@@ -140,9 +140,11 @@ export function SavedViewSelector({
     <Localized>
       <>
         <DropdownMenu
+          portal
           open={open}
           onOpenChange={setMenuOpen}
           role="dialog"
+          aria-label={uiText("Saved views")}
           contentClassName="w-72 rounded-md border border-border bg-popover text-popover-foreground shadow-lg"
           trigger={
             <Button

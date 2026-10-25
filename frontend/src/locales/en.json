@@ -1761,6 +1761,8 @@
   "nav.close": "Close",
   "nav.notifications": "Notifications",
   "nav.tasks": "Tasks",
+  "nav.myWorkspace": "My workspace",
+  "nav.quickAccess": "Quick access",
   "nav.account": "Account",
   "nav.logIn": "Log in",
   "nav.logOut": "Log out",

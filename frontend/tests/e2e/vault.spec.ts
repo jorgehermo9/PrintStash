@@ -43,7 +43,7 @@ test.describe("vault route", () => {
     });
     await page.goto("/?type=all&sort=name-asc");
     await page.getByRole("button", { name: "Library tools" }).click();
-    await page.getByRole("button", { name: "Select", exact: true }).click();
+    await page.getByRole("menuitemcheckbox", { name: "Select", exact: true }).click();
     await page.getByRole("checkbox", { name: "Select Selection 2", exact: true }).click();
 
     await page.locator('main [data-library-entry="/models/103"]').click({ modifiers: ["Shift"] });
@@ -86,7 +86,7 @@ test.describe("vault route", () => {
     );
     await page.goto("/");
     await page.getByRole("button", { name: "Library tools" }).click();
-    await page.getByRole("button", { name: "Select", exact: true }).click();
+    await page.getByRole("menuitemcheckbox", { name: "Select", exact: true }).click();
     await page.getByRole("checkbox", { name: "Select Review bracket" }).click();
     await page.getByRole("button", { name: "Tag", exact: true }).click();
     const editor = page.getByRole("dialog");
@@ -234,7 +234,7 @@ test.describe("vault route", () => {
     });
     await page.goto("/");
     await page.getByRole("button", { name: "Library tools" }).click();
-    await page.getByRole("button", { name: "Select", exact: true }).click();
+    await page.getByRole("menuitemcheckbox", { name: "Select", exact: true }).click();
     await page.getByRole("checkbox", { name: "Select Undo bracket" }).click();
     await page.getByRole("button", { name: "Tag", exact: true }).click();
     const dialog = page.getByRole("dialog");

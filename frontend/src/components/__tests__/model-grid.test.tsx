@@ -313,7 +313,7 @@ describe("ModelBrowser", () => {
       await openLibraryTools();
 
       expect(
-        within(screen.getByRole("region", { name: "Library tools" })).getByRole("link", {
+        within(screen.getByRole("menu")).getByRole("menuitem", {
           name: "Similar models",
         }),
       ).toHaveAttribute("href", "/library/similar");
@@ -334,7 +334,27 @@ describe("ModelBrowser", () => {
         "aria-expanded",
         "false",
       );
-      expect(screen.queryByRole("region", { name: "Library tools" })).not.toBeInTheDocument();
+      await waitFor(() => expect(screen.queryByRole("menu")).not.toBeInTheDocument());
+    });
+    it("returns focus to Library tools on Escape", async () => {
+      const user = userEvent.setup();
+      renderVault();
+      await openLibraryTools();
+      await user.tab();
+      await user.keyboard("{Escape}");
+      await waitFor(() => expect(screen.queryByRole("menu")).not.toBeInTheDocument());
+      expect(screen.getByRole("button", { name: "Library tools" })).toHaveFocus();
+    });
+    it("keeps Favorites in quick access before opening Library tools", async () => {
+      const user = userEvent.setup();
+      const { requests } = renderVault();
+      const quickAccess = screen.getByRole("navigation", { name: "Quick access" });
+      await user.click(within(quickAccess).getByRole("button", { name: "Favorites" }));
+      await waitFor(() => expect(lastModelsQuery(requests).get("favorites")).toBe("true"));
+      expect(screen.getByRole("button", { name: "Library tools" })).toHaveAttribute(
+        "aria-expanded",
+        "false",
+      );
     });
     it("renders a card for every model", async () => {
       renderVault({
@@ -798,7 +818,7 @@ describe("ModelBrowser", () => {
       });
       await screen.findByText("Benchy");
       await openLibraryTools();
-      await user.click(screen.getByRole("button", { name: "Select" }));
+      await user.click(screen.getByRole("menuitemcheckbox", { name: "Select" }));
       await user.click(screen.getByRole("checkbox", { name: "Select Benchy" }));
       expect(screen.getAllByText("1 selected").length).toBeGreaterThan(0);
 
@@ -1281,7 +1301,7 @@ describe("ModelBrowser", () => {
       const { requests } = renderVault({ at: "/?c=parts", collections: PARTS_TREE });
       await screen.findByRole("heading", { name: "Parts" });
       await openLibraryTools();
-      await user.click(screen.getByRole("button", { name: /Select/ }));
+      await user.click(screen.getByRole("menuitemcheckbox", { name: /Select/ }));
 
       await user.hover(await folderCard("parts/brackets"));
 
@@ -1650,7 +1670,7 @@ describe("ModelBrowser", () => {
       renderVault();
 
       await openLibraryTools();
-      await screen.findByRole("button", { name: "Select" });
+      await screen.findByRole("menuitemcheckbox", { name: "Select" });
       expect(uploadButton()).toBeEnabled();
     });
   });
@@ -1662,7 +1682,7 @@ describe("ModelBrowser", () => {
       await screen.findByText("Benchy");
 
       await openLibraryTools();
-      await user.click(screen.getByRole("button", { name: /Select/ }));
+      await user.click(screen.getByRole("menuitemcheckbox", { name: /Select/ }));
 
       expect(screen.getByRole("button", { name: /Done/ })).toBeInTheDocument();
     });
@@ -1677,7 +1697,7 @@ describe("ModelBrowser", () => {
       });
       await screen.findByText("Benchy");
       await openLibraryTools();
-      await user.click(screen.getByRole("button", { name: /Select/ }));
+      await user.click(screen.getByRole("menuitemcheckbox", { name: /Select/ }));
 
       await user.click(screen.getByRole("checkbox", { name: "Select Benchy" }));
 
@@ -1781,7 +1801,7 @@ describe("ModelBrowser", () => {
       await screen.findByText("Benchy");
 
       await openLibraryTools();
-      await user.click(screen.getByRole("button", { name: /New collection/ }));
+      await user.click(screen.getByRole("menuitem", { name: /New collection/ }));
       await user.type(screen.getByPlaceholderText(/New subcollection/), "Bolts");
       await user.click(screen.getByRole("button", { name: "Create" }));
 
@@ -1812,7 +1832,7 @@ describe("ModelBrowser", () => {
       await screen.findByText("Benchy");
 
       await openLibraryTools();
-      await user.click(screen.getByRole("button", { name: /New collection/ }));
+      await user.click(screen.getByRole("menuitem", { name: /New collection/ }));
       await user.type(screen.getByPlaceholderText("Collection name..."), "Bolts");
       await user.click(screen.getByRole("button", { name: "Create" }));
 
@@ -1835,7 +1855,7 @@ describe("ModelBrowser", () => {
       await screen.findByText("Benchy");
 
       await openLibraryTools();
-      await user.click(screen.getByRole("button", { name: /New collection/ }));
+      await user.click(screen.getByRole("menuitem", { name: /New collection/ }));
 
       expect(screen.getByRole("button", { name: "Create" })).toBeDisabled();
     });
@@ -1845,7 +1865,7 @@ describe("ModelBrowser", () => {
       renderVault({ models: [aModelListItem({ name: "Benchy" })] });
       await screen.findByText("Benchy");
       await openLibraryTools();
-      await user.click(screen.getByRole("button", { name: /New collection/ }));
+      await user.click(screen.getByRole("menuitem", { name: /New collection/ }));
 
       await user.click(screen.getByRole("button", { name: "Cancel" }));
 
@@ -1857,7 +1877,7 @@ describe("ModelBrowser", () => {
     async function selectBoth(user: ReturnType<typeof userEvent.setup>) {
       await screen.findByText("Benchy");
       await openLibraryTools();
-      await user.click(screen.getByRole("button", { name: "Select" }));
+      await user.click(screen.getByRole("menuitemcheckbox", { name: "Select" }));
       await user.click(screen.getByRole("button", { name: /Select all on screen/ }));
     }
 
@@ -1930,7 +1950,7 @@ describe("ModelBrowser", () => {
       });
       await screen.findByText("Benchy");
       await openLibraryTools();
-      await user.click(screen.getByRole("button", { name: "Select" }));
+      await user.click(screen.getByRole("menuitemcheckbox", { name: "Select" }));
 
       await user.click(screen.getByRole("button", { name: "Done" }));
 
@@ -1976,7 +1996,7 @@ describe("ModelBrowser", () => {
       });
       await screen.findByText("Benchy");
       await openLibraryTools();
-      await user.click(screen.getByRole("button", { name: "Select" }));
+      await user.click(screen.getByRole("menuitemcheckbox", { name: "Select" }));
       selecting = true;
       await user.click(screen.getByRole("button", { name: /Select all matching models/ }));
 
@@ -2260,7 +2280,7 @@ describe("ModelBrowser", () => {
     async function selectFolder(user: ReturnType<typeof userEvent.setup>, name = "Parts") {
       await screen.findAllByText(name);
       await openLibraryTools();
-      await user.click(screen.getByRole("button", { name: "Select" }));
+      await user.click(screen.getByRole("menuitemcheckbox", { name: "Select" }));
       await user.click(screen.getByLabelText(`Select folder ${name}`));
     }
 
@@ -2368,7 +2388,7 @@ describe("ModelBrowser", () => {
     async function selectOneModel(user: ReturnType<typeof userEvent.setup>) {
       await screen.findByText("Benchy");
       await openLibraryTools();
-      await user.click(screen.getByRole("button", { name: "Select" }));
+      await user.click(screen.getByRole("menuitemcheckbox", { name: "Select" }));
       await user.click(screen.getByRole("checkbox", { name: "Select Benchy" }));
     }
 
@@ -3825,7 +3845,7 @@ describe("ModelBrowser", () => {
       await screen.findByText("Benchy");
 
       await openLibraryTools();
-      expect(screen.getByRole("button", { name: /New collection/ })).toBeDisabled();
+      expect(screen.getByRole("menuitem", { name: /New collection/ })).toBeDisabled();
     });
 
     it("says why it is refused", async () => {
@@ -3838,7 +3858,7 @@ describe("ModelBrowser", () => {
       await screen.findByText("Benchy");
 
       await openLibraryTools();
-      expect(screen.getByRole("button", { name: /New collection/ })).toHaveAttribute(
+      expect(screen.getByRole("menuitem", { name: /New collection/ })).toHaveAttribute(
         "title",
         "Admin access required for this collection",
       );
@@ -3855,7 +3875,7 @@ describe("ModelBrowser", () => {
       });
       await screen.findByText("Benchy");
       await openLibraryTools();
-      await user.click(screen.getByRole("button", { name: "Select" }));
+      await user.click(screen.getByRole("menuitemcheckbox", { name: "Select" }));
       await user.click(screen.getByRole("checkbox", { name: "Select Benchy" }));
       await user.click(screen.getByRole("button", { name: "Tag" }));
       const editor = await screen.findByRole("dialog");
@@ -3896,7 +3916,7 @@ describe("ModelBrowser", () => {
       });
       await screen.findByText("Benchy");
       await openLibraryTools();
-      await user.click(screen.getByRole("button", { name: "Select" }));
+      await user.click(screen.getByRole("menuitemcheckbox", { name: "Select" }));
       await user.click(screen.getByRole("checkbox", { name: "Select Benchy" }));
       await user.click(screen.getByRole("button", { name: "Tag" }));
       const dialog = await screen.findByRole("dialog");
@@ -3925,7 +3945,7 @@ describe("ModelBrowser", () => {
       });
       await screen.findByText("Benchy");
       await openLibraryTools();
-      await user.click(screen.getByRole("button", { name: "Select" }));
+      await user.click(screen.getByRole("menuitemcheckbox", { name: "Select" }));
       await user.click(screen.getByRole("checkbox", { name: "Select Benchy" }));
       await user.click(screen.getByRole("button", { name: "Tag" }));
       const dialog = await screen.findByRole("dialog");
@@ -4197,7 +4217,7 @@ describe("ModelBrowser", () => {
     async function selectAndMove(user: ReturnType<typeof userEvent.setup>) {
       await screen.findByText("Benchy");
       await openLibraryTools();
-      await user.click(screen.getByRole("button", { name: "Select" }));
+      await user.click(screen.getByRole("menuitemcheckbox", { name: "Select" }));
       await user.click(screen.getByLabelText("Select Benchy"));
       await user.click(await screen.findByRole("button", { name: /Move/ }));
       const dialog = await screen.findByRole("dialog");

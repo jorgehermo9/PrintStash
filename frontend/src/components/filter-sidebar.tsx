@@ -18,6 +18,7 @@ import { useViewportAdmission } from "@/lib/use-viewport-admission";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "@/lib/navigation";
+import { Link } from "@/lib/link";
 import { useMediaQuery } from "@/lib/use-media-query";
 import { CollectionNodeRead, OutlinerModelRead, PrinterRead, TagRead } from "@/types";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -34,10 +35,20 @@ import type {
   OutlinerFilters,
   OutlinerParams,
 } from "@/types/outliner";
-import { Button } from "@/components/ui/button";
+import { Button, buttonVariants } from "@/components/ui/button";
 import { Localized } from "@/components/ui/localized";
 import { useI18n } from "@/lib/i18n";
-import { Box, Boxes, ChevronRight, Folder, FolderOpen, Search, Trash2, X } from "lucide-react";
+import {
+  Box,
+  Boxes,
+  ChevronRight,
+  Folder,
+  FolderOpen,
+  Printer,
+  Search,
+  Trash2,
+  X,
+} from "lucide-react";
 import {
   DndContext,
   DragEndEvent,
@@ -992,7 +1003,7 @@ export function FilterSidebarContent({
           setDragging(null);
         }}
       >
-        <div ref={contentRef} className="flex-1 overflow-auto py-4 px-3 space-y-6">
+        <div ref={contentRef} className="min-h-0 flex-1 overflow-auto py-4 px-3 space-y-6">
           <section>
             <h3 className="mb-2 pl-2 text-xs font-bold uppercase tracking-wider text-muted-foreground">
               {t("libraryView.title")}
@@ -1311,6 +1322,9 @@ export interface FilterSidebarProps {
   onMoveCollection?: (collectionId: number, newParentId: number | null) => void;
   onDeleteCollection?: (id: number, recursive: boolean) => void;
   canViewPrinters?: boolean;
+  canManageLibrary?: boolean;
+  /** Library actions kept outside the independently scrolling outliner. */
+  quickAccess?: React.ReactNode;
   loading?: boolean;
   outlinerFilter?: string;
   structuredFilters?: React.ReactNode;
@@ -1363,7 +1377,7 @@ export function FilterSidebar(props: FilterSidebarProps) {
     <Localized>
       <aside
         style={{ width: sidebarWidth }}
-        className="bg-sidebar border-r border-border flex flex-col shrink-0 hidden md:flex relative"
+        className="bg-sidebar border-r border-border flex min-h-0 flex-col shrink-0 hidden md:flex relative"
       >
         <div className="p-2 border-b border-border bg-sidebar">
           <div className="relative">
@@ -1396,6 +1410,43 @@ export function FilterSidebar(props: FilterSidebarProps) {
           outlinerFilter={outlinerFilter}
           onClearOutlinerFilter={() => setOutlinerFilter("")}
         />
+        <nav
+          aria-label={uiText("nav.quickAccess")}
+          className="shrink-0 border-t border-border bg-sidebar p-2"
+        >
+          <h3 className="mb-1 px-2 text-xs font-bold uppercase tracking-wider text-muted-foreground">
+            {uiText("nav.quickAccess")}
+          </h3>
+          <div className="space-y-0.5">
+            {props.quickAccess}
+            {props.canViewPrinters && (
+              <Link
+                href="/printers"
+                className={buttonVariants({
+                  variant: "ghost",
+                  size: "sm",
+                  className: "w-full justify-start",
+                })}
+              >
+                <Printer className="h-4 w-4 shrink-0" />
+                {uiText("nav.printers")}
+              </Link>
+            )}
+            {props.canManageLibrary && (
+              <Link
+                href="/settings?section=trash"
+                className={buttonVariants({
+                  variant: "ghost",
+                  size: "sm",
+                  className: "w-full justify-start",
+                })}
+              >
+                <Trash2 className="h-4 w-4 shrink-0" />
+                {uiText("settings.trash")}
+              </Link>
+            )}
+          </div>
+        </nav>
         {/* Resize handle */}
         <div
           onMouseDown={handleResizeStart}
