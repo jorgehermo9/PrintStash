@@ -747,12 +747,12 @@ class TestAdditionDeclarations:
         "kind,during",
         [
             (JobKind.DERIVATIVES_MESH, DuringAdditions.PACED),
-            (JobKind.DERIVATIVES_GCODE, DuringAdditions.PACED),
-            (JobKind.DERIVATIVES_TOOLPATH, DuringAdditions.PACED),
+            (JobKind.DERIVATIVES_GCODE, DuringAdditions.WAITS),
+            (JobKind.DERIVATIVES_TOOLPATH, DuringAdditions.WAITS),
             (JobKind.DERIVATIVES_VIEWER_STL, DuringAdditions.RUNS),
         ],
     )
-    def test_derived_outputs_are_paced_except_the_viewer_mesh(
+    def test_each_derived_output_declares_how_it_meets_additions(
         self, kind: JobKind, during: DuringAdditions
     ) -> None:
         assert self._declared()[kind].during_additions is during

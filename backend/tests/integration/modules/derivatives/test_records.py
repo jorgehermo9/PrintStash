@@ -1099,3 +1099,58 @@ class TestModelRevision:
         db_session.commit()
 
         assert records.model_revision(db_session, mesh.model_id) == "0"
+
+
+class TestRegenerations:
+    """When an operator last asked for each kind of output to be produced again."""
+
+    def test_no_request_owes_nothing(self, db_session: Session) -> None:
+        assert (
+            records.regenerations(db_session, definitions=[JobKind.DERIVATIVES_MESH])
+            == {}
+        )
+
+    def test_a_kind_wide_request_reaches_every_producer(
+        self, db_session: Session, make_derivative_regeneration
+    ) -> None:
+        requested = utcnow() - timedelta(minutes=5)
+        make_derivative_regeneration(DerivativeKind.THUMBNAIL, requested_at=requested)
+
+        assert records.regenerations(db_session) == {
+            DerivativeKind.THUMBNAIL: requested
+        }
+
+    def test_a_group_request_reaches_only_its_producer(
+        self, db_session: Session, make_derivative_group_regeneration
+    ) -> None:
+        make_derivative_group_regeneration(
+            JobKind.DERIVATIVES_GCODE, DerivativeKind.THUMBNAIL
+        )
+
+        assert (
+            records.regenerations(db_session, definitions=[JobKind.DERIVATIVES_MESH])
+            == {}
+        )
+
+    @pytest.mark.parametrize("later", ["kind", "group"])
+    def test_the_later_request_wins(
+        self,
+        db_session: Session,
+        make_derivative_regeneration,
+        make_derivative_group_regeneration,
+        later: str,
+    ) -> None:
+        earlier, newer = utcnow() - timedelta(hours=2), utcnow() - timedelta(hours=1)
+        make_derivative_regeneration(
+            DerivativeKind.THUMBNAIL,
+            requested_at=newer if later == "kind" else earlier,
+        )
+        make_derivative_group_regeneration(
+            JobKind.DERIVATIVES_MESH,
+            DerivativeKind.THUMBNAIL,
+            requested_at=newer if later == "group" else earlier,
+        )
+
+        assert records.regenerations(
+            db_session, definitions=[JobKind.DERIVATIVES_MESH]
+        ) == {DerivativeKind.THUMBNAIL: newer}
