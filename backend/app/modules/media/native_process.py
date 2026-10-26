@@ -3,10 +3,14 @@
 This owner imports no mesh loader, renderer or subprocess orchestrator.
 """
 
+import os
 from pathlib import Path
 
 from app.core.native_settings import settings
 from app.runtime.native_admission import Resources
+
+# Only read with /proc, which exists only where sysconf does.
+_PAGE_BYTES = os.sysconf("SC_PAGE_SIZE") if hasattr(os, "sysconf") else 0
 
 
 def memory_limit_bytes() -> int | None:
@@ -30,13 +34,12 @@ def native_capacity() -> Resources:
 def process_rss_bytes(pid: int) -> int | None:
     """Read one Linux process's resident set; unavailable platforms return None."""
 
+    # statm's second field is the same resident page count status reports as
+    # VmRSS, without formatting the whole status text on every sample.
     try:
-        for line in Path(f"/proc/{pid}/status").read_text().splitlines():
-            if line.startswith("VmRSS:"):
-                return int(line.split()[1]) * 1024
+        return int(Path(f"/proc/{pid}/statm").read_bytes().split()[1]) * _PAGE_BYTES
     except OSError, ValueError, IndexError:
         return None
-    return None
 
 
 def process_tree_rss_bytes(pid: int) -> int | None:
