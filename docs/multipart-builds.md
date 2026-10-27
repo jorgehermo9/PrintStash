@@ -1,6 +1,6 @@
 # Manufacturing multipart models
 
-This feature is in `Unreleased` and will ship in a minor release.
+This feature shipped in 0.14.0.
 
 A Multipart Model describes a composition. Give each Part its quantity per
 object, then choose **Create build** to record a particular manufacturing run.

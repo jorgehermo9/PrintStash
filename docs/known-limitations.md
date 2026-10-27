@@ -4,6 +4,9 @@ PrintStash is an early self-hosted release for local 3D printing asset
 management. It is useful today, but it is deliberately not trying to be a full
 manufacturing platform.
 
+This page describes version 0.15.0, the latest published release (22 October
+2026). Anything marked beta here is beta in that release, not future work.
+
 ## Printer Providers
 
 - Moonraker/Klipper is the primary supported provider.
@@ -356,7 +359,7 @@ read-only Library sources and backup replicas; managed Vault use is unavailable.
 Signed browser downloads depend on endpoint and CORS proof independently of the
 active deletion safety tier.
 
-## Similar Models (Unreleased)
+## Similar Models
 
 - Analysis defaults off. Similarity is review evidence, not byte deduplication,
   printable compatibility or automatic grouping. Multipart composition is

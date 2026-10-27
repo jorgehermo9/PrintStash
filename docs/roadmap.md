@@ -8,20 +8,20 @@ Roadmap feedback belongs in
 [the public roadmap discussion](https://github.com/xiao-villamor/PrintStash/discussions/1).
 Issues are better for confirmed bugs or scoped implementation work.
 
-## Preparing 0.15.0: library browsing, imports, and optional GPU support
+## Current release: 0.15.0
 
-[Version 0.14.0 is the latest published release](https://github.com/xiao-villamor/PrintStash/releases/tag/v0.14.0).
-The [0.15.0 changelog](../CHANGELOG.md#0150) records the next release's integrated
-scope: scrolling library pagination, subtree filters, editable Library sources,
-bounded imports with previews during processing, configurable worker concurrency,
-faster 3MF and STEP processing, multi-material G-code fixes, and a unified image
-with optional GPU support. Read the [upgrade notes](../UPGRADE.md#0150-notes)
-for Python 3.14, DBOS 3.3.0, coordinated API/worker restarts, and the full-library
-re-derivation and backup requirements.
+[Version 0.15.0 is the latest published release](https://github.com/xiao-villamor/PrintStash/releases/tag/v0.15.0),
+published on 22 October 2026. The [0.15.0 changelog](../CHANGELOG.md#0150) records
+its integrated scope: scrolling library pagination, subtree filters, editable
+Library sources, bounded imports with previews during processing, configurable
+worker concurrency, faster 3MF and STEP processing, multi-material G-code fixes,
+and a unified image with optional GPU support. Read the
+[upgrade notes](../UPGRADE.md#0150-notes) for Python 3.14, DBOS 3.3.0,
+coordinated API/worker restarts, and the full-library re-derivation and backup
+requirements.
 
-Release preparation does not publish images or a tag. Download released builds
-from [GitHub Releases](https://github.com/xiao-villamor/PrintStash/releases).
-Future changes go under [Unreleased](../CHANGELOG.md#unreleased).
+Download released builds from [GitHub Releases](https://github.com/xiao-villamor/PrintStash/releases).
+Changes since 0.15.0 go under [Unreleased](../CHANGELOG.md#unreleased).
 SQLite plus local filesystem storage remain the default path; PostgreSQL,
 remote storage, cloud backups, and provider adapters are optional.
 
@@ -255,7 +255,7 @@ queue manager.
 - A verified, non-destructive MinIO-to-SeaweedFS migration helper, with MinIO
   removed from the normal Compose stack
 
-## 0.13: Storage safety and capture provenance (release candidate)
+## 0.13: Storage safety and capture provenance (delivered in 0.13.0)
 
 - Runtime-probed Verified, Guarded, and Unguarded storage tiers, durable
   publication intents, provider-bound ownership, and fail-closed recovery
