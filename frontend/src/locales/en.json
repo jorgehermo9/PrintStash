@@ -3765,7 +3765,6 @@
   "Metadata": "Metadata",
   "Toolpath": "Toolpath",
   "Preparing {kinds}…": "Preparing {kinds}…",
-  "{kind} failed: {reason}": "{kind} failed: {reason}",
   "Retry {kind}": "Retry {kind}",
   "aiSearch.searchLibrary": "Search library",
   "aiSearch.submitAi": "Search with AI",
@@ -4538,5 +4537,11 @@
   "similarity.emptyRejected": "No rejected matches",
   "similarity.emptyReviewedHelp": "Pairs appear here after you choose this action in their comparison.",
   "similarity.queueDisabledHelp": "New matches are paused. An administrator can enable analysis on the Similar models page.",
-  "Clear filters": "Clear filters"
+  "Clear filters": "Clear filters",
+  "{kinds} failed": "{kinds} failed",
+  "PrintStash couldn't read this file. It may be damaged, incomplete or use a feature that isn't supported yet. You can still download it.": "PrintStash couldn't read this file. It may be damaged, incomplete or use a feature that isn't supported yet. You can still download it.",
+  "This file is too large or complex to process. You can still download it.": "This file is too large or complex to process. You can still download it.",
+  "Processing stopped unexpectedly on the server. Try again; if it keeps failing, check the PrintStash logs.": "Processing stopped unexpectedly on the server. Try again; if it keeps failing, check the PrintStash logs.",
+  "PrintStash couldn't read or save this file in storage. Check that the storage is reachable, then try again.": "PrintStash couldn't read or save this file in storage. Check that the storage is reachable, then try again.",
+  "This couldn't be produced. Try again; if it keeps failing, check the PrintStash logs.": "This couldn't be produced. Try again; if it keeps failing, check the PrintStash logs."
 }

@@ -324,6 +324,37 @@ test.describe("model detail route", () => {
     await expect(page.getByRole("heading", { name: "Trashed source files" })).toHaveCount(0);
   });
 
+  test("explains failed outputs by their cause instead of the network", async ({ page }) => {
+    await page.setViewportSize({ width: 1920, height: 1080 });
+    // Native workers that could not start (issue #567) fail metadata and the
+    // 3D preview together, with a code the reader should never see.
+    await page.route("**/api/v1/files/1/derivatives", (route) =>
+      route.fulfill({
+        json: ["metadata", "viewer_stl"].map((kind) => ({
+          kind,
+          recipe_version: 1,
+          state: "failed",
+          attempts: 1,
+          failure_reason: "worker_failed",
+          updated_at: new Date().toISOString(),
+          retryable: true,
+        })),
+      }),
+    );
+
+    await page.goto("/models/1");
+    await page.getByRole("tab", { name: /Files/ }).click();
+
+    await expect(page.getByText("Metadata, 3D preview failed")).toBeVisible();
+    await expect(page.getByText(/stopped unexpectedly on the server/)).toHaveCount(1);
+    await expect(page.getByText(/reaching the server/)).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "Retry 3D preview" })).toBeVisible();
+    await page
+      .getByText("Metadata, 3D preview failed")
+      .locator("xpath=ancestor::li")
+      .screenshot({ path: test.info().outputPath("derivative-failures.png") });
+  });
+
   test("keeps viewer controls reachable inside the phone preview", async ({ page }) => {
     await page.setViewportSize({ width: 390, height: 844 });
 

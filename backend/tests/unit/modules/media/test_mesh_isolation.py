@@ -1668,8 +1668,10 @@ class TestWatchdogStartup:
 
 class TestCallbackWatchdog:
     def test_preserves_guardian_when_stopping_guarded_root(self, monkeypatch):
+        from app.modules.media import worker_bootstrap
+
         signals = []
-        monkeypatch.setattr(mesh_isolation.sys, "platform", "linux")
+        monkeypatch.setattr(worker_bootstrap, "pidfd_supported", lambda: True)
         monkeypatch.setattr(
             mesh_isolation.native_process, "process_tree_rss_bytes", lambda _pid: 2
         )
@@ -1687,3 +1689,20 @@ class TestCallbackWatchdog:
 
         assert signals == [(123, mesh_isolation.signal.SIGKILL)]
         assert monitor.failure_cause() is mesh_isolation.WorkerExitCause.MEMORY_LIMIT
+
+    def test_stops_the_whole_group_without_a_guardian(self, monkeypatch):
+        from app.modules.media import worker_bootstrap
+
+        groups = []
+        monkeypatch.setattr(worker_bootstrap, "pidfd_supported", lambda: False)
+        monkeypatch.setattr(
+            mesh_isolation.native_process, "process_tree_rss_bytes", lambda _pid: 2
+        )
+        monkeypatch.setattr(os, "killpg", lambda pid, sig: groups.append((pid, sig)))
+        monitor = mesh_isolation._CallbackWatchdog(
+            123, time.monotonic() + 30, 1, mesh_isolation.WorkerLifecycle.GUARDED
+        )
+
+        monitor._monitor()
+
+        assert groups == [(123, mesh_isolation.signal.SIGKILL)]
