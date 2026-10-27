@@ -81,6 +81,68 @@ class TestResolution:
             assert policy.resolve(restarted)[producer_group.definition].enabled is False
 
 
+class TestResolutionReads:
+    """One read of the controls per transaction, never across one."""
+
+    MESH = policy.SETTINGS[JobKind.DERIVATIVES_MESH]
+
+    @staticmethod
+    def _counted(db_session):
+        from sqlalchemy import event
+
+        reads: list[str] = []
+
+        def record(_conn, _cursor, statement, *_args):
+            if "FROM system_config" in statement:
+                reads.append(statement)
+
+        event.listen(db_session.get_bind(), "before_cursor_execute", record)
+        return reads, lambda: event.remove(
+            db_session.get_bind(), "before_cursor_execute", record
+        )
+
+    def test_reads_the_controls_once_per_transaction(
+        self, db_session, make_system_config
+    ):
+        make_system_config()
+        reads, stop = self._counted(db_session)
+        try:
+            policy.resolve(db_session)
+            policy.resolve(db_session)
+        finally:
+            stop()
+        assert len(reads) == 1
+
+    def test_a_later_transaction_sees_another_sessions_change(
+        self, db_session, make_system_config
+    ):
+        make_system_config()
+        assert policy.resolve(db_session)[JobKind.DERIVATIVES_MESH].enabled is True
+        db_session.rollback()
+        with Session(db_session.get_bind()) as other:
+            policy.update(other, {self.MESH: False})
+
+        assert policy.resolve(db_session)[JobKind.DERIVATIVES_MESH].enabled is False
+
+    def test_its_own_uncommitted_change_is_seen(self, db_session, make_system_config):
+        make_system_config()
+        policy.resolve(db_session)
+        policy.update(db_session, {self.MESH: False}, commit=False)
+
+        assert policy.resolve(db_session)[JobKind.DERIVATIVES_MESH].enabled is False
+
+    def test_a_rolled_back_savepoint_restores_the_controls(
+        self, db_session, make_system_config
+    ):
+        make_system_config()
+        savepoint = db_session.begin_nested()
+        policy.update(db_session, {self.MESH: False}, commit=False)
+        assert policy.resolve(db_session)[JobKind.DERIVATIVES_MESH].enabled is False
+        savepoint.rollback()
+
+        assert policy.resolve(db_session)[JobKind.DERIVATIVES_MESH].enabled is True
+
+
 class TestDiscovery:
     def test_disabled_sources_offer_neither_subjects_nor_retry_deadlines(
         self, db_session, producer_group, artifact, make_system_config, make_derivative
