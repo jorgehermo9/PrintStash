@@ -34,9 +34,35 @@ def _key_material() -> bytes:
         return generated
 
 
+# The cipher for the key last read, and what identified that key: the
+# configured value, or the key file's path and stat. Encrypting a credential
+# is per request, while the key changes only on a restore or an edit.
+_cached: tuple[tuple[object, ...], Fernet] | None = None
+
+
+def _identity() -> tuple[object, ...] | None:
+    configured = str(settings.secrets_key).strip()
+    if configured:
+        return ("configured", configured)
+    path = Path(settings.secrets_key_file)
+    try:
+        stat = path.stat()
+    except FileNotFoundError:
+        return None
+    return ("file", str(path), stat.st_ino, stat.st_size, stat.st_mtime_ns)
+
+
 def _fernet() -> Fernet:
+    global _cached
+    identity = _identity()
+    if identity is not None and _cached is not None and _cached[0] == identity:
+        return _cached[1]
     derived = hashlib.sha256(_key_material()).digest()
-    return Fernet(base64.urlsafe_b64encode(derived))
+    cipher = Fernet(base64.urlsafe_b64encode(derived))
+    # A key generated just now has a stat only once it was written.
+    identity = identity or _identity()
+    _cached = None if identity is None else (identity, cipher)
+    return cipher
 
 
 def encrypt_secret(value: str | None) -> str | None:

@@ -37,6 +37,7 @@ template exits, and its workers with it.
 from __future__ import annotations
 
 import fcntl
+import gc
 import importlib
 import json
 import os
@@ -198,6 +199,11 @@ def serve(control_descriptor: int) -> int:
     os.close(null)
     for name in PRELOAD:
         importlib.import_module(name)
+    # Every worker collects garbage after its mesh; freezing the preloaded
+    # modules keeps those collections to the job's own objects and leaves the
+    # shared pages unwritten.
+    gc.collect()
+    gc.freeze()
     if threading.active_count() != 1:
         os.close(announce)
         return REFUSED_THREADS

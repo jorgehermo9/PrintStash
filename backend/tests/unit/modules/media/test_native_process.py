@@ -147,3 +147,37 @@ class TestNativeMemoryBudget:
         monkeypatch.setattr(native_process, "memory_limit_bytes", lambda: None)
 
         assert native_process.native_memory_budget_bytes() == 2 * 1024**3
+
+
+class TestProcessRssBytes:
+    @staticmethod
+    def _idle_child():
+        import subprocess
+        import sys
+
+        child = subprocess.Popen(
+            [sys.executable, "-c", "print(flush=True); import sys; sys.stdin.read()"],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+        )
+        # Started: its resident size no longer grows while it waits on stdin.
+        child.stdout.readline()
+        return child
+
+    def test_reports_the_resident_size_the_kernel_reports(self) -> None:
+        child = self._idle_child()
+        try:
+            expected = next(
+                int(line.split()[1]) * 1024
+                for line in Path(f"/proc/{child.pid}/status").read_text().splitlines()
+                if line.startswith("VmRSS:")
+            )
+            assert native_process.process_rss_bytes(child.pid) == expected
+        finally:
+            child.communicate()
+
+    def test_an_exited_process_has_no_resident_size(self) -> None:
+        child = self._idle_child()
+        child.communicate()
+
+        assert native_process.process_rss_bytes(child.pid) is None

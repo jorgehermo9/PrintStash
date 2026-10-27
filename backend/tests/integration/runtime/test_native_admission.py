@@ -170,6 +170,30 @@ class TestLocalResourcePool:
                 released.set()
             assert future.result(timeout=5) is True
 
+    def test_wakes_a_waiter_when_this_process_releases(self, tmp_path, monkeypatch):
+        from app.runtime import native_admission
+
+        # Far beyond the test's patience: only the release itself can wake it.
+        monkeypatch.setattr(native_admission, "_WAIT_SECONDS", 60.0)
+        pool = LocalResourcePool(tmp_path)
+
+        def claim():
+            with pool.reserve(
+                Resources(1, 80), Resources(2, 100), checkpoint=lambda: None
+            ):
+                return True
+
+        with ThreadPoolExecutor(1) as executor:
+            with pool.reserve(
+                Resources(1, 40), Resources(2, 100), checkpoint=lambda: None
+            ):
+                future = executor.submit(claim)
+                deadline = time.monotonic() + 5
+                while not pool.has_waiters(checkpoint=lambda: None):
+                    assert time.monotonic() < deadline, "the claim never queued"
+                    time.sleep(0.01)
+            assert future.result(timeout=5) is True
+
     def test_fails_closed_when_its_queued_ticket_disappears(self, tmp_path):
         pool = LocalResourcePool(tmp_path)
         calls = 0

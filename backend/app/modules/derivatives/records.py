@@ -56,20 +56,25 @@ _SATISFIED = {DerivativeState.READY, DerivativeState.SKIPPED}
 def regenerations(
     session: Session, *, definitions: Sequence[JobKind] = ()
 ) -> dict[DerivativeKind, datetime]:
-    result = {
-        row.kind: ensure_utc(row.requested_at)
-        for row in session.exec(select(DerivativeRegeneration)).all()
-    }
-    if definitions:
-        rows = session.exec(
-            select(DerivativeGroupRegeneration).where(
-                col(DerivativeGroupRegeneration.definition).in_(definitions)
-            )
-        ).all()
-        for row in rows:
-            requested = ensure_utc(row.requested_at)
-            if row.kind not in result or requested > result[row.kind]:
-                result[row.kind] = requested
+    # Kind-wide and group requests in one statement: callers ask per claim.
+    kind_wide = select(
+        col(DerivativeRegeneration.kind), col(DerivativeRegeneration.requested_at)
+    )
+    requests = (
+        kind_wide.union_all(
+            select(
+                col(DerivativeGroupRegeneration.kind),
+                col(DerivativeGroupRegeneration.requested_at),
+            ).where(col(DerivativeGroupRegeneration.definition).in_(definitions))
+        )
+        if definitions
+        else kind_wide
+    )
+    result: dict[DerivativeKind, datetime] = {}
+    for kind, requested_at in session.execute(requests).tuples():
+        requested = ensure_utc(requested_at)
+        if kind not in result or requested > result[kind]:
+            result[kind] = requested
     return result
 
 

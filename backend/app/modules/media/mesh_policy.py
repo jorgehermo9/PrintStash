@@ -7,7 +7,6 @@ It does not parse geometry or select thumbnail strategies.
 from __future__ import annotations
 
 import ctypes
-import ctypes.util
 import gc
 import struct
 from collections.abc import Iterator
@@ -44,8 +43,9 @@ def reclaim_memory() -> None:
     global _LIBC
     try:
         if _LIBC is None:
-            libc_name = ctypes.util.find_library("c")
-            _LIBC = ctypes.CDLL(libc_name) if libc_name else False
+            # The process's own symbols already include the C library; looking
+            # it up by name runs ldconfig in a subprocess, once per worker.
+            _LIBC = ctypes.CDLL(None)
         if _LIBC and hasattr(_LIBC, "malloc_trim"):
             _LIBC.malloc_trim(0)
     except OSError, AttributeError:  # pragma: no cover - platform dependent

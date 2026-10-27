@@ -34,8 +34,30 @@ class GroupPolicy:
     overridden: bool
 
 
+# session.info key: the controls already read in this session's transaction.
+_RESOLVED = "derivative_policy_resolved"
+
+
+def _scope(session: Session) -> object | None:
+    """The transaction (or savepoint) whose snapshot a read belongs to."""
+    return session.get_nested_transaction() or session.get_transaction()
+
+
+def _forget(session: Session) -> None:
+    session.info.pop(_RESOLVED, None)
+
+
 def resolve(session: Session) -> dict[JobKind, GroupPolicy]:
-    """One fresh database read; process-local overlays are never authoritative."""
+    """One fresh database read per transaction; process overlays never count.
+
+    A claim, a discovery pass and a publication each ask several times inside
+    one transaction, whose snapshot cannot change under them; every write to
+    the controls goes through ``lock``, which forgets the read.
+    """
+    scope = _scope(session)
+    cached = session.info.get(_RESOLVED)
+    if scope is not None and cached is not None and cached[0] is scope:
+        return dict(cached[1])
     config = session.exec(
         select(SystemConfig)
         .where(SystemConfig.id == 1)
@@ -50,11 +72,13 @@ def resolve(session: Session) -> dict[JobKind, GroupPolicy]:
             default_enabled=default,
             overridden=override is not None,
         )
-    return controls
+    session.info[_RESOLVED] = (_scope(session), controls)
+    return dict(controls)
 
 
 def lock(session: Session) -> SystemConfig:
     """Serialize settings edits with producer admission on both supported DBs."""
+    _forget(session)
     begin_write(session, immediate=True)
     config = session.exec(
         select(SystemConfig)
@@ -107,6 +131,7 @@ def update(
     config = lock(session)
     for name, value in changes.items():
         setattr(config, name, value)
+    _forget(session)
     config.updated_at = utcnow()
     session.add(config)
     if commit:

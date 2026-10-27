@@ -55,6 +55,11 @@
 
 ### Performance
 
+- Search updates share bounded preparation across overlapping Model and collection changes while retaining independent retry checkpoints.
+- G-code metadata and toolpath previews start once an import settles instead of re-checking for work every few seconds while Models are still arriving; mesh thumbnails still start during the import.
+- The background job engine on SQLite skips a connection check on every queue look, about a quarter fewer engine database statements during an import and a third fewer when idle.
+- Mesh workers spend about 10% less CPU: each starts with its preloaded libraries frozen for garbage collection, reclaims memory without starting a helper process, and is watched for memory with a cheaper read.
+
 - Pull request CI runs the full frontend tests in parallel shards and splits the longest backend partitions, preserving the required checks and separate Deep CI coverage.
 
 ## 0.15.0

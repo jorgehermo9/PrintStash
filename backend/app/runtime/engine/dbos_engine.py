@@ -272,7 +272,11 @@ class DbosJobEngine(JobEngine):
             config["dbos_system_schema"] = self.schema
         else:
             config["db_engine_kwargs"] = {
-                "creator": _sqlite_system_connection(self.url)
+                "creator": _sqlite_system_connection(self.url),
+                # A local file connection cannot be dropped by a server, so
+                # DBOS's default liveness probe is one wasted statement for
+                # every checkout of every queue poll.
+                "pool_pre_ping": False,
             }
         return config
 
