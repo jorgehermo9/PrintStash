@@ -30,6 +30,7 @@ from app.db.models import (
     BackupRun,
     DerivativeGroupRegeneration,
     DerivativeKind,
+    DerivativeRegeneration,
     DerivativeState,
     Document,
     DocumentKind,
@@ -320,6 +321,13 @@ def build_ingest_request(
         session,
         IngestRequest(job_id=job_id, kind=kind, owner_user_id=owner.id, **overrides),
     )
+
+
+def build_derivative_regeneration(
+    session: Session, kind: DerivativeKind, **overrides: Any
+) -> DerivativeRegeneration:
+    """An administrator's "regenerate all" for every output of *kind*."""
+    return save(session, DerivativeRegeneration(kind=kind, **overrides))
 
 
 def build_derivative_group_regeneration(

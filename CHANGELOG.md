@@ -2,6 +2,150 @@
 
 ## Unreleased
 
+### Fixed
+
+- **Previews, metadata and 3D views work again on hosts whose kernel or container predates pidfd (Linux 5.3+), such as some NAS systems.** Since 0.15.0 every native mesh worker failed there; workers now fall back to process-group supervision and the server logs a warning once.
+- Failed previews, metadata and 3D views explain the cause in plain terms (unreadable file, too large, processing stopped, storage unavailable) instead of a misleading server-connection error, and outputs that failed for the same reason share one explanation.
+- Similar comparisons keep aligned review actions, larger shared-scale previews, measurements and match evidence together without nested information dropdowns. Match rows show their explanation directly beside a clear Compare action, with a side-by-side comparison pictogram in place of the exchange arrows.
+
+- Language choices open in a framed menu with keyboard navigation and return focus to their button. Saved views uses the full quick-access row with a visible open state and compact search focus.
+- Model and collection names open a compact editor beside the title with Save and Cancel. Renaming keeps Add tags, Favorite and the page controls visible; full Model details remain a separate action.
+- Similar models opens on visual matches with direct review tabs, separate analysis settings/history, readable pair previews and clear confirmation actions. Comparison links retain review filters, and empty states describe the selected review state accurately.
+- The Model Similar tab keeps every review state visible without a horizontal scrollbar, with consistently sized action buttons aligned below the states in narrow panels.
+- Library filter loading stays aligned with the filter controls without adding an empty spinner row.
+- Wiki links open the PrintStash documentation site on desktop and mobile.
+
+- Desktop Library filters open beside the results with active criteria and expanded dates visible, while collection browsing keeps quick access to Favorites, Saved views, Printers and Trash.
+- Library tools opens beside its button and preserves Similar models, New collection and selection. My workspace keeps Builds and Statistics separate and avoids duplicating the Library printer shortcut.
+- Keep the rename pen vertically aligned with Model and collection titles, including wrapped names.
+- Empty collections offer an upload into the current folder; read-only members see permission guidance, and active filters offer filter recovery.
+- Multipart member cards keep Model names readable when file badges wrap on desktop.
+
+- Builds and Pending Imports now provide visible starting links and guidance for creating a build or capturing a model URL.
+
+- Collection delete confirmations explain that folders cannot be restored and their Models recover from Trash into All Models.
+
+- Keep multipart set names and counts readable on narrow screens by placing header actions below the title.
+- Backup uploads explain invalid filenames, damaged archives, and existing copies so operators can correct the file and retry.
+
+- Member Settings explain administrator-only remote storage access, omit unavailable version information, disable update checks that require an administrator, and explain why backup controls are unavailable.
+- Empty Statistics periods explain that reports use completed jobs and offer a direct link to manage printers while keeping the period controls available.
+- Canceling a new filament or printer preset discards its draft and returns keyboard focus to the New button. Collapsing the form still preserves a draft for later.
+- Collection history and Recent folders follow stable identities after heading or bulk renames. Unavailable destinations offer explicit recovery instead of showing an empty library or unrelated results.
+
+- Recent folders now opens inside the screen edge, and long collection paths
+  wrap within the Model Overview panel without horizontal overflow.
+- Collection and Model headings offer a pen button and double-click shortcut
+  for renaming, while respecting editing permissions.
+- Backup settings keep titles and translated action labels readable on narrow screens.
+- Members no longer see a permanently loading server version in Settings; storage settings explain when administrator access is required.
+- URL capture now explains invalid links, and offline printer errors identify the printer connection instead of blaming the PrintStash server. Offline controls explain their connection requirement; transport details remain in Diagnostics.
+- Notification channel and Spoolman form fields expose their visible labels to assistive technology and focus correctly when their labels are clicked.
+- The collection access picker uses an opaque surface and opens outside its Settings card, keeping options readable and reachable on narrow screens.
+
+- Dropdown menus stay on screen on narrow and short displays, including Statistics customization and Model actions. Statistics options remain above the page header in very short windows.
+- Builds is reachable from the account menu and mobile More sheet. Inbox, Builds,
+  Search, and the getting-started guide have distinct, translated browser titles.
+- Add printer setup scrolls within short screens so every field and action remains reachable. Its dialog is announced by its title to assistive technology.
+
+- Saved-view naming dialogs focus the name field immediately; renaming has a visible accessible label and selects the existing name for keyboard replacement.
+- G-code layer controls remain usable across the full slider on phones. Mesh-only zoom, reset and dimensions overlays now appear only in the 3D model view.
+
+- Completed uploads identify whether they created a Model or saved to an existing
+  one, with a visible completion notice and Open Model action. The result link
+  remains available in Notifications after reloading.
+
+### Performance
+
+- Search updates share bounded preparation across overlapping Model and collection changes while retaining independent retry checkpoints.
+- G-code metadata and toolpath previews start once an import settles instead of re-checking for work every few seconds while Models are still arriving; mesh thumbnails still start during the import.
+- The background job engine on SQLite skips a connection check on every queue look, about a quarter fewer engine database statements during an import and a third fewer when idle.
+- Mesh workers spend about 10% less CPU: each starts with its preloaded libraries frozen for garbage collection, reclaims memory without starting a helper process, and is watched for memory with a cheaper read.
+
+- Pull request CI runs the full frontend tests in parallel shards and splits the longest backend partitions, preserving the required checks and separate Deep CI coverage.
+
+## 0.15.0
+
+**Back up before upgrading to 0.15.0. Every model file will be re-derived in
+the background; a large library on a 4 GB NAS can keep the CPU busy for hours.
+DBOS 3.3.0 and application database migrations require restoring the pre-upgrade
+backup to roll back.**
+
+Stop all API and worker processes before upgrading them together. Source
+installations require Python 3.14 or newer; Docker images include the runtime.
+See [0.15.0 upgrade notes](UPGRADE.md#0150-notes).
+
+- **The Unraid template starts again with the GPU field left blank.** Unraid
+  passes an empty Device field to Docker as `--device=''`, which stopped every
+  install without a GPU before it started. The Intel or AMD GPU is now an
+  optional **GPU: Intel or AMD (optional)** field shown with the main
+  settings: enter `/dev/dri` or leave it blank for the CPU. Existing installs
+  that entered `/dev/dri` in the old field keep working; to switch to the new
+  field, update the template, enter `/dev/dri` there and remove the old
+  Device entry.
+
+- A GPU mapped as `/dev/dri` is now usable without naming its group. The
+  container used to drop every supplementary group when it switched to
+  `PUID`/`PGID`, including the host's render group and any `--group-add`, so
+  Intel and AMD GPUs were visible but could not be opened and work stayed on
+  the CPU. It now runs in the group that owns each `/dev/dri` node and keeps
+  groups granted with `--group-add`.
+
+- Thumbnails drawn without a GPU take less CPU: the renderer now tests only
+  the pixels each row of a triangle covers instead of its whole bounding box,
+  most of which a long thin triangle leaves empty. The thumbnails are
+  byte-for-byte the same, so nothing is regenerated.
+
+- STEP parts in the Docker image get their exact B-rep volume and similarity
+  fingerprints again. The image lacked `libgl1`, which OpenCASCADE's binding
+  loads even without a display, so every B-rep read reported STEP as
+  unavailable. The image build now fails if that binding cannot load.
+
+- Thumbnails, measurements and previews of a ZIP's Models now start while the
+  rest of the ZIP is still being imported, instead of after its last file. The
+  import still shows every Model almost as soon as before, because the derived
+  work looks for new Models every two seconds
+  (`VAULT_JOBS_PACED_DISCOVERY_SECONDS`) rather than after each file. Search
+  indexing still waits for the import to finish.
+
+- Importing a ZIP no longer wakes the derivative passes after every file. They
+  would only wait for the import to end, so they now stay asleep until it does,
+  leaving the database to the import, so large ZIPs import and finish
+  processing sooner.
+
+- A ZIP prepared while the server's clock stepped back (an NTP or virtual
+  machine time resync) no longer stays at *Queued* forever: the Task Center
+  now offers *Choose files* as soon as the preparation ends, whatever time the
+  server stamped on it.
+
+- Administrators choose how many models are processed at once on Settings →
+  Background work → Worker settings. *Automatic* keeps the CPU-and-memory
+  default; a chosen count may go up to what the native memory pool fits,
+  overrides `VAULT_MAX_RENDER_JOBS`, and applies without a restart (separate
+  worker processes apply it when they restart). *Use default* clears it.
+
+- The default number of simultaneous mesh jobs now follows CPUs and memory:
+  one per usable CPU plus one, no more than fit the native memory pool, up to
+  eight. Two- and three-CPU installs used to process one file at a time and now
+  run three or four, so large imports finish in about half the time.
+  `VAULT_MAX_RENDER_JOBS` still overrides it; local AI inference keeps its own
+  default of one job per two CPUs unless that variable is set.
+
+- STEP measurements and previews no longer reserve the whole native memory
+  pool. Each part is first admitted under 1 GiB, so STEP files are derived
+  alongside other work instead of one at a time; a part that does not fit runs
+  once more with the whole pool, and nothing is published twice. A new
+  `mesh_escalation` log and `printstash_mesh_escalations_total` counter report
+  those reruns.
+
+- STEP files are tessellated at 0.05 mm instead of 0.01 mm, the precision the
+  similarity fingerprints already used: about a quarter of the triangles, so
+  STEP measurements, previews and viewer models are made roughly four times
+  faster in half the memory. Dimensions change by under 0.1% and previews are
+  visually unchanged. A STEP whose mesh exceeds the memory allowance is now
+  reported as a resource limit rather than an invalid file. Existing STEP
+  outputs are re-derived once; other formats are not.
+
 - 3MF packages are read through lib3mf, the 3MF Consortium's reference
   library, instead of an XML tree: large plates read two to three times faster
   in a fraction of the memory, and packages that ran out of memory before now
@@ -68,8 +212,8 @@
 - Interactive background work can prepare its next queued job while the
   current job runs, using the existing queue and admission limits.
 
-- Search projection waits for an import to finish, like thumbnails do. Its
-  writes competed with the import for SQLite's single writer. A 300-file ZIP
+- Search projection waits for an import to finish while previews can start
+  during the import. Its writes competed with the import for SQLite's single writer. A 300-file ZIP
   import on a 4-core test server took 60 s instead of 121 s (0.14.0: 55–67 s).
   Library browsing and filters do not depend on it.
 
@@ -217,8 +361,8 @@
   The check that waits for old derivation work to drain read the previous
   version's engine database with a client that expects the new schema, so it
   failed on every existing install, even with nothing queued. It now reads only
-  the columns every version has; a queue that really still holds old work is
-  still refused.
+  the columns every version has; waiting work from the old ordering is
+  re-ranked on startup.
 
 - Adding a G-code revision to a Model that comes from a remote Library source no
   longer ends in "[500] internal_server_error". PrintStash never writes back to a
@@ -731,7 +875,7 @@
 
 - Local ONNX models reserve a shared, bounded memory partition across API and worker processes, retain warm reuse, retire idle residents under pressure, and release their credits after guarded process-tree termination.
 
-**Source installs require Python 3.14 or newer.** See [the upgrade guide](UPGRADE.md#unreleased-python-314).
+**Source installs require Python 3.14 or newer.** See [the upgrade guide](UPGRADE.md#0150-python-314).
 
 - Coordinate mesh CPU/RAM credits across local API and worker processes. Bound
   source preparation separately by bytes and I/O slots, retain native credits
@@ -790,13 +934,11 @@
   failures for unchanged input, and backfill accurate metadata with recipe 3 (#259).
 
 
-**Upgrade note:** The background engine now uses DBOS 3.0. Stop all API and
-worker processes before upgrading together. Engine state migrates on startup.
-Rolling back means restoring the application database and managed files from
-the copy taken before the upgrade: 0.14.0 does not start on the migrated
-database, so discarding the engine state alone is not enough. Every model file
-is re-derived in the background after the upgrade.
-See [the upgrade guide](UPGRADE.md#unreleased-dbos-30).
+**Upgrade note:** The background engine now uses DBOS 3.3.0. Stop all API and
+worker processes before upgrading together. Restore the pre-upgrade application
+database and managed files to roll back; discarding the DBOS engine state alone
+is insufficient. Every model file is re-derived in the background after upgrading.
+See [the upgrade guide](UPGRADE.md#0150-dbos-30).
 
 ### Added
 
@@ -913,7 +1055,7 @@ See [the upgrade guide](UPGRADE.md#unreleased-dbos-30).
 
 - Keep native STEP/STP conversion within small worker memory budgets by using serial tessellation, and classify B-rep allocation failures as resource refusals.
 
-- Background work starts on DBOS 3.0, with a persistent reconciler schedule
+- Background work starts on DBOS 3.3.0, with a persistent reconciler schedule
   that survives process restarts and is recreated after restore.
 
 - Late derivative results can no longer overwrite cancellation, retries, regeneration, trashed Artifacts or replaced source bytes. Stale Job executions also cannot settle a newer attempt or reclaim its staging files.

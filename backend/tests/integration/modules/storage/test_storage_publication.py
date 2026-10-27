@@ -314,6 +314,55 @@ class TestPublicationTransactions:
             assert proof.state.value == "committed"
 
 
+class TestSqliteLocatorExclusion:
+    """On SQLite the locator lock is the database writer: no other connection
+    can start a write until the holder's transaction ends, whether the anchor
+    row is new or already there, and whether the caller had begun a deferred
+    transaction before asking for the lock."""
+
+    @pytest.fixture
+    def sqlite_engine(self, tmp_path):
+        engine = create_engine(
+            f"sqlite:///{tmp_path / 'locator.sqlite'}",
+            connect_args={"check_same_thread": False},
+        )
+        event.listen(engine, "connect", _set_sqlite_pragmas)
+        SQLModel.metadata.create_all(engine)
+        try:
+            yield engine
+        finally:
+            engine.dispose()
+
+    @pytest.mark.parametrize("opened", ["idle", "deferred"])
+    @pytest.mark.parametrize("anchor", ["new", "existing"])
+    def test_holds_the_writer_until_the_transaction_ends(
+        self, sqlite_engine, anchor, opened
+    ):
+        import sqlite3
+
+        from app.db.transactions import begin_write
+        from app.modules.storage.storage_publication import lock_publication_locator
+
+        locator = {"backend": "local", "namespace": "thumbs", "key": "file/1.webp"}
+        if anchor == "existing":
+            with Session(sqlite_engine) as earlier:
+                lock_publication_locator(earlier, **locator)
+                earlier.commit()
+        other = sqlite3.connect(sqlite_engine.url.database, timeout=0)
+        try:
+            with Session(sqlite_engine) as holder:
+                if opened == "deferred":
+                    begin_write(holder)
+                lock_publication_locator(holder, **locator)
+                with pytest.raises(sqlite3.OperationalError, match="locked"):
+                    other.execute("BEGIN IMMEDIATE")
+                holder.commit()
+            other.execute("BEGIN IMMEDIATE")
+            other.rollback()
+        finally:
+            other.close()
+
+
 class TestFirstReservation:
     def test_concurrent_first_reservations_have_one_current_winner(
         self, storage_publication_engine

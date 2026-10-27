@@ -9,40 +9,80 @@ gate** only: it fails if any of those jobs fails or is skipped. Do not add path
 filters to this required workflow.
 
 Migration upgrade tests run in three alphabetic shards so a slow runner does
-not cancel the entire suite at the 15-minute per-job limit. The repository
-test suite checks that every backend test file belongs to exactly one shard.
+not cancel the entire suite at the 15-minute per-job limit. The largest domain
+group runs as three partitions (ingestion/derivatives, library/media, and
+administration/backups/identity/inference), and E2E tests run in two alphabetic
+partitions. Each reports its twenty slowest cases to guide future balancing.
+The repository test suite checks that every backend test file belongs to
+exactly one shard; all fifteen partitions use the same PR marker exclusions.
+
+Frontend formatting, lint, production build (including type checking), and both
+workspace-package test suites run separately from two Vitest app-test shards.
+The shards cover the complete app and repository suite once, without changed-file
+selection. None waits for the other jobs, and `PR gate` requires all of them.
+This removes the serial app-test run from the build job without moving validation
+to Deep CI. Coverage collection and its floors remain unchanged in Deep CI.
 
 `Deep CI` runs nightly or by manual dispatch. It checks branch coverage and
 area/module floors, the `scale` lane (library reads timed at 25,000
 collections and 100,000 Models in four 13-case jobs, each capped at 30 minutes), external provider
 contracts, Python/native compatibility, the full browser configurations and the
-extension's real backend and ChromeDriver flows. Browser retries retain diagnostic
-traces, and every Deep CI Playwright command fails when a case passes only after a
+extension's real backend and ChromeDriver flows. The main real-backend browser
+suite uses four Playwright shards on separate runners. Each shard owns a fresh
+backend, database, Vite server and printer emulator; tests remain serial within
+it. Onboarding, environment and storage configurations keep their own jobs.
+Each real-browser job uploads a report named for its suite and shard. Browser
+retries retain diagnostic traces, and every Deep CI Playwright command fails when a case passes only after a
 retry. Before tagging a release, dispatch it on the exact `main`
 commit to be tagged and wait for success. Release publication requires green
 `CI` and `Deep CI` runs for that SHA. Nightly and manual `latest` publication
 require a green `CI` run for the same SHA on `main`.
 
-Python compatibility runs two disjoint file partitions of `full-ordinary` and
-the serial `full-resources` lane in independent jobs. The ordinary partitions
-include slow tests and retain work-stealing;
-the resource phase runs serially so each real service starts once. Tests marked
-`native_host` also run in that mandatory phase: independent test vaults have
-independent admission pools, so an xdist companion would consume CPU/RAM outside
-the pool whose wall-clock bounds are being measured. Fairness still runs real
-DBOS/native workers with the same budgets, six arrivals and 110/130-second limits.
-Coverage appends that serial phase before evaluating its unchanged floors. Their marker
-sets are disjoint and together cover the full lane, excluding the separately
-measured scale and coverage gates. Both phases must succeed; fail-fast is disabled
-so one failure preserves the other result. Each retains the 60-minute limit.
-The `full` lane and backend branch-coverage job keep their existing composition.
+Backend coverage runs in twelve disjoint ordinary file partitions and ten serial
+resource partitions on separate runners. Ordinary partitions include slow tests
+and retain work-stealing. The resource partitions select PostgreSQL, S3,
+remote storage, BGCode and host-native tests independently. PostgreSQL uses six
+separate runners: three migration groups, platform, domains and contract/E2E
+flows. Each PostgreSQL runner starts its own container; fixture state is never
+shared across jobs. Each partition runs
+serially so service fixtures are shared and host-native measurements have
+exclusive resources. Marker expressions assign tests with multiple resource
+markers to the first matching group in that order. Repository tests check every
+file/marker combination for gaps and overlap; the local `full-resources` lane still
+runs the complete resource set unless `PRINTSTASH_TEST_RESOURCE_EXPRESSION`
+narrows it. Resource markers are excluded from every ordinary partition; each
+test executes once across the matrix. Repository tests enforce
+that every ordinary test file belongs to exactly one partition. The twelve
+ordinary coverage partitions cover the same test tree as required CI: unit,
+contract, E2E, two API groups, three migration groups, platform, two domain groups
+and repository contracts. Required CI subdivides its slowest ordinary groups;
+Deep CI retains its independent coverage partitions, includes their slow tests,
+and measures them under coverage.
+
+Every shard measures branches and uploads uniquely named raw coverage data,
+using relative source paths so results from different checkout locations refer
+to the same application modules. The dependent **Backend coverage gate** runs
+only after every shard and its artifact upload succeed. It combines the raw data,
+then writes JSON/HTML reports and applies the unchanged aggregate/module floors
+once. Coverage is the union of executed statements and branches, never an average
+of shard percentages. Missing coverage files fail their upload; failed shards
+prevent the combined gate from running. The separately measured scale tests and
+the coverage-floor tests are excluded from the shard runs. The floor tests run
+only against the completed combined report. Each shard has a 60-minute limit;
+the combination job has a 15-minute limit. The local `coverage` lane retains its
+single-machine composition.
 
 Deep CI also measures production library startup against real disposable SQLite
 corpora: 91 Models in 27 collections and a 90-Model collection. Both jobs build
 production assets and use the production nginx template, an active service
-worker, 30 warm reloads and 20 fresh authenticated profiles in English/Spanish.
-Individual JSON samples and browser evidence are uploaded. Hosted runners record
-trends; `STARTUP_ENFORCE_BUDGET=1` enforces the 500 ms median / 800 ms p95 warm
+worker, three warm reloads and two fresh authenticated profiles per language
+(English/Spanish). This short sample checks startup behaviour on every nightly
+and manual run. For performance investigations, dispatch Deep CI with
+`startup_benchmark: true` to collect the full 30 warm reloads and 20 fresh
+profiles per language; local benchmark defaults remain unchanged. Small CI
+samples establish functionality, not statistically comparable timing trends.
+Individual JSON samples and browser evidence are uploaded. Full benchmark runs
+on hosted runners record trends; `STARTUP_ENFORCE_BUDGET=1` enforces the 500 ms median / 800 ms p95 warm
 budget and 1 s fresh-profile median on the reference machine. Tracing is disabled
 for timing samples. Keep local measurements and acceptance reports in the
 ignored `reports/` directory.
@@ -93,7 +133,12 @@ new workflow, then compare subsequent hot-cache runs using the same timestamps.
 ## Mesh resource gate
 
 Deep CI builds the actual full production image on amd64 and arm64 and runs
-the real API and DBOS engine with 1 GiB and 4 GiB cgroup ceilings. The gate
+the real API and DBOS engine with 1 GiB and 4 GiB cgroup ceilings. Each native
+architecture builds its image once, then tests both ceilings in separate fresh
+containers. The 4 GiB check still runs after a 1 GiB failure; either failure
+fails the job. Both JSON reports are uploaded together. This reduces image builds
+from four to two; the memory checks run sequentially within each architecture,
+so elapsed-time savings depend on build and test durations. The gate
 fails on OOM kills, unresponsive API, renewed terminal work, leaked workers,
 unexplained staging/capacity reservations, or parent RSS growth after warm-up.
 It exercises synthetic nested 3MF expansion, malformed packages, sudden

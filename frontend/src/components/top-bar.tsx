@@ -12,6 +12,7 @@ import {
   ChevronDown,
   BookOpen,
   Inbox,
+  Layers,
   LogOut,
   Printer,
   Settings,
@@ -28,6 +29,8 @@ import { useI18n } from "@/lib/i18n";
 import { TaskList } from "@/components/task-list";
 import { subscribeArchiveReviewRequests } from "@/lib/archive-review-events";
 import { DropdownMenu } from "@/components/ui/dropdown-menu";
+import { Button } from "@/components/ui/button";
+import { useMediaQuery } from "@/lib/use-media-query";
 import {
   clearCompletedTasks,
   listTasks,
@@ -37,7 +40,7 @@ import {
   TaskItem,
 } from "@/lib/task-center";
 
-const WIKI_URL = "https://xiao-villamor.github.io/PrintStash/";
+const WIKI_URL = "https://www.printstash.org/docs/";
 
 // `lastVaultHref` reads the remembered collection out of localStorage — an
 // external store. Same-tab writes are picked up on the next render (a route
@@ -51,6 +54,7 @@ export function TopBar() {
   useUiLocale();
   const { t } = useI18n();
   const pathname = usePathname();
+  const desktop = useMediaQuery("(min-width: 768px)");
   const router = useRouter();
   const { user, loading, logout } = useAuth();
   const startup = useLibraryStartup();
@@ -144,6 +148,7 @@ export function TopBar() {
           }
         >
           <TaskList
+            onNavigate={() => setTasksOpen(false)}
             tasks={tasks}
             onClear={() => {
               clearCompletedTasks();
@@ -171,28 +176,35 @@ export function TopBar() {
             role="menu"
             className="hidden sm:block"
             trigger={
-              <button
+              <Button
                 type="button"
+                variant="ghost"
+                size="sm"
                 data-menu-trigger
                 onClick={() => setProfileOpen((v) => !v)}
-                className="group flex items-center space-x-2 rounded-md px-1.5 py-1 transition-[background-color,transform] duration-press active:scale-[0.98] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 hover:bg-muted"
+                className="group"
                 aria-haspopup="menu"
                 aria-expanded={profileOpen}
               >
-                <div className="w-8 h-8 rounded-full bg-muted flex items-center justify-center text-muted-foreground font-medium text-sm">
+                <div
+                  aria-hidden="true"
+                  className="w-8 h-8 rounded-full bg-muted flex items-center justify-center text-muted-foreground font-medium text-sm"
+                >
                   {user?.username.charAt(0).toUpperCase() ?? "…"}
                 </div>
                 <span className="text-sm font-medium text-foreground group-hover:text-foreground hidden sm:block">
-                  {user?.username ?? "…"}
+                  {t("nav.myWorkspace")}
                 </span>
                 <ChevronDown
                   className={`h-4 w-4 text-muted-foreground transition-transform group-hover:text-muted-foreground hidden sm:block ${profileOpen ? "rotate-180" : ""}`}
                 />
-              </button>
+              </Button>
             }
           >
-            <ProfileMenu
+            <WorkspaceMenu
               pathname={pathname}
+              username={user?.username ?? "…"}
+              printersInQuickAccess={desktop && pathname === "/"}
               isAdmin={!!user?.is_superuser}
               onNavigate={() => setProfileOpen(false)}
               onLogout={handleLogout}
@@ -204,13 +216,17 @@ export function TopBar() {
   );
 }
 
-function ProfileMenu({
+function WorkspaceMenu({
   pathname,
+  username,
+  printersInQuickAccess,
   isAdmin,
   onNavigate,
   onLogout,
 }: {
   pathname: string;
+  username: string;
+  printersInQuickAccess: boolean;
   isAdmin: boolean;
   onNavigate: () => void;
   onLogout: () => void;
@@ -220,14 +236,23 @@ function ProfileMenu({
   const items = [
     { href: "/", label: t("nav.vault"), icon: Box },
     { href: "/inbox", label: t("nav.inbox"), icon: Inbox },
+    { href: "/builds", label: t("build.title"), icon: Layers },
     { href: "/printers", label: t("nav.printers"), icon: Printer, adminOnly: true },
     { href: "/statistics", label: t("nav.statistics"), icon: BarChart3, adminOnly: true },
     { href: "/profiles", label: t("nav.profiles"), icon: SlidersHorizontal },
     { href: "/settings", label: t("nav.settings"), icon: Settings },
-  ].filter((item) => !item.adminOnly || isAdmin);
+  ].filter(
+    (item) => (!item.adminOnly || isAdmin) && !(item.href === "/printers" && printersInQuickAccess),
+  );
 
   return (
-    <div className="w-48 overflow-hidden rounded-lg border border-border bg-popover py-1 shadow-xl">
+    <div className="w-64 overflow-hidden rounded-lg border border-border bg-popover py-1 shadow-xl">
+      <div className="border-b border-border px-3 py-2">
+        <p className="truncate text-sm font-medium text-popover-foreground" title={username}>
+          {username}
+        </p>
+        <p className="text-xs text-muted-foreground">{t("nav.myWorkspace")}</p>
+      </div>
       {items.map((item) => {
         const active = item.href === "/" ? pathname === "/" : pathname.startsWith(item.href);
         const className = `flex items-center gap-3 px-3 py-2.5 text-sm transition-colors ${

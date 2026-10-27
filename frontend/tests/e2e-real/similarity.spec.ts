@@ -2,7 +2,7 @@
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { test, expect } from "./helpers";
-import { modelCard, openFilters, openLibraryTools } from "./util";
+import { modelCard, openFilters } from "./util";
 
 const API = `http://127.0.0.1:${process.env.PLAYWRIGHT_REAL_API_PORT ?? 8410}`;
 
@@ -39,9 +39,7 @@ test.describe("Standalone similarity", () => {
       await expect(page.getByRole("main").getByText(/^\d+ items? shown$/)).toBeVisible();
       await expect(page.getByRole("complementary").locator(".animate-pulse")).toHaveCount(0);
       await openFilters(page);
-      const loading = page
-        .getByText("Loading filter values…", { exact: true })
-        .or(page.getByRole("status", { name: "Loading filter values…", exact: true }));
+      const loading = page.getByRole("status", { name: "Loading filter values…", exact: true });
       await expect(loading).toBeVisible();
       const checkbox = page.getByRole("checkbox", { name: "Has similar candidates" });
       await checkbox.scrollIntoViewIfNeeded();
@@ -69,7 +67,7 @@ test.describe("Standalone similarity", () => {
     });
     expect(enabled.ok()).toBe(true);
     await page.goto("/library/similar");
-    await page.getByText("Analysis options", { exact: true }).click();
+    await page.getByRole("tab", { name: "Analysis settings", exact: true }).click();
     const form = page.getByRole("form", { name: "Similar models" });
     await form.getByText("Advanced settings", { exact: true }).click();
     const budget = form.getByRole("spinbutton", { name: "Triangle limit per mesh" });
@@ -78,6 +76,7 @@ test.describe("Standalone similarity", () => {
       data: { triangle_cap: 190000 },
     });
     expect(remote.ok()).toBe(true);
+    await page.getByRole("tab", { name: "Matches", exact: true }).click();
     const [runResponse, statusResponse] = await Promise.all([
       page.waitForResponse(
         (response) =>
@@ -94,6 +93,7 @@ test.describe("Standalone similarity", () => {
     expect(runResponse.ok()).toBe(true);
     const run = await runResponse.json();
     expect((await statusResponse.json()).settings.triangle_cap).toBe(190000);
+    await page.getByRole("tab", { name: "Analysis settings", exact: true }).click();
     await expect(budget).toHaveValue("150000");
     await form.getByRole("button", { name: "Save settings" }).click();
     await expect(page.getByText("Similarity settings saved")).toBeVisible();
@@ -113,14 +113,14 @@ test.describe("Standalone similarity", () => {
       content:
         '[aria-label="Open Tanstack query devtools"], [title="Open Tanstack query devtools"] { display: none !important; }',
     });
-    await page.getByText("Analysis options", { exact: true }).click();
+    await page.getByRole("tab", { name: "Analysis settings", exact: true }).click();
     const settings = page.getByRole("form", { name: "Similar models" });
     const enabled = settings.getByRole("checkbox", { name: "Enable similarity analysis" });
     if (!(await enabled.isChecked())) await enabled.click();
     await settings.getByRole("button", { name: "Save settings" }).click();
     await expect(page.getByText("Similarity settings saved")).toBeVisible();
     for (const [label, width, height] of [
-      ["desktop", 1280, 800],
+      ["desktop", 1920, 1080],
       ["mobile", 390, 844],
     ] as const) {
       await page.setViewportSize({ width, height });
@@ -131,7 +131,7 @@ test.describe("Standalone similarity", () => {
         await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth),
       ).toBe(true);
     }
-    await page.setViewportSize({ width: 1280, height: 800 });
+    await page.setViewportSize({ width: 1920, height: 1080 });
     const models: { id: number; name: string; hashes: string[] }[] = [];
     try {
       for (let index = 0; index < 2; index++) {
@@ -196,8 +196,9 @@ test.describe("Standalone similarity", () => {
         await page.getByRole("checkbox", { name: "Has similar candidates" }).click();
         await expect(page).toHaveURL(/has_similar_candidates=yes/);
         await page.keyboard.press("Escape");
-        await openLibraryTools(page);
-        const views = page.locator('main button[data-menu-trigger][aria-haspopup="dialog"]');
+        const views = page
+          .getByRole("navigation", { name: "Quick access" })
+          .locator('button[data-menu-trigger][aria-haspopup="dialog"]');
         await views.click();
         await page.getByText("Save current view").click();
         await page.getByPlaceholder("Ready to print").fill(viewName);
@@ -212,7 +213,6 @@ test.describe("Standalone similarity", () => {
         expect(savedView.ok(), await savedView.text()).toBe(true);
         expect((await savedView.json()).name).toBe(viewName);
         await page.goto("/");
-        await openLibraryTools(page);
         await views.click();
         await page.getByRole("button", { name: viewName, exact: true }).click();
         await expect(page).toHaveURL(/has_similar_candidates=yes/);
@@ -229,10 +229,13 @@ test.describe("Standalone similarity", () => {
         .getByRole("link", { name: "Compare" });
       await expect(compare).toBeVisible({ timeout: 60_000 });
       await test.step("Review filters change the visible candidate set", async () => {
-        await page.getByText("More filters", { exact: true }).click();
+        await page.getByRole("button", { name: /^Filters/ }).click();
         await expect(page.getByRole("combobox", { name: "Collection", exact: true })).toBeVisible();
+        await page.getByRole("tab", { name: "Confirmed", exact: true }).click();
+        await expect(compare).toHaveCount(0);
+        await page.getByRole("tab", { name: "To review", exact: true }).click();
+        await expect(compare).toBeVisible();
         for (const [name, absent, reset] of [
-          ["Review candidates", "confirmed", "open"],
           ["All evidence classes", "repaired", ""],
           ["Current evidence", "stale", "current"],
           ["All formats", "3mf", ""],
@@ -249,10 +252,10 @@ test.describe("Standalone similarity", () => {
         await expect(compare).toHaveCount(0);
         await knownGood.click();
         await expect(compare).toBeVisible();
-        await page.getByText("More filters", { exact: true }).click();
+        await page.getByRole("button", { name: /^Filters/ }).click();
       });
       for (const [label, width, height] of [
-        ["desktop", 1280, 800],
+        ["desktop", 1920, 1080],
         ["mobile", 390, 844],
       ] as const) {
         await page.setViewportSize({ width, height });
@@ -261,13 +264,26 @@ test.describe("Standalone similarity", () => {
           await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth),
         ).toBe(true);
       }
-      await page.setViewportSize({ width: 1280, height: 800 });
+      await page.setViewportSize({ width: 1920, height: 1080 });
       await compare.click();
       await expect(
         page.getByRole("heading", { name: "Compare models", exact: true }),
       ).toBeVisible();
       await expect(page.getByText("Identical geometry", { exact: true })).toBeVisible();
-      await expect(page.getByRole("table")).toBeVisible();
+      await expect(
+        page.getByRole("table", { name: "Measurements and print history", exact: true }),
+      ).toBeInViewport({ ratio: 1 });
+      for (const label of [
+        "Sampled Chamfer distance",
+        "Sampled Hausdorff distance",
+        "Voxel overlap",
+        "Independent surface samples",
+      ]) {
+        await expect(page.getByText(label, { exact: true })).toBeInViewport({ ratio: 1 });
+      }
+      for (const name of ["Confirm match", "Reject match", "Review later"]) {
+        await expect(page.getByRole("button", { name, exact: true })).toBeInViewport({ ratio: 1 });
+      }
       await expect(page.locator("canvas")).toHaveCount(2);
       const left = page.locator("canvas").nth(0);
       const originalView = await left.screenshot({
@@ -296,26 +312,33 @@ test.describe("Standalone similarity", () => {
           ).equals(originalView),
         )
         .toBe(false);
+      await page.getByRole("button", { name: "Overlay meshes", exact: true }).click();
+      await expect(page.locator("canvas")).toHaveCount(1);
+      await expect(
+        page.getByRole("button", { name: "Overlay meshes", exact: true }),
+      ).toHaveAttribute("aria-pressed", "true");
+      await page.getByRole("button", { name: "Side by side", exact: true }).click();
+      await expect(page.locator("canvas")).toHaveCount(2);
       await expect(page.getByRole("button", { name: /Family/ })).toHaveCount(0);
       await page.screenshot({
         path: testInfo.outputPath("similarity-desktop.png"),
         fullPage: true,
       });
       await page.setViewportSize({ width: 390, height: 844 });
-      await expect(page.getByRole("button", { name: "Confirm evidence" })).toBeVisible();
+      await expect(page.getByRole("button", { name: "Confirm match" })).toBeVisible();
       expect(
         await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth),
       ).toBe(true);
       await page.screenshot({ path: testInfo.outputPath("similarity-mobile.png"), fullPage: true });
       let confirmed = false;
       for (let attempt = 0; attempt < 3; attempt++) {
-        await page.getByRole("button", { name: "Confirm evidence" }).click();
+        await page.getByRole("button", { name: "Confirm match" }).click();
         const [reviewResponse] = await Promise.all([
           page.waitForResponse(
             (response) =>
               response.url().endsWith("/decision") && response.request().method() === "POST",
           ),
-          page.getByRole("dialog").getByRole("button", { name: "Confirm evidence" }).click(),
+          page.getByRole("dialog").getByRole("button", { name: "Confirm match" }).click(),
         ]);
         if (reviewResponse.ok()) {
           confirmed = true;

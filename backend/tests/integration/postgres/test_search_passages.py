@@ -667,3 +667,80 @@ class TestProjectionLockOrder:
             )
         finally:
             bind_content_projection(previous)
+
+
+class TestApplyPrepared:
+    def test_coalesces_overlapping_sources(self, passage_engine):
+        from app.db.projections import ContentSource
+        from app.modules.search.projection import apply_prepared, prepare_pending
+        from tests.factories import build_search_projection_request
+
+        engine, config = passage_engine
+        command.upgrade(config, "head")
+        with Session(engine) as session:
+            collection = build_collection(session, "Collection")
+            model = build_model(session, "Bracket", collection=collection)
+            build_search_projection_request(
+                session, ContentSource("collection", collection.id)
+            )
+            build_search_projection_request(session, ContentSource("model", model.id))
+            page = prepare_pending(session)
+        with Session(engine) as worker:
+            written = apply_prepared(worker, page)
+            worker.commit()
+
+        with Session(engine) as session:
+            assert written == 2
+            assert len(session.exec(select(SearchPassage)).all()) == 2
+            assert session.exec(select(SearchProjectionRequest)).all() == []
+
+    def test_rejects_a_changed_later_source(self, passage_engine):
+        from app.db.projections import ContentSource
+        from app.modules.search.projection import apply_prepared, prepare_pending
+        from tests.factories import build_search_projection_request
+
+        engine, config = passage_engine
+        command.upgrade(config, "head")
+        with Session(engine) as session:
+            first = build_model(session, "First")
+            second = build_model(session, "Before")
+            build_search_projection_request(session, ContentSource("model", first.id))
+            build_search_projection_request(session, ContentSource("model", second.id))
+            page = prepare_pending(session)
+            second.name = "After"
+            session.add(second)
+            LibraryProjection().refresh(session, (ContentSource("model", second.id),))
+            session.commit()
+
+        with Session(engine) as worker:
+            written = apply_prepared(worker, page)
+            worker.commit()
+
+        with Session(engine) as session:
+            assert written is None
+            assert session.exec(select(SearchPassage)).all() == []
+            assert len(session.exec(select(SearchProjectionRequest)).all()) == 2
+
+    def test_rollback_retains_every_source(self, passage_engine):
+        from app.db.projections import ContentSource
+        from app.modules.search.projection import apply_prepared, prepare_pending
+        from tests.factories import build_search_projection_request
+
+        engine, config = passage_engine
+        command.upgrade(config, "head")
+        with Session(engine) as session:
+            collection = build_collection(session, "Collection")
+            model = build_model(session, "Bracket", collection=collection)
+            build_search_projection_request(
+                session, ContentSource("collection", collection.id)
+            )
+            build_search_projection_request(session, ContentSource("model", model.id))
+            page = prepare_pending(session)
+
+        with Session(engine) as worker:
+            apply_prepared(worker, page)
+            worker.rollback()
+
+        with Session(engine) as session:
+            assert session.exec(select(SearchPassage)).all() == []
+            assert len(session.exec(select(SearchProjectionRequest)).all()) == 2

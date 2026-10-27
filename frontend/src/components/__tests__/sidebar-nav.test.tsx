@@ -75,7 +75,7 @@ describe("SidebarNav", () => {
 
       expect(screen.getByRole("link", { name: /Wiki/i })).toHaveAttribute(
         "href",
-        expect.stringContaining("http"),
+        "https://www.printstash.org/docs/",
       );
     });
   });

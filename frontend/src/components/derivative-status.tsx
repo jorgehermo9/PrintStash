@@ -5,7 +5,9 @@
  *
  * A fresh upload's preview and metadata are produced in the background, so an
  * Artifact row says so rather than looking broken; a failure names its reason
- * and, for an editor, offers a retry. Everything finished renders nothing.
+ * and, for an editor, offers a retry. Failures that share a cause share one
+ * explanation, phrased as what the reader can do rather than as a code.
+ * Everything finished renders nothing.
  * Missing derivatives are unknown, never zero, which is why a pending kind is
  * shown as pending rather than hidden.
  */
@@ -14,7 +16,11 @@ import { AlertTriangle, Loader2 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { listDerivatives, retryDerivative } from "@/lib/api";
-import { getErrorMessage } from "@/lib/errors";
+import {
+  derivativeFailureCause,
+  derivativeFailureMessage,
+  type DerivativeFailureCause,
+} from "@/lib/derivative-failures";
 import { followModel } from "@/lib/events";
 import { useUiLocale } from "@/lib/i18n";
 import { uiText } from "@/lib/locale";
@@ -94,6 +100,12 @@ export function DerivativeStatus({
 
   const preparing = derivatives.filter((item) => IN_PROGRESS.has(item.state));
   const failed = derivatives.filter((item) => item.state === "failed");
+  // Outputs that failed for the same cause share one explanation.
+  const failures = new Map<DerivativeFailureCause, DerivativeRead[]>();
+  for (const item of failed) {
+    const cause = derivativeFailureCause(item.failure_reason);
+    failures.set(cause, [...(failures.get(cause) ?? []), item]);
+  }
   const disabled = derivatives.some((item) => item.state === "disabled");
   if (preparing.length === 0 && failed.length === 0 && !disabled) return null;
 
@@ -112,25 +124,34 @@ export function DerivativeStatus({
           })}
         </li>
       )}
-      {failed.map((item) => (
-        <li key={item.kind} className="flex flex-wrap items-center gap-1.5 text-2xs">
-          <AlertTriangle className="h-3 w-3 text-warning" aria-hidden />
-          <span>
-            {uiText("{kind} failed: {reason}", {
-              kind: kindLabel(item.kind),
-              reason: getErrorMessage(item.failure_reason ?? "unknown"),
-            })}
-          </span>
-          {canRetry && item.retryable && (
-            <Button
-              size="sm"
-              variant="ghost"
-              loading={retrying === item.kind}
-              onClick={() => void retry(item.kind)}
-            >
-              {uiText("Retry {kind}", { kind: kindLabel(item.kind) })}
-            </Button>
-          )}
+      {[...failures].map(([cause, items]) => (
+        <li key={cause} className="flex items-start gap-1.5 text-2xs">
+          <AlertTriangle className="mt-0.5 h-3 w-3 shrink-0 text-warning" aria-hidden />
+          <div className="min-w-0 space-y-0.5">
+            <p className="font-medium text-on-surface">
+              {uiText("{kinds} failed", {
+                kinds: items.map((item) => kindLabel(item.kind)).join(", "),
+              })}
+            </p>
+            <p className="text-on-surface-variant">{derivativeFailureMessage(cause)}</p>
+            {canRetry && items.some((item) => item.retryable) && (
+              <div className="flex flex-wrap gap-1">
+                {items
+                  .filter((item) => item.retryable)
+                  .map((item) => (
+                    <Button
+                      key={item.kind}
+                      size="sm"
+                      variant="ghost"
+                      loading={retrying === item.kind}
+                      onClick={() => void retry(item.kind)}
+                    >
+                      {uiText("Retry {kind}", { kind: kindLabel(item.kind) })}
+                    </Button>
+                  ))}
+              </div>
+            )}
+          </div>
         </li>
       ))}
     </ul>

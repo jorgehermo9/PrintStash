@@ -135,7 +135,7 @@ test.describe("instrumented startup resources", () => {
     await expect(page.locator("main article")).toHaveCount(90);
     await page.waitForLoadState("networkidle");
     const expanded = await snapshot();
-    await page.getByRole("button", { name: "A admin", exact: true }).click();
+    await page.getByRole("button", { name: "My workspace", exact: true }).click();
     await page.getByRole("menuitem", { name: "Log out", exact: true }).click();
     await expect(page).toHaveURL(/\/login/);
     await expect.poll(() => page.evaluate(() => window.__startupResources.blobBytes)).toBe(0);

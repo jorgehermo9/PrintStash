@@ -165,6 +165,60 @@ class TestWorkerBootstrap:
             assert not status.exists() or status.read_text().split()[2] == "Z"
 
 
+class TestKernelWithoutPidfd:
+    """Kernels before Linux 5.3, and container seccomp profiles that predate
+    pidfd, refuse pidfd_open. Native work still runs there: its supervisor
+    falls back to the process group the worker leads (issue #567)."""
+
+    @staticmethod
+    def _without_pidfd(command: list[str]) -> list[str]:
+        # Same bootstrap and arguments; the child's kernel refuses pidfd calls.
+        python, _flag, module, *arguments = command
+        refuse = (
+            "import errno, os, runpy, signal, sys\n"
+            "def refused(*_args):\n"
+            "    raise OSError(errno.ENOSYS, 'pidfd unsupported')\n"
+            "os.pidfd_open = refused\n"
+            "signal.pidfd_send_signal = refused\n"
+            f"sys.argv = [{module!r}, *sys.argv[1:]]\n"
+            f"runpy.run_module({module!r}, run_name='__main__')\n"
+        )
+        return [python, "-c", refuse, *arguments]
+
+    def test_runs_native_work_without_a_guardian(self):
+        from app.modules.media.worker_bootstrap import WorkerLifecycle, command
+
+        result = mesh_isolation.supervise(
+            self._without_pidfd(
+                command("tests.fakes.mesh_bootstrap_probe", ["priority"], 128 * MB)
+            ),
+            memory_budget=128 * MB,
+            timeout_seconds=10,
+            lifecycle=WorkerLifecycle.GUARDED,
+        )
+
+        assert result.decode().strip() == "interactive"
+
+    def test_terminates_an_unguarded_worker_by_its_group(self, monkeypatch):
+        from app.modules.media import worker_bootstrap
+
+        monkeypatch.setattr(worker_bootstrap, "pidfd_supported", lambda: False)
+        worker = subprocess.Popen(
+            ["sh", "-c", "sleep 30 & sleep 30"], start_new_session=True
+        )
+        time.sleep(0.2)
+
+        worker_bootstrap.terminate_worker(
+            worker, worker_bootstrap.WorkerLifecycle.GUARDED
+        )
+        worker.wait(timeout=5)
+        # As the supervisor does: a subreaper collects the adopted members.
+        worker_bootstrap.reap_descendants(worker.pid)
+
+        with pytest.raises(ProcessLookupError):
+            os.killpg(worker.pid, 0)
+
+
 class TestAbandonedTemporaryOutputs:
     def test_parent_death_cleans_owned_outputs(self, tmp_path):
         ready = tmp_path / "temporary"

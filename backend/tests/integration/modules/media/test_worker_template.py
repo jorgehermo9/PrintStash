@@ -52,6 +52,23 @@ class TestServe:
             True,
         )
 
+    def test_serves_with_its_preloaded_heap_frozen(self) -> None:
+        # A worker inherits whatever the template froze; report the frozen
+        # object count in place of the virtual size the template announces.
+        process, owner = _template(
+            "import gc, sys\n"
+            "from app.modules.media import worker_template\n"
+            "worker_template._virtual_size = gc.get_freeze_count\n"
+            "sys.exit(worker_template.main(sys.argv[1:]))\n"
+        )
+
+        line = process.stdout.readline()
+
+        owner.close()
+        process.wait(timeout=30)
+        process.stdout.close()
+        assert int(line.split()[1]) > 0
+
     def test_exits_when_its_owner_goes_away(self) -> None:
         process, owner = _template()
         process.stdout.readline()

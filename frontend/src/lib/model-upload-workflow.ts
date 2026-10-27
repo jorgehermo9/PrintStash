@@ -1,3 +1,4 @@
+import { uploadedModelForJobs, type UploadedModelResult } from "@/lib/model-upload-result";
 /** Session-bound execution of accepted model uploads; modal disposal does not own this work. */
 import { getModel } from "@/lib/api/models";
 import { uploadArtifact, type ArtifactUploadProgress } from "@/lib/artifact-upload";
@@ -57,7 +58,7 @@ export async function runModelUpload(
     libraryId: number | "";
     refreshAfter?: boolean;
   } & ModelUploadFiles,
-  onUploaded: () => Promise<void>,
+  onUploaded: (result?: UploadedModelResult) => Promise<void>,
   session = getSessionVersion(),
 ) {
   const reportProgress = (progress: ArtifactUploadProgress) => {
@@ -121,9 +122,12 @@ export async function runModelUpload(
         completeTask: !gcode,
       });
 
+      const meshResult = uploadedModelForJobs([meshStatus]);
+      updateTask(taskId, { uploadedModel: meshResult });
+
       if (!gcode) {
         requireSessionVersion(session);
-        if (refreshAfter) await onUploaded();
+        if (refreshAfter) await onUploaded(meshResult);
         return;
       }
 
@@ -143,13 +147,15 @@ export async function runModelUpload(
       requireSessionVersion(session);
       if (!gcodeRes.job_id) throw new Error("Upload completed without an ingestion job");
       linkTaskToJob(taskId, gcodeRes.job_id);
-      await waitForJob(session, gcodeRes.job_id, taskId, {
+      const gcodeStatus = await waitForJob(session, gcodeRes.job_id, taskId, {
         progressEnd: 100,
         completedDetail: "Upload processed",
         completeTask: true,
       });
       requireSessionVersion(session);
-      if (refreshAfter) await onUploaded();
+      const result = uploadedModelForJobs([meshStatus, gcodeStatus]);
+      updateTask(taskId, { uploadedModel: result });
+      if (refreshAfter) await onUploaded(result);
       return;
     }
 
@@ -163,13 +169,15 @@ export async function runModelUpload(
       requireSessionVersion(session);
       if (!res.job_id) throw new Error("Upload completed without an ingestion job");
       linkTaskToJob(taskId, res.job_id);
-      await waitForJob(session, res.job_id, taskId, {
+      const status = await waitForJob(session, res.job_id, taskId, {
         progressEnd: 100,
         completedDetail: "Upload processed",
         completeTask: true,
       });
       requireSessionVersion(session);
-      if (refreshAfter) await onUploaded();
+      const result = uploadedModelForJobs([status]);
+      updateTask(taskId, { uploadedModel: result });
+      if (refreshAfter) await onUploaded(result);
     }
   } catch (err: unknown) {
     if (session !== getSessionVersion()) return;
@@ -209,7 +217,7 @@ export async function runBulkModelUpload(
     tagsForUpload: string[];
     libraryId: number | "";
   },
-  onUploaded: () => Promise<void>,
+  onUploaded: (result?: UploadedModelResult) => Promise<void>,
 ) {
   const session = getSessionVersion();
   const queue = files.map((item) => ({

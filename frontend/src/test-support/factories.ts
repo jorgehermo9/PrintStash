@@ -3,6 +3,7 @@ import type { GcPlan } from "@/lib/api/gc";
 import type { TrashedModelRead } from "@/types";
 import type { VolumeMeasurement } from "@/types/models";
 import type { ArtifactCacheRead } from "@/lib/api/artifact-cache";
+import type { MeshWorkersRead } from "@/lib/api/mesh-workers";
 /**
  * Builders for API-shaped objects — the frontend's arrange step.
  *
@@ -51,6 +52,7 @@ import type {
   OutlinerModelRead,
   PrinterAccess,
   PrinterCapabilities,
+  PrinterDiagnostics,
   PrinterRead,
   PrintJobRead,
   StorageConnection,
@@ -98,6 +100,21 @@ export function printerCapabilities(override?: Partial<PrinterCapabilities>): Pr
     support_notes: [],
     unsupported_actions: [],
     accepted_print_formats: ["gcode_text"],
+    ...override,
+  };
+}
+
+/** A successful Moonraker connection diagnostic. */
+export function aPrinterDiagnostics(override?: Partial<PrinterDiagnostics>): PrinterDiagnostics {
+  return {
+    printer_id: 4,
+    provider: "moonraker",
+    support_level: "stable",
+    capabilities: printerCapabilities(),
+    unsupported_actions: [],
+    notes: [],
+    checks: [],
+    ok: true,
     ...override,
   };
 }
@@ -509,6 +526,19 @@ export function aMultipartModel(
   };
 }
 
+export function aMeshWorkers(overrides: Partial<MeshWorkersRead> = {}): MeshWorkersRead {
+  return {
+    edit_epoch: "00000000000000000000000000000001",
+    edit_version: 1,
+    jobs: 3,
+    configured: null,
+    automatic: 3,
+    maximum: 4,
+    source: "automatic",
+    restart_required: false,
+    ...overrides,
+  };
+}
 export function anArtifactCache(overrides: Partial<ArtifactCacheRead> = {}): ArtifactCacheRead {
   return {
     edit_epoch: "00000000000000000000000000000001",

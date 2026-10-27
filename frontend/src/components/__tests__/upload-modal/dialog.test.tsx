@@ -96,6 +96,47 @@ afterEach(() => {
 });
 
 describe("UploadModal", () => {
+  it("names the URL capture field", async () => {
+    const user = userEvent.setup();
+    renderUpload();
+
+    await user.click(mode("From URL"));
+
+    expect(screen.getByRole("textbox", { name: "Source URL" })).toHaveAttribute("type", "url");
+  });
+
+  it("rejects malformed URL syntax before sending a request", async () => {
+    const user = userEvent.setup();
+    const app = renderUpload();
+    await user.click(mode("From URL"));
+    await user.type(screen.getByRole("textbox", { name: "Source URL" }), "not-a-url");
+
+    await user.click(screen.getByRole("button", { name: "Review URL" }));
+
+    expect(screen.getByRole("textbox", { name: "Source URL" })).toBeInvalid();
+    expect(app.requestsWithMethod("POST")).toEqual([]);
+  });
+
+  it("preserves an invalid capture URL for correction", async () => {
+    const user = userEvent.setup();
+    renderUpload({ routes: { "POST /api/v1/inbox": json({ detail: "url_invalid" }, 400) } });
+    await user.click(mode("From URL"));
+    await user.type(
+      screen.getByRole("textbox", { name: "Source URL" }),
+      "ftp://example.invalid/model.stl",
+    );
+
+    await user.click(screen.getByRole("button", { name: "Review URL" }));
+
+    expect(
+      await screen.findByText("Enter a valid http(s) URL for a model page or file."),
+    ).toBeVisible();
+    expect(screen.getByRole("textbox", { name: "Source URL" })).toHaveValue(
+      "ftp://example.invalid/model.stl",
+    );
+    expect(screen.getByRole("button", { name: "Review URL" })).toBeEnabled();
+  });
+
   it("shows the exact folder name in the destination picker", async () => {
     const user = userEvent.setup();
     const collections = [

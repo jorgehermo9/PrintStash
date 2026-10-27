@@ -953,6 +953,18 @@ class TestBuildLibraryAtScale:
         assert model.id is not None
 
 
+class TestRegeneration:
+    def test_regeneration_factory_reaches_every_producer(self, db_session):
+        from app.db.models import DerivativeKind, JobKind
+        from app.modules.derivatives.records import regenerations
+
+        factories.build_derivative_regeneration(db_session, DerivativeKind.THUMBNAIL)
+
+        assert DerivativeKind.THUMBNAIL in regenerations(
+            db_session, definitions=[JobKind.DERIVATIVES_GCODE]
+        )
+
+
 class TestGroupRegeneration:
     def test_group_regeneration_factory_reaches_only_its_producer(self, db_session):
         from app.db.models import DerivativeKind, JobKind

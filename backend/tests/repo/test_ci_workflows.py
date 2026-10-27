@@ -11,10 +11,12 @@ import sys
 import tomllib
 from fnmatch import fnmatch
 from io import BytesIO
+from itertools import product
 from pathlib import Path
 
 import pytest
 import yaml
+from _pytest.mark.expression import Expression
 
 from tests.paths import REPO_ROOT
 
@@ -25,6 +27,21 @@ def _workflow(name: str) -> dict:
 
 def _commands(job: dict) -> str:
     return "\n".join(str(step.get("run", "")) for step in job["steps"])
+
+
+def _selected_test_files(rows: list[dict]) -> set[Path]:
+    backend = REPO_ROOT / "backend"
+    paths = [path for row in rows for path in row["paths"].split()]
+    return {
+        file.relative_to(backend)
+        for file in (backend / "tests").rglob("test_*.py")
+        if any(
+            fnmatch(str(file.relative_to(backend)), path)
+            if "*" in path
+            else file.relative_to(backend).is_relative_to(path)
+            for path in paths
+        )
+    }
 
 
 def _verifier_module():
@@ -103,6 +120,7 @@ class TestQuickGate:
             "backend",
             "printer-core",
             "frontend",
+            "frontend-tests",
             "browser-smoke",
             "browser-extension",
         }
@@ -111,6 +129,46 @@ class TestQuickGate:
         assert all(
             jobs[name].get("continue-on-error") is not True for name in gate["needs"]
         )
+
+    def test_frontend_app_partitions_cover_every_shard_once(self) -> None:
+        job = _workflow("ci.yml")["jobs"]["frontend-tests"]
+        commands = _commands(job)
+
+        assert job["strategy"]["matrix"] == {"shard": [1, 2]}
+        assert [
+            step["run"] for step in job["steps"] if "vitest run" in step.get("run", "")
+        ] == ["pnpm exec vitest run --shard=${{ matrix.shard }}/2"]
+        assert commands.count("vitest run") == 1
+        assert not any(
+            option in commands
+            for option in ("--changed", "--related", "--passWithNoTests", "--exclude")
+        )
+        assert job["strategy"]["fail-fast"] is False
+
+    def test_frontend_checks_retain_complete_quality_gate(self) -> None:
+        commands = _commands(_workflow("ci.yml")["jobs"]["frontend"])
+        package = json.loads((REPO_ROOT / "frontend/package.json").read_text())
+
+        assert "pnpm format:check" in commands
+        assert "pnpm lint" in commands
+        assert "pnpm build" in commands
+        assert package["scripts"]["build"].startswith("pnpm run typecheck && ")
+        assert package["scripts"]["test"].split(" && ") == [
+            "vitest run",
+            "pnpm --filter @printstash/ui test",
+            "pnpm --filter @printstash/domain test",
+        ]
+        assert commands.count("pnpm --filter @printstash/ui test") == 1
+        assert commands.count("pnpm --filter @printstash/domain test") == 1
+        assert "pnpm test\n" not in commands
+
+    @pytest.mark.parametrize("name", ["backend", "frontend", "frontend-tests"], ids=str)
+    def test_runs_quick_partitions_without_dependencies(self, name: str) -> None:
+        job = _workflow("ci.yml")["jobs"][name]
+
+        assert not job.get("needs")
+        assert not job.get("if")
+        assert not job.get("continue-on-error", False)
 
     def test_runs_backend_pr_lane_once(self) -> None:
         jobs = _workflow("ci.yml")["jobs"]
@@ -227,6 +285,51 @@ class TestDeepSuite:
         assert invocations
         assert all("--fail-on-flaky-tests" in command for command in invocations)
 
+    def test_main_browser_partitions_cover_every_shard_once(self):
+        job = _workflow("deep-ci.yml")["jobs"]["browser-real"]
+        rows = job["strategy"]["matrix"]["include"]
+        main = [row for row in rows if row["suite"] == "main"]
+        assert main == [
+            dict(suite="main", shard=index, shards=4) for index in range(1, 5)
+        ]
+        assert [row for row in rows if row["suite"] != "main"] == [
+            dict(suite=suite, shard=1, shards=1)
+            for suite in ("onboarding", "environment", "storage")
+        ]
+        step = next(
+            step
+            for step in job["steps"]
+            if step.get("name") == "Run isolated browser suite"
+        )
+        assert step["env"]["SHARD"] == "${{ matrix.shard }}/${{ matrix.shards }}"
+        assert (
+            '--config=playwright.real.config.ts --shard="$SHARD" --fail-on-flaky-tests'
+            in step["run"]
+        )
+        assert job["strategy"]["fail-fast"] is False
+        config = (REPO_ROOT / "frontend/playwright.real.config.ts").read_text()
+        assert "workers: 1" in config
+        assert "fullyParallel: false" in config
+
+    def test_browser_shards_publish_distinct_reports(self):
+        job = _workflow("deep-ci.yml")["jobs"]["browser-real"]
+        rows = job["strategy"]["matrix"]["include"]
+        reports = next(
+            step
+            for step in job["steps"]
+            if step.get("name") == "Upload Playwright report"
+        )
+        template = reports["with"]["name"]
+        names = [
+            template.replace("${{ matrix.suite }}", row["suite"]).replace(
+                "${{ matrix.shard }}", str(row["shard"])
+            )
+            for row in rows
+        ]
+        assert len(set(names)) == len(rows)
+        assert all("${{" not in name for name in names)
+        assert reports["if"] == "${{ !cancelled() }}"
+
     def test_provisions_a_disposable_root_for_mounted_browser_contracts(self):
         commands = _commands(_workflow("deep-ci.yml")["jobs"]["browser-real"])
 
@@ -240,33 +343,59 @@ class TestDeepSuite:
             "pnpm exec playwright test --config=playwright.real.config.ts"
         )
 
-    def test_runs_compatibility_phases_independently(self) -> None:
-        job = _workflow("deep-ci.yml")["jobs"]["backend-python314"]
-
+    def test_measures_each_backend_partition_under_coverage(self) -> None:
+        jobs = _workflow("deep-ci.yml")["jobs"]
+        job = jobs["backend"]
         rows = job["strategy"]["matrix"]["include"]
-        assert [row["phase"] for row in rows] == [
-            "full-ordinary",
-            "full-ordinary",
-            "full-resources",
+        ordinary = [row for row in rows if row["lane"] == "full-ordinary"]
+        quick_rows = _workflow("ci.yml")["jobs"]["backend"]["strategy"]["matrix"][
+            "include"
         ]
-        assert [row["shard"] for row in rows] == ["a", "b", "services"]
-        assert rows[2]["paths"] == "tests"
-        assert job["strategy"]["fail-fast"] is False
-        assert job["timeout-minutes"] == 60
+        assert len(ordinary) == 12
+        # PR jobs may use smaller partitions without changing the covered tree.
+        assert _selected_test_files(ordinary) == _selected_test_files(quick_rows)
+        assert len({row["suite"] for row in rows}) == len(rows)
+        resources = [row for row in rows if row["lane"] == "full-resources"]
+        assert {row["suite"] for row in resources} == {
+            "services-postgres-migrations-a",
+            "services-postgres-migrations-b",
+            "services-postgres-migrations-c",
+            "services-postgres-platform",
+            "services-postgres-domains",
+            "services-postgres-flows",
+            "services-s3",
+            "services-remote-storage",
+            "services-bgcode",
+            "services-native",
+        }
+        assert all(
+            row["paths"] == "tests" for row in resources if row["markers"] != "postgres"
+        )
+        test_step = next(
+            step for step in job["steps"] if step.get("name") == "Test backend"
+        )
         assert (
-            "./scripts/test.sh ${{ matrix.phase }} ${{ matrix.paths }} -q"
+            test_step["env"]["PRINTSTASH_TEST_RESOURCE_EXPRESSION"]
+            == "${{ matrix.markers }}"
+        )
+        assert all(row["lane"] in {"full-ordinary", "full-resources"} for row in rows)
+        assert job["strategy"]["fail-fast"] is False
+        assert job["env"]["COVERAGE_FILE"] == ".coverage.${{ matrix.suite }}"
+        assert (
+            "./scripts/test.sh ${{ matrix.lane }} ${{ matrix.paths }} -q --cov --cov-report="
             in _commands(job)
         )
+        assert "./scripts/test.sh coverage" not in str(jobs)
         assert not job.get("continue-on-error", False)
 
-    def test_ordinary_shards_cover_every_test_file_once(self):
-        rows = _workflow("deep-ci.yml")["jobs"]["backend-python314"]["strategy"][
-            "matrix"
-        ]["include"]
+    def test_ordinary_coverage_partitions_cover_every_file_once(self):
+        rows = _workflow("deep-ci.yml")["jobs"]["backend"]["strategy"]["matrix"][
+            "include"
+        ]
         roots = [
             path
             for row in rows
-            if row["phase"] == "full-ordinary"
+            if row["lane"] == "full-ordinary"
             for path in row["paths"].split()
         ]
         files = [
@@ -282,11 +411,153 @@ class TestDeepSuite:
             )
             for file in files
         }
-
         assert occurrences
         assert set(occurrences.values()) == {1}, {
             file: count for file, count in occurrences.items() if count != 1
         }
+
+    def test_resource_partitions_select_each_file_marker_combination_once(self):
+        rows = _workflow("deep-ci.yml")["jobs"]["backend"]["strategy"]["matrix"][
+            "include"
+        ]
+        resource_rows = [row for row in rows if row["lane"] == "full-resources"]
+        expressions = {
+            row["suite"]: Expression.compile(row["markers"]) for row in resource_rows
+        }
+        files = [
+            path.relative_to(REPO_ROOT / "backend")
+            for path in (REPO_ROOT / "backend/tests").rglob("test_*.py")
+            if path.relative_to(REPO_ROOT / "backend/tests").parts[0]
+            in {"unit", "integration", "contract", "e2e", "repo"}
+        ]
+        declaration = next(
+            line
+            for line in (REPO_ROOT / "backend/scripts/test.sh").read_text().splitlines()
+            if line.startswith("resource_expression=")
+        )
+        markers = tuple(declaration.split("=", 1)[1].strip('"').split(" or "))
+        # Every file and every resource-marker combination must select exactly
+        # one runner, including future multi-marked PostgreSQL tests.
+        assert files
+        for file in files:
+            matching = [
+                expressions[row["suite"]]
+                for row in resource_rows
+                if any(
+                    fnmatch(str(file), root)
+                    if "*" in root
+                    else file.is_relative_to(root)
+                    for root in row["paths"].split()
+                )
+            ]
+            for present in product((False, True), repeat=len(markers)):
+                active = {
+                    marker
+                    for marker, enabled in zip(markers, present, strict=True)
+                    if enabled
+                }
+                selected = sum(
+                    expression.evaluate(active.__contains__) for expression in matching
+                )
+                assert selected == int(bool(active)), (file, active)
+
+    @pytest.mark.parametrize(
+        "row",
+        [
+            pytest.param(row, id=row["suite"])
+            for row in _workflow("deep-ci.yml")["jobs"]["backend"]["strategy"][
+                "matrix"
+            ]["include"]
+            if row["lane"] == "full-resources"
+        ],
+    )
+    def test_resource_partition_runs_serially_with_its_marker_selection(
+        self, tmp_path, row
+    ):
+        fake_uv = tmp_path / "uv"
+        fake_uv.write_text('#!/bin/sh\nprintf "%s\\n" "$@"\n')
+        fake_uv.chmod(0o755)
+        backend = REPO_ROOT / "backend"
+        paths = [
+            str(path.relative_to(backend))
+            for pattern in row["paths"].split()
+            for path in sorted(backend.glob(pattern))
+        ]
+        assert paths
+        result = subprocess.run(
+            ["bash", "scripts/test.sh", row["lane"], *paths, "-q"],
+            cwd=REPO_ROOT / "backend",
+            env={
+                **os.environ,
+                "PATH": f"{tmp_path}{os.pathsep}{os.environ['PATH']}",
+                "PRINTSTASH_TEST_RESOURCE_EXPRESSION": row["markers"],
+            },
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        assert result.stdout.splitlines() == [
+            "run",
+            "pytest",
+            "-m",
+            f"({row['markers']}) and not coverage_gate and not scale",
+            *paths,
+            "-q",
+        ]
+
+    def test_requires_raw_data_from_every_successful_shard(self):
+        jobs = _workflow("deep-ci.yml")["jobs"]
+        shard = jobs["backend"]
+        upload = next(
+            step
+            for step in shard["steps"]
+            if step.get("name") == "Upload backend coverage data"
+        )
+        assert upload["with"]["name"] == "backend-coverage-data-${{ matrix.suite }}"
+        assert upload["with"]["path"] == "backend/.coverage.${{ matrix.suite }}"
+        assert upload["with"]["include-hidden-files"] is True
+        assert upload["with"]["if-no-files-found"] == "error"
+        assert not upload.get("continue-on-error", False)
+        gate = jobs["backend-coverage"]
+        assert gate["needs"] == "backend"
+        assert "if" not in gate
+        assert not gate.get("continue-on-error", False)
+        download = next(
+            step
+            for step in gate["steps"]
+            if step.get("name") == "Download every successful shard"
+        )
+        assert download["with"]["pattern"] == "backend-coverage-data-*"
+        assert download["with"]["path"] == "backend/.coverage-inputs"
+        assert download["with"]["merge-multiple"] is True
+
+    def test_evaluates_the_floors_only_after_combining_data(self):
+        job = _workflow("deep-ci.yml")["jobs"]["backend-coverage"]
+        steps = job["steps"]
+        combine = next(
+            step for step in steps if step.get("name") == "Combine backend coverage"
+        )
+        reports = next(
+            step
+            for step in steps
+            if step.get("name") == "Write combined coverage reports"
+        )
+        floors = next(
+            step
+            for step in steps
+            if step.get("name") == "Enforce unchanged coverage floors"
+        )
+        assert steps.index(combine) < steps.index(reports) < steps.index(floors)
+        assert "coverage json" in reports["run"]
+        assert "coverage html" in reports["run"]
+        assert (
+            floors["run"]
+            == "uv run pytest tests/repo/test_coverage_floors.py -q --no-cov -p no:randomly"
+        )
+        assert not any(
+            step.get("continue-on-error", False) for step in (combine, reports, floors)
+        )
+        assert all("if" not in step for step in (combine, reports, floors))
 
     @pytest.mark.parametrize(
         ("lane", "expected_parallel", "expression"),
@@ -393,16 +664,8 @@ class TestDeepSuite:
         )
         assert "2 tests collected" in result.stdout
 
-    @pytest.mark.parametrize(
-        ("job_name", "suite_name"),
-        [
-            ("backend", "Test backend"),
-            ("backend-python314", "Run backend compatibility suite"),
-        ],
-    )
-    def test_provisions_real_pid_namespaces_for_each_full_suite(
-        self, job_name: str, suite_name: str
-    ) -> None:
+    def test_provisions_real_pid_namespaces_for_the_full_suite(self) -> None:
+        job_name, suite_name = "backend", "Test backend"
         job = _workflow("deep-ci.yml")["jobs"][job_name]
         steps = job["steps"]
         prepare = next(
@@ -455,24 +718,39 @@ class TestDeepSuite:
     def test_gates_mesh_resources_on_both_native_architectures(self):
         job = _workflow("deep-ci.yml")["jobs"]["mesh-resources"]
         rows = job["strategy"]["matrix"]["include"]
-        assert {(row["arch"], row["memory"]) for row in rows} == {
-            ("amd64", 1),
-            ("amd64", 4),
-            ("arm64", 1),
-            ("arm64", 4),
-        }
+        assert rows == [
+            {"arch": "amd64", "runner": "ubuntu-latest"},
+            {"arch": "arm64", "runner": "ubuntu-24.04-arm"},
+        ]
         assert job.get("continue-on-error") is not True
-        build = next(
+        builds = [
             step
             for step in job["steps"]
-            if step.get("name") == "Build the production backend image"
-        )
+            if step.get("uses", "").startswith("docker/build-push-action@")
+        ]
+        assert len(builds) == 1
+        build = builds[0]
+        assert build["id"] == "image"
         assert build["with"]["context"] == "backend"
         assert build["with"]["build-args"] == "PRINTSTASH_VARIANT=full"
-        commands = _commands(job)
-        assert "scripts/mesh_resource_gate.py" in commands
-        assert "--memory-gib ${{ matrix.memory }}" in commands
-        assert "github.com/user-attachments" not in commands
+        checks = [
+            step
+            for step in job["steps"]
+            if "scripts/mesh_resource_gate.py" in step.get("run", "")
+        ]
+        assert len(checks) == 2
+        for step, memory in zip(checks, (1, 4), strict=True):
+            assert "--image printstash:mesh-resources" in step["run"]
+            assert f"--memory-gib {memory}" in step["run"]
+            assert (
+                f"--report ${{{{ runner.temp }}}}/mesh-resources-{memory}g.json"
+                in step["run"]
+            )
+            assert not step.get("continue-on-error", False)
+        assert "if" not in checks[0]
+        assert (
+            checks[1]["if"] == "${{ !cancelled() && steps.image.outcome == 'success' }}"
+        )
         evidence = next(
             step
             for step in job["steps"]
@@ -480,6 +758,32 @@ class TestDeepSuite:
         )
         assert evidence["if"] == "always()"
         assert evidence["with"]["if-no-files-found"] == "error"
+        assert evidence["with"]["path"] == "${{ runner.temp }}/mesh-resources-*g.json"
+
+    def test_keeps_full_startup_sampling_opt_in(self):
+        workflow = _workflow("deep-ci.yml")
+        option = workflow[True]["workflow_dispatch"]["inputs"]["startup_benchmark"]
+        assert option["type"] == "boolean"
+        assert option["default"] is False
+        job = workflow["jobs"]["library-startup"]
+        assert job["strategy"]["matrix"]["distribution"] == ["distributed", "dense"]
+        step = next(
+            step
+            for step in job["steps"]
+            if step.get("name") == "Check production startup"
+        )
+        for variable, full, brief in (
+            ("STARTUP_WARM_RUNS", 30, 3),
+            ("STARTUP_COLD_RUNS", 20, 2),
+        ):
+            assert step["env"][variable] == (
+                "${{ github.event_name == 'workflow_dispatch' && inputs.startup_benchmark "
+                f"&& '{full}' || '{brief}' " + "}}"
+            )
+        assert step["run"] == "pnpm test:startup --fail-on-flaky-tests"
+        assert "if" not in job
+        assert "if" not in step
+        assert not step.get("continue-on-error", False)
 
     def test_covers_every_critical_browser_configuration(self) -> None:
         workflow = _workflow("deep-ci.yml")
@@ -494,7 +798,9 @@ class TestDeepSuite:
         }
         for config in configs:
             assert f"--config={config}" in commands
-        assert "./scripts/test.sh coverage -q" in _commands(workflow["jobs"]["backend"])
+        assert "Enforce unchanged coverage floors" in str(
+            workflow["jobs"]["backend-coverage"]
+        )
         assert all(
             (REPO_ROOT / target["path"]).exists()
             for capability in manifest["capabilities"]

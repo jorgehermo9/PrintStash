@@ -1,4 +1,4 @@
-import { lazy, Suspense, useMemo, useState } from "react";
+import { lazy, Suspense, useMemo, useState, type ReactNode } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Checkbox } from "@/components/ui/checkbox";
 import { similarityPrintJobsOptions } from "@/lib/queries/similarity";
@@ -37,9 +37,11 @@ function extent(file: FileRead | undefined) {
 export function SimilarityComparison({
   candidate,
   models,
+  evidence,
 }: {
   candidate: SimilarityCandidate;
   models: [ModelRead | undefined, ModelRead | undefined];
+  evidence?: ReactNode;
 }) {
   const { t, locale } = useI18n();
   const [scale, setScale] = useState(false);
@@ -155,143 +157,218 @@ export function SimilarityComparison({
     },
   ];
   return (
-    <section aria-label={t("similarity.compareTitle")} className="space-y-4">
-      {[jobsA, jobsB].map(
-        (jobs, index) =>
-          jobs.isError && (
-            <div key={index} role="alert" className="text-sm text-destructive">
-              {t("similarity.loadError")}{" "}
-              <Button variant="outline" onClick={() => void jobs.refetch()}>
-                {t("similarity.retry")}
-              </Button>
-            </div>
-          ),
-      )}
-      <div className="flex flex-wrap items-center gap-4 text-sm">
-        <span className="font-medium">{t("similarity.physicalScale")}</span>
-        <label className="flex items-center gap-2">
-          <Checkbox
-            ariaLabel={t("similarity.compensateScale")}
-            checked={scale}
-            disabled={!alignment}
-            onChange={setScale}
-          />
-          {t("similarity.compensateScale")}
-        </label>
-        <label className="flex items-center gap-2">
-          <Checkbox
-            ariaLabel={t("similarity.compensateMirror")}
-            checked={mirror}
-            disabled={!alignment}
-            onChange={setMirror}
-          />
-          {t("similarity.compensateMirror")}
-        </label>
-        <label className="flex items-center gap-2">
-          <Checkbox
-            ariaLabel={t("similarity.overlay")}
-            checked={overlay}
-            disabled={!files[0] || !files[1]}
-            onChange={setOverlay}
-          />
-          {t("similarity.overlay")}
-        </label>
-      </div>
-      <div className="grid gap-3 md:grid-cols-2">
-        {files.map((file, index) => (
-          <div
-            key={modelRefs[index].id}
-            className="min-w-0 overflow-hidden rounded-lg border border-border"
+    <section aria-label={t("similarity.compareTitle")} className="@container/comparison min-w-0">
+      <div className="flex flex-wrap items-center gap-x-5 gap-y-3 border-b border-border bg-muted/30 p-3">
+        <div
+          role="group"
+          aria-label={t("similarity.viewMode")}
+          className="flex max-w-full flex-wrap gap-1 rounded-md bg-muted p-1"
+        >
+          <Button
+            size="sm"
+            variant="ghost"
+            className={!overlay ? "bg-accent text-accent-foreground" : undefined}
+            aria-pressed={!overlay}
+            onClick={() => setOverlay(false)}
           >
-            <div className="border-b border-border px-4 py-3">
-              <Link
-                className="break-words font-medium text-primary hover:underline"
-                href={`/models/${modelRefs[index].id}`}
-              >
-                {modelRefs[index].name}
-              </Link>
-              <p className="truncate text-xs text-muted-foreground">
-                {file?.original_filename ?? t("similarity.noPreview")}
-              </p>
-            </div>
-            <div className="h-64 bg-muted/30 sm:h-80">
-              {file ? (
-                <Suspense
-                  fallback={
-                    <p role="status" className="p-4 text-sm text-muted-foreground">
-                      {t("similarity.loading")}
-                    </p>
-                  }
-                >
-                  <MeshPreviewGate
-                    key={file.id}
-                    // The overlay draws the other Model's mesh in this pane too.
-                    sizeBytes={
-                      index === 0 && overlay && files[1]
-                        ? Math.max(file.size_bytes, files[1].size_bytes)
-                        : file.size_bytes
-                    }
-                    posterUrl={null}
-                    posterAlt={modelRefs[index].name}
-                  >
-                    <STLViewer
-                      url={getAssetUrl(`/api/v1/files/${file.id}/stl`)}
-                      modelId={modelRefs[index].id}
-                      comparison={index === 0 ? left : right}
-                      comparisonCamera={camera}
-                      showGrid={false}
-                      overlay={
-                        index === 0 && overlay && files[1]
-                          ? {
-                              url: getAssetUrl(`/api/v1/files/${files[1].id}/stl`),
-                              comparison: right,
-                            }
-                          : undefined
-                      }
-                    />
-                  </MeshPreviewGate>
-                </Suspense>
-              ) : (
-                <p className="flex h-full items-center justify-center p-4 text-sm text-muted-foreground">
-                  {t("similarity.noPreview")}
-                </p>
-              )}
-            </div>
-          </div>
-        ))}
+            {t("similarity.sideBySide")}
+          </Button>
+          <Button
+            size="sm"
+            variant="ghost"
+            className={overlay ? "bg-accent text-accent-foreground" : undefined}
+            aria-pressed={overlay}
+            disabled={!files[0] || !files[1]}
+            onClick={() => setOverlay(true)}
+          >
+            {t("similarity.overlay")}
+          </Button>
+        </div>
+        <div
+          role="group"
+          aria-label={t("similarity.alignmentOptions")}
+          className="flex flex-wrap gap-x-4 gap-y-2 text-xs"
+        >
+          <label className="flex min-w-0 items-center gap-2">
+            <Checkbox
+              ariaLabel={t("similarity.compensateScale")}
+              checked={scale}
+              disabled={!alignment}
+              onChange={setScale}
+            />
+            {t("similarity.compensateScale")}
+          </label>
+          <label className="flex min-w-0 items-center gap-2">
+            <Checkbox
+              ariaLabel={t("similarity.compensateMirror")}
+              checked={mirror}
+              disabled={!alignment}
+              onChange={setMirror}
+            />
+            {t("similarity.compensateMirror")}
+          </label>
+        </div>
+        <span className="text-xs text-muted-foreground">{t("similarity.physicalScale")}</span>
       </div>
-      {!canAlign && (
-        <p className="text-sm text-muted-foreground">{t("similarity.componentPreviewHelp")}</p>
-      )}
-      <div className="overflow-x-auto rounded-lg border border-border">
-        <table className="w-full text-left text-sm">
-          <thead className="bg-muted/40">
-            <tr>
-              <th scope="col" className="p-3">
-                {t("similarity.measurement")}
-              </th>
-              {modelRefs.map((model) => (
-                <th scope="col" className="p-3" key={model.id}>
-                  {model.name}
+      <div className="grid min-w-0 @5xl/comparison:grid-cols-[minmax(0,1fr)_24rem]">
+        <div className="min-w-0 p-3 sm:p-4">
+          <div
+            role="group"
+            aria-label={t("similarity.previews")}
+            className={overlay ? "grid gap-3" : "grid gap-3 @xl/comparison:grid-cols-2"}
+          >
+            {files.map((file, index) =>
+              overlay && index === 1 ? null : (
+                <div
+                  key={modelRefs[index].id}
+                  className="min-w-0 overflow-hidden rounded-md border border-border"
+                >
+                  <div className="space-y-1 border-b border-border bg-muted/20 px-3 py-2">
+                    {(overlay ? modelRefs : [modelRefs[index]]).map((model, modelIndex) => (
+                      <div key={model.id} className="flex min-w-0 items-center gap-2">
+                        <span className="shrink-0 font-mono text-xs text-muted-foreground">
+                          {t(
+                            (overlay ? modelIndex : index) === 0
+                              ? "similarity.modelA"
+                              : "similarity.modelB",
+                          )}
+                        </span>
+                        <Link
+                          className="min-w-0 truncate text-sm font-medium hover:underline"
+                          href={`/models/${model.id}`}
+                          title={model.name}
+                        >
+                          {model.name}
+                        </Link>
+                      </div>
+                    ))}
+                    <p className="break-words text-xs text-muted-foreground">
+                      {dimensions(file)} ·{" "}
+                      {file?.file_type.toUpperCase() ?? t("similarity.noPreview")}
+                    </p>
+                    <p
+                      className="truncate text-xs text-muted-foreground"
+                      title={file?.original_filename}
+                    >
+                      {file?.original_filename ?? t("similarity.noPreview")}
+                    </p>
+                  </div>
+                  <div className="h-64 bg-muted/30 @xl/comparison:h-80 @5xl/comparison:h-112">
+                    {file ? (
+                      <Suspense
+                        fallback={
+                          <p role="status" className="p-4 text-sm text-muted-foreground">
+                            {t("similarity.loading")}
+                          </p>
+                        }
+                      >
+                        <MeshPreviewGate
+                          key={file.id}
+                          // The overlay draws the other Model's mesh in this pane too.
+                          sizeBytes={
+                            index === 0 && overlay && files[1]
+                              ? Math.max(file.size_bytes, files[1].size_bytes)
+                              : file.size_bytes
+                          }
+                          posterUrl={null}
+                          posterAlt={modelRefs[index].name}
+                        >
+                          <STLViewer
+                            url={getAssetUrl(`/api/v1/files/${file.id}/stl`)}
+                            modelId={modelRefs[index].id}
+                            comparison={index === 0 ? left : right}
+                            comparisonCamera={camera}
+                            showGrid={false}
+                            overlay={
+                              index === 0 && overlay && files[1]
+                                ? {
+                                    url: getAssetUrl(`/api/v1/files/${files[1].id}/stl`),
+                                    comparison: right,
+                                  }
+                                : undefined
+                            }
+                          />
+                        </MeshPreviewGate>
+                      </Suspense>
+                    ) : (
+                      <p className="flex h-full items-center justify-center p-4 text-sm text-muted-foreground">
+                        {t("similarity.noPreview")}
+                      </p>
+                    )}
+                  </div>
+                </div>
+              ),
+            )}
+          </div>
+          {!canAlign && (
+            <p className="mt-3 text-xs text-muted-foreground">
+              {t("similarity.componentPreviewHelp")}
+            </p>
+          )}
+        </div>
+        <div className="min-w-0 border-t border-border @5xl/comparison:border-l @5xl/comparison:border-t-0">
+          <div className="border-b border-border px-4 py-3">
+            <h2 className="text-sm font-semibold">{t("similarity.measurements")}</h2>
+          </div>
+          {[jobsA, jobsB].map(
+            (jobs, index) =>
+              jobs.isError && (
+                <div
+                  key={index}
+                  role="alert"
+                  className="flex flex-wrap items-center justify-between gap-2 border-b border-border px-4 py-2 text-xs text-destructive"
+                >
+                  <span>
+                    {t(index === 0 ? "similarity.modelA" : "similarity.modelB")} ·{" "}
+                    {t("similarity.loadError")}
+                  </span>
+                  <Button size="sm" variant="outline" onClick={() => void jobs.refetch()}>
+                    {t("similarity.retry")}
+                  </Button>
+                </div>
+              ),
+          )}
+          <table
+            aria-label={t("similarity.measurements")}
+            className="w-full table-fixed text-left text-xs"
+          >
+            <thead className="border-b border-border bg-muted/30">
+              <tr>
+                <th scope="col" className="w-1/3 px-3 py-2 font-medium text-muted-foreground">
+                  {t("similarity.measurement")}
                 </th>
-              ))}
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-border">
-            {rows.map((row) => (
-              <tr key={row.label}>
-                <th scope="row" className="p-3 font-medium">
-                  {row.label}
-                </th>
-                {row.values.map((value, index) => (
-                  <td className="p-3 tabular-nums" key={modelRefs[index].id}>
-                    {value}
-                  </td>
+                {modelRefs.map((model, index) => (
+                  <th scope="col" className="w-1/3 px-3 py-2 font-medium" key={model.id}>
+                    <span className="block font-mono text-muted-foreground">
+                      {t(index === 0 ? "similarity.modelA" : "similarity.modelB")}
+                    </span>
+                    <span className="block truncate" title={model.name}>
+                      {model.name}
+                    </span>
+                  </th>
                 ))}
               </tr>
-            ))}
-          </tbody>
-        </table>
+            </thead>
+            <tbody className="divide-y divide-border">
+              {rows.map((row) => (
+                <tr key={row.label}>
+                  <th
+                    scope="row"
+                    className="break-words px-3 py-2 font-medium text-muted-foreground"
+                  >
+                    {row.label}
+                  </th>
+                  {row.values.map((value, index) => (
+                    <td className="break-words px-3 py-2 tabular-nums" key={modelRefs[index].id}>
+                      {value}
+                    </td>
+                  ))}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          {evidence && <div className="px-4 pb-3">{evidence}</div>}
+        </div>
       </div>
     </section>
   );

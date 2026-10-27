@@ -125,9 +125,14 @@ const ERROR_MESSAGES = {
     "This item was not deleted because storage ownership could not be verified. Check Storage health before retrying.",
   storage_risk_confirmation_required:
     "Permanent deletion needs storage-risk confirmation. Refresh this page and review the confirmation before retrying.",
+  // Background work
+  mesh_workers_exceed_memory:
+    "This machine's memory does not fit that many models at once. Choose a smaller number.",
   // Printers
   printer_not_found: "This printer no longer exists.",
   printer_offline: "The printer is offline.",
+  provider_transport_error:
+    "Could not connect to the printer. Check its address and network connection, then retry.",
   printer_permission_denied: "Your role does not allow this printer action.",
   // Ingest
   unsupported_file_type: "Unsupported file type.",
@@ -157,6 +162,7 @@ const ERROR_MESSAGES = {
   no_entries_selected: "Select at least one file to import.",
   // URL import
   url_required: "Enter a URL to import from.",
+  url_invalid: "Enter a valid http(s) URL for a model page or file.",
   url_not_a_direct_file:
     "That link isn't a direct file. Paste a direct .stl/.3mf/.obj/.dxf/.gcode or .zip download link.",
   url_scheme_not_allowed: "Only http(s) URLs can be imported.",
@@ -221,6 +227,10 @@ const ERROR_MESSAGES = {
     "Google Drive isn't available in this server image. Upgrade or rebuild the full image, then try again.",
   storage_connection_probe_failed:
     "Couldn't reach the remote storage. Check its credentials and connection settings, then try again.",
+  backup_filename_invalid: "settings.backupFilenameInvalid",
+  backup_archive_invalid: "settings.backupArchiveInvalid",
+  backup_manifest_invalid: "settings.backupArchiveInvalid",
+  backup_already_exists: "settings.backupAlreadyExists",
   backup_destination_required: "Select at least one available destination for this backup.",
   backup_all_destinations_failed:
     "The backup couldn't be saved to any selected destination. Check each destination and try again.",
@@ -250,8 +260,7 @@ const ERROR_MESSAGES = {
   duplicate_slug: "An item with that name already exists.",
   network_unreachable: "Couldn't reach the server. Check that PrintStash is running and try again.",
   browser_error: "Something went wrong in this browser tab. Reload the page and try again.",
-  unknown:
-    "Something went wrong reaching the server. Check that PrintStash is running and try again.",
+  unknown: "This request could not be completed. Try again.",
 } satisfies Record<string, string>;
 
 /** A server detail code the vault ships copy for. */
@@ -265,9 +274,7 @@ function isKnownErrorCode(code: string): code is KnownErrorCode {
 export function getErrorMessage(code: string): string {
   if (isKnownErrorCode(code)) return knownUiText(ERROR_MESSAGES[code]);
   if (isMessageKey(code)) return uiText(code);
-  return uiText(
-    "Something went wrong reaching the server. Check that PrintStash is running and try again.",
-  );
+  return knownUiText(ERROR_MESSAGES.unknown);
 }
 
 /** Return a user-presentable message for any caught error. */

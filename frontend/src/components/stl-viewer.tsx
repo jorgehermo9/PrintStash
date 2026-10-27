@@ -3,13 +3,15 @@
 import { uiText } from "@/lib/locale";
 import { useUiLocale } from "@/lib/i18n";
 
-import React, { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { Canvas, useThree } from "@react-three/fiber";
 import { OrbitControls, PerspectiveCamera } from "@react-three/drei";
 import * as THREE from "three";
 import { type OrbitControls as OrbitControlsImpl } from "three-stdlib";
 import {
+  comparisonBounds,
   comparisonTransform,
+  fitComparisonFrames,
   sharedScale,
   type ComparisonCamera,
   type MeshComparison,
@@ -122,11 +124,7 @@ function Mesh({
     box.getCenter(centerVec);
     mesh.position.sub(centerVec.multiplyScalar(scale));
 
-    onSized(
-      comparison
-        ? new THREE.Vector3(NORMALIZED_SIZE, NORMALIZED_SIZE, NORMALIZED_SIZE)
-        : sizeVec.clone().multiplyScalar(scale),
-    );
+    onSized(sizeVec.clone().multiplyScalar(scale));
   }, [geometry, onSized, comparison]);
 
   return (
@@ -189,6 +187,7 @@ function Scene({
   const orbitRef = useRef<OrbitControlsImpl>(null);
   const syncing = useRef(false);
   const poseApplied = useRef(false);
+  const initialComparisonPose = useRef(restoredPose.current);
   const sender = useRef(Symbol("comparison-camera"));
   const cameraRef = useRef<THREE.PerspectiveCamera>(null);
   const { scene, camera, invalidate, size: canvasSize } = useThree();
@@ -196,6 +195,23 @@ function Scene({
     () => new THREE.Vector3(NORMALIZED_SIZE, NORMALIZED_SIZE, NORMALIZED_SIZE),
   );
   const { loaded, setLoaded } = useViewerReadiness(url);
+  const overlayComparison = overlay?.comparison;
+  const comparisonSize = useMemo(() => {
+    if (!comparison) return null;
+    const bounds = comparisonBounds(geometry, comparison);
+    if (overlayComparison && overlayGeometry)
+      bounds.max(comparisonBounds(overlayGeometry, overlayComparison));
+    return bounds;
+  }, [geometry, comparison, overlayComparison, overlayGeometry]);
+  useEffect(() => () => comparisonCamera?.removeFrame(sender.current), [comparisonCamera]);
+  useEffect(() => {
+    if (!loaded || !comparisonSize || !cameraRef.current) return;
+    comparisonCamera?.setFrame(sender.current, {
+      size: comparisonSize.toArray(),
+      aspect: canvasSize.width / Math.max(canvasSize.height, 1),
+      verticalFov: cameraRef.current.fov,
+    });
+  }, [loaded, comparisonSize, comparisonCamera, canvasSize.width, canvasSize.height]);
   useEffect(
     () =>
       comparisonCamera?.subscribe((origin, pose) => {
@@ -261,13 +277,19 @@ function Scene({
     fit: () => {
       const cam = cameraRef.current;
       if (!cam) return;
-      const fit = fitCameraToBounds(
-        sizeRef.current,
-        canvasSize.width / Math.max(canvasSize.height, 1),
-        cam.fov,
-      );
+      if (comparisonSize && comparisonCamera) {
+        comparisonCamera.fit();
+        return;
+      }
+      const aspect = canvasSize.width / Math.max(canvasSize.height, 1);
+      const position = comparisonSize
+        ? new THREE.Vector3().fromArray(
+            fitComparisonFrames([{ size: comparisonSize.toArray(), aspect, verticalFov: cam.fov }])
+              .position,
+          )
+        : fitCameraToBounds(sizeRef.current, aspect, cam.fov).position;
       orbitRef.current?.target?.set(0, 0, 0);
-      cam.position.copy(fit.position);
+      cam.position.copy(position);
       cam.lookAt(0, 0, 0);
       orbitRef.current?.update();
       invalidate();
@@ -310,6 +332,8 @@ function Scene({
   }, [
     onControlsReady,
     modelSize,
+    comparisonSize,
+    comparisonCamera,
     loaded,
     canvasSize.width,
     canvasSize.height,
@@ -326,7 +350,7 @@ function Scene({
   // the same safe framing as the generated thumbnail.
   useEffect(() => {
     if (loaded) {
-      const pose = restoredPose.current;
+      const pose = comparisonSize ? initialComparisonPose.current : restoredPose.current;
       if (!poseApplied.current && pose !== null && cameraRef.current && orbitRef.current) {
         poseApplied.current = true;
         cameraRef.current.position.fromArray(pose.position);
@@ -334,9 +358,18 @@ function Scene({
         orbitRef.current.update();
         invalidate();
       } else controlsApi.fit();
+      if (comparisonSize) poseApplied.current = true;
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [loaded, modelSize, canvasSize.width, canvasSize.height, url]);
+  }, [
+    loaded,
+    modelSize,
+    comparisonSize,
+    comparisonCamera,
+    canvasSize.width,
+    canvasSize.height,
+    url,
+  ]);
 
   return (
     <>

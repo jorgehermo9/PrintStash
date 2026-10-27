@@ -9,7 +9,7 @@
 name: printstash
 services:
   printstash:
-    image: ghcr.io/xiao-villamor/printstash:0.14.0
+    image: ghcr.io/xiao-villamor/printstash:0.15.0
     restart: unless-stopped
     stop_grace_period: 60s
     network_mode: bridge
@@ -133,17 +133,17 @@ x-casaos:
   index: /
   scheme: http
   port_map: "3378"
-  version: "0.14.0"
-  update_at: "2026-10-21"
+  version: "0.15.0"
+  update_at: "2026-10-22"
   release_notes:
     en_US: |-
-      - PrintStash 0.14.0 is the current release: one container, one /data volume.
-      - The first administrator is created in the browser from your local network, then PrintStash asks where to store your files.
-      - Adds durable background jobs, AI Search, Similar Models and verified Vault migration.
+      - PrintStash 0.15.0 improves library browsing and native processing.
+      - Back up before upgrading: every model file will be re-derived in the background, which can take hours on a large library. Rolling back requires restoring the pre-upgrade backup.
+      - Stop all API and worker processes before upgrading them together. See the 0.15.0 upgrade notes for details.
     es_ES: |-
-      - PrintStash 0.14.0 es la versión actual: un contenedor y un volumen /data.
-      - El primer administrador se crea en el navegador desde tu red local y después PrintStash pregunta dónde guardar tus archivos.
-      - Añade trabajos en segundo plano duraderos, búsqueda con IA, modelos similares y migración verificada de la bóveda.
+      - PrintStash 0.15.0 mejora la navegación de la biblioteca y el procesamiento nativo.
+      - Haz una copia de seguridad antes de actualizar: todos los archivos de modelos se procesarán de nuevo en segundo plano, lo que puede tardar horas en una biblioteca grande. Para volver atrás hay que restaurar la copia anterior a la actualización.
+      - Detén todos los procesos de API y de trabajo antes de actualizarlos juntos. Consulta las notas de actualización de la versión 0.15.0 para más detalles.
   website: https://printstash.org
   repo: https://github.com/xiao-villamor/PrintStash
   support: https://github.com/xiao-villamor/PrintStash/issues

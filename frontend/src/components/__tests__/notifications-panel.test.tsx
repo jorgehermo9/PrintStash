@@ -40,6 +40,7 @@ import type {
   NotificationDelivery,
   NotificationsSettings,
   NotificationTestResult,
+  NotificationTarget,
   PrinterRead,
 } from "@/types";
 
@@ -164,7 +165,56 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
+const targetLabels = {
+  webhook: ["Webhook URL", "Signing secret (optional)"],
+  discord: ["Discord webhook URL"],
+  telegram: ["Bot token", "Chat ID"],
+  ntfy: ["Server URL", "Topic", "Access token (optional)"],
+} satisfies Record<NotificationTarget, string[]>;
+
+const targetLabelCases = Object.entries(targetLabels).flatMap(([target, labels]) =>
+  labels.map((label) => ({ target, label })),
+);
+
 describe("NotificationsPanel", () => {
+  describe("field labels", () => {
+    it.each(["Name", "Type"])("focuses %s from its visible label", async (label) => {
+      const user = userEvent.setup();
+      renderPanel();
+      await openDraft(user);
+
+      const control = screen.getByLabelText(label, { exact: true });
+      await user.click(screen.getByText(label, { selector: "label", exact: true }));
+
+      expect(control).toHaveFocus();
+      expect(control).toHaveAccessibleName(label);
+    });
+
+    it.each(targetLabelCases)(
+      "focuses $target field $label from its visible label",
+      async ({ target, label }) => {
+        const user = userEvent.setup();
+        renderPanel();
+        await openDraft(user);
+        await user.selectOptions(screen.getByRole("combobox", { name: "Type" }), target);
+
+        const control = screen.getByLabelText(label, { exact: true });
+        await user.click(screen.getByText(label, { selector: "label", exact: true }));
+
+        expect(control).toHaveFocus();
+        expect(control).toHaveAccessibleName(label);
+      },
+    );
+
+    it.each(["Events", "Printers"])("names the %s option group", async (name) => {
+      const user = userEvent.setup();
+      renderPanel();
+      await openDraft(user);
+
+      expect(screen.getByRole("group", { name })).toBeVisible();
+    });
+  });
+
   it("retries unavailable notification settings", async () => {
     const read = vi
       .fn<NotificationsPanelDeps["getNotificationsSettings"]>()
@@ -566,14 +616,17 @@ describe("NotificationsPanel", () => {
   });
 
   it("adopts a replacement channel before editing", async () => {
+    const pending = Promise.withResolvers<NotificationsSettings>();
+    const replacement = {
+      ...EDIT_BASE,
+      enabled: true,
+      channels: [aChannel({ name: "Replacement", edit_epoch: "b".repeat(32) })],
+    };
     const read = vi
       .fn<NotificationsPanelDeps["getNotificationsSettings"]>()
       .mockResolvedValueOnce({ ...EDIT_BASE, enabled: true, channels: [aChannel()] })
-      .mockResolvedValue({
-        ...EDIT_BASE,
-        enabled: true,
-        channels: [aChannel({ name: "Replacement", edit_epoch: "b".repeat(32) })],
-      });
+      .mockResolvedValueOnce(replacement)
+      .mockReturnValue(pending.promise);
     await openConflictingDraft({ getNotificationsSettings: read });
     await userEvent.type(
       screen.getAllByPlaceholderText("•••••••• (unchanged)")[0]!,
@@ -584,7 +637,17 @@ describe("NotificationsPanel", () => {
 
     expect(await screen.findByRole("button", { name: "Save revised changes" })).toBeDisabled();
     await userEvent.click(screen.getByRole("button", { name: "Use current values" }));
-    expect(screen.getByPlaceholderText(/Living-room/)).toHaveValue("Replacement");
+    await waitFor(() => expect(read).toHaveBeenCalledTimes(3));
+    expect(screen.getByRole("textbox", { name: "Name" })).toHaveValue("Local draft");
+
+    await act(async () => {
+      pending.resolve(replacement);
+      await pending.promise;
+    });
+
+    await waitFor(() =>
+      expect(screen.getByRole("textbox", { name: "Name" })).toHaveValue("Replacement"),
+    );
     expect(screen.queryByDisplayValue("fake-old-secret")).not.toBeInTheDocument();
   });
 

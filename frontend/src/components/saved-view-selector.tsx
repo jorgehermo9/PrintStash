@@ -4,11 +4,12 @@ import { uiText } from "@/lib/locale";
 import { useUiLocale } from "@/lib/i18n";
 import { useLibraryStartup } from "@/lib/library-startup-context";
 
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   Bookmark,
   BookmarkPlus,
   Check,
+  ChevronDown,
   Copy,
   Pencil,
   RefreshCw,
@@ -58,6 +59,7 @@ export function SavedViewSelector({
   onRename,
   onDuplicate,
   onDelete,
+  align = "end",
   triggerClassName,
   triggerRole,
   triggerSize = "xs",
@@ -73,6 +75,7 @@ export function SavedViewSelector({
   onRename: (view: SavedViewRead, name: string) => Promise<void>;
   onDuplicate: (view: SavedViewRead) => Promise<void>;
   onDelete: (view: SavedViewRead) => Promise<void>;
+  align?: "start" | "end";
   triggerClassName?: string;
   triggerRole?: "menuitem";
   triggerSize?: "xs" | "sm";
@@ -87,6 +90,13 @@ export function SavedViewSelector({
   const [deleting, setDeleting] = useState<SavedViewRead | null>(null);
   const [name, setName] = useState("");
   const [busy, setBusy] = useState(false);
+  const nameInput = useRef<HTMLInputElement>(null);
+  useEffect(() => {
+    if (editing) {
+      nameInput.current?.focus();
+      nameInput.current?.select();
+    }
+  }, [editing]);
   const draftRevision = useRef(0);
   const confirmationRevision = useRef(0);
   const filtered = useMemo(() => {
@@ -133,9 +143,12 @@ export function SavedViewSelector({
     <Localized>
       <>
         <DropdownMenu
+          portal
+          align={align}
           open={open}
           onOpenChange={setMenuOpen}
           role="dialog"
+          aria-label={uiText("Saved views")}
           contentClassName="w-72 rounded-md border border-border bg-popover text-popover-foreground shadow-lg"
           trigger={
             <Button
@@ -147,9 +160,13 @@ export function SavedViewSelector({
               aria-haspopup="dialog"
               aria-expanded={open}
               onClick={() => setMenuOpen(!open)}
-              className={cn("max-w-44", triggerClassName)}
+              className={cn(
+                "max-w-44",
+                open && "bg-accent text-accent-foreground",
+                triggerClassName,
+              )}
             >
-              <Bookmark className="h-4 w-4" />
+              <Bookmark className="h-4 w-4 shrink-0" />
               <span className="truncate">{active?.name ?? uiText("Saved views")}</span>
               {active && modified && (
                 <span className="text-warning" aria-label={uiText("Modified saved view")}>
@@ -157,6 +174,10 @@ export function SavedViewSelector({
                 </span>
               )}
               {views.length > 0 && <span className="text-muted-foreground">{views.length}</span>}
+              <ChevronDown
+                aria-hidden
+                className={cn("ml-auto h-3.5 w-3.5 shrink-0", open && "rotate-180")}
+              />
             </Button>
           }
         >
@@ -169,7 +190,7 @@ export function SavedViewSelector({
                 onChange={(event) => setQuery(event.target.value)}
                 placeholder={uiText("Find a saved view...")}
                 aria-label={uiText("Find a saved view")}
-                className="pl-8"
+                className="h-9 pl-8 focus-visible:ring-1 focus-visible:ring-offset-0"
               />
             </div>
           </div>
@@ -297,15 +318,18 @@ export function SavedViewSelector({
             }}
             className="space-y-4"
           >
-            <Input
-              autoFocus
-              value={name}
-              onChange={(event) => {
-                draftRevision.current += 1;
-                setName(event.target.value);
-              }}
-              maxLength={128}
-            />
+            <label className="block space-y-1.5">
+              <span className="text-sm font-medium text-foreground">{uiText("View name")}</span>
+              <Input
+                ref={nameInput}
+                value={name}
+                onChange={(event) => {
+                  draftRevision.current += 1;
+                  setName(event.target.value);
+                }}
+                maxLength={128}
+              />
+            </label>
             <div className="flex justify-end gap-2">
               <Button
                 type="button"

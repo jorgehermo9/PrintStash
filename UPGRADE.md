@@ -1,6 +1,39 @@
 # PrintStash Upgrade Guide
 
-## Unreleased: bounded import windows
+## 0.15.0 notes
+
+**Back up before upgrading. Every model file is re-derived in the background;
+a large library on a 4 GB NAS can keep the CPU busy for hours. Rollback requires
+restoring the pre-upgrade application database and managed files.**
+
+Back up the application database and managed files, and retain the previous
+image. Stop every API and worker process and restart them on the same new
+image. Derivation queues do not need to drain first. DBOS 3.3.0
+migrates its disposable engine state; read the [rollback instructions](#0150-dbos-30)
+before starting the upgrade. Do not use `docker compose down -v`.
+
+Docker installations need no host Python change. Source installations require
+Python 3.14 or newer. The unified image includes optional GPU support; existing
+CPU-only installations continue to work. Device access and memory budgets are
+documented in [Optional portable compute](docs/compute.md).
+
+The default native mesh concurrency now follows the usable CPUs and memory,
+up to eight jobs. Settings → Background work → Worker settings can override
+that count; Automatic restores the CPU-and-memory default. On a constrained NAS,
+review this setting and the memory budgets before starting a large import.
+ZIP previews can now start before the import finishes; search indexing still
+waits until it ends. 3MF and STEP producers have newer recipes in this release,
+so the earlier rehearsal's recipe numbers and processing times are historical,
+not predictions for the current build.
+
+After startup, verify sign-in, library browsing, an upload, a Library source
+scan if configured, previews, and backup creation and verification. Review any
+processing refusals in Tasks and Settings. Upgrading from 0.13.x or earlier
+also requires the [0.14.0 volume-layout instructions](#0140-one-data-volume).
+
+<a id="unreleased-bounded-import-windows"></a>
+
+## 0.15.0: bounded import windows
 
 Batch imports materialize one disposable entry at a time. The positive settings
 `VAULT_INGESTION_BATCH_MAX_FILES=4` and `VAULT_INGESTION_BATCH_MAX_MB=512` set
@@ -15,7 +48,9 @@ Stop API and workers together before upgrading, then restart on the same image
 so every writer participates in per-entry confirmation. Back up before upgrading
 as usual. Existing reviewed ZIP validation is retained.
 
-## Unreleased: request command capacity
+<a id="unreleased-request-command-capacity"></a>
+
+## 0.15.0: request command capacity
 
 File acceptance now has a separate per-API-process command limit. The default
 `VAULT_API_COMMAND_CONCURRENCY=8` accepts values from 1 through 128; add it to
@@ -26,7 +61,9 @@ next body chunk holds neither a command token nor a SQL Session.
 Restart the API on the new image. This change adds no database migration or
 derivative recipe; SQLite remains the default and existing data stays in place.
 
-## Unreleased: Python 3.14
+<a id="unreleased-python-314"></a>
+
+## 0.15.0: Python 3.14
 
 Source installations of the application and shared core require Python 3.14 or
 newer. Recreate the backend virtual environment with Python 3.14 and run
@@ -34,7 +71,9 @@ newer. Recreate the backend virtual environment with Python 3.14 and run
 CI and official images use Python 3.14.8; image installations need no host Python
 upgrade. Earlier Python runtimes are no longer supported.
 
-## Unreleased: derivative scheduling
+<a id="unreleased-derivative-scheduling"></a>
+
+## 0.15.0: derivative scheduling
 
 SQLite remains the default; this upgrade does not move data to PostgreSQL.
 The additive application migrations preserve existing Artifacts, scan positions
@@ -59,9 +98,13 @@ the steps to recover: engine state is disposable, so with all processes stopped
 it may be moved aside and rebuilt; unfinished application Jobs then replay
 through the reconciler, and engine checkpoints are lost.
 
-## Unreleased: DBOS 3.0
+<a id="unreleased-dbos-30"></a>
 
-The embedded background engine upgrades from DBOS 2.31.1 to 3.0.0. Its first
+<a id="0150-dbos-30"></a>
+
+## 0.15.0: DBOS 3.3.0
+
+The embedded background engine upgrades from DBOS 2.31.1 to 3.3.0. Its first
 startup automatically migrates the engine database on SQLite and PostgreSQL;
 saved workflow inputs and results remain readable, and queued Jobs can resume.
 The periodic reconciler now uses a persistent schedule, recreated after restore.
@@ -84,8 +127,9 @@ The periodic reconciler now uses a persistent schedule, recreated after restore.
   same way.
 - **Previews are prepared again after the upgrade.** New thumbnail and
   metadata recipes re-derive every model file in the background. Browsing and
-  imports keep working meanwhile; on a 4-core server it took about 2 seconds of
-  CPU per file, so a large library keeps the server busy for hours.
+  imports keep working meanwhile. Processing time depends on geometry and
+  hardware; a large library on a 4 GB NAS can keep the CPU busy for hours.
+  Allow the background queue to settle before judging steady-state load.
 
 See the [DBOS upgrade guide](https://docs.dbos.dev/python/upgrading).
 

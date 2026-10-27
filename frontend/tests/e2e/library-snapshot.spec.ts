@@ -58,7 +58,9 @@ async function snapshotApi(page: Page) {
       const url = new URL(route.request().url());
       const row = collections.find((candidate) =>
         url.pathname.endsWith("/lookup")
-          ? candidate.path === url.searchParams.get("path")
+          ? url.searchParams.has("id")
+            ? candidate.id === Number(url.searchParams.get("id"))
+            : candidate.path === url.searchParams.get("path")
           : url.pathname.endsWith("/children")
             ? String(candidate.id) === url.searchParams.get("parent_id")
             : url.pathname.endsWith("/readme")
@@ -276,7 +278,7 @@ test.describe("Library snapshots", () => {
     await expectSnapshot(page, "C");
     await scrollToEnd(page);
     await late.started.promise;
-    await page.getByRole("button", { name: /tester/ }).click();
+    await page.getByRole("button", { name: "My workspace" }).click();
     await page.getByRole("menuitem", { name: "Log out", exact: true }).click();
     await logout.started.promise;
     await expectPrivateRetired(page);

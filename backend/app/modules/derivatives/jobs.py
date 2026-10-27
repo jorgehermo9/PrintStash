@@ -12,6 +12,7 @@ from app.core.time import utcnow
 from app.db.models import File, JobKind, LaneName
 from app.db.scopes import live
 from app.modules.work.contracts import (
+    DuringAdditions,
     JobContext,
     JobDefinition,
     JobExecution,
@@ -102,6 +103,22 @@ def _hooks(derivative_group: DerivativeGroup):
     return cancel, on_failure, retry
 
 
+def _during_additions(name: JobKind) -> DuringAdditions:
+    """How a derivative definition looks for work while Models are being added.
+
+    A viewer mesh is what opening a Model in 3D waits for; it never yields.
+    Mesh outputs follow an import as its Models land, at a pace. G-code and
+    toolpath outputs wait for the last addition to settle: a paced look costs
+    the import a writer turn every few seconds even when the batch brings no
+    G-code, and the settling addition stamps them, so nothing is lost.
+    """
+    if name is JobKind.DERIVATIVES_VIEWER_STL:
+        return DuringAdditions.RUNS
+    if name is JobKind.DERIVATIVES_MESH:
+        return DuringAdditions.PACED
+    return DuringAdditions.WAITS
+
+
 def _definition(name: JobKind, lane: LaneName, produce: Producer) -> JobDefinition:
     derivative_group = group(name)
     cancel, on_failure, retry = _hooks(derivative_group)
@@ -115,8 +132,7 @@ def _definition(name: JobKind, lane: LaneName, produce: Producer) -> JobDefiniti
         retry=retry,
         label=derivative_group.label,
         admission=lambda session: policy.admission(session, name),
-        # A viewer mesh is what opening a Model in 3D waits for; it never yields.
-        waits_for_additions=name is not JobKind.DERIVATIVES_VIEWER_STL,
+        during_additions=_during_additions(name),
     )
 
 

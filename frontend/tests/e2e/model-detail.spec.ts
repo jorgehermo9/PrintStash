@@ -20,10 +20,142 @@ import { expect, test } from "@playwright/test";
 
 import { collectPageProblems, useMockApi } from "./_setup";
 import type { ModelRead } from "../../src/types/models";
+import { aModel } from "../../src/test-support/factories";
 
 useMockApi();
 
 test.describe("model detail route", () => {
+  test("anchors the title editor without shifting header actions at 1080p", async ({ page }) => {
+    await page.setViewportSize({ width: 1920, height: 1080 });
+    await page.goto("/models/1");
+    const title = page.getByRole("heading", { name: "skadis_kitchen-roll_screw", exact: true });
+    const tags = page.getByRole("button", { name: "Edit tags for skadis_kitchen-roll_screw" });
+    const favorite = page.getByRole("button", { name: "Favorite", exact: true });
+    const actions = page.getByRole("button", { name: "Model actions", exact: true });
+    await expect(tags).toBeVisible();
+    await page.evaluate(() => document.fonts.ready);
+    const header = title.locator("xpath=ancestor::header");
+    const originalHeader = await header.boundingBox();
+    const originalActions = await Promise.all(
+      [tags, favorite, actions].map((item) => item.boundingBox()),
+    );
+
+    await page.getByRole("button", { name: "Rename skadis_kitchen-roll_screw" }).click();
+    const editor = page.getByRole("dialog", {
+      name: "Rename skadis_kitchen-roll_screw",
+      exact: true,
+    });
+    await expect(editor.getByRole("textbox", { name: "Model name", exact: true })).toBeFocused();
+    await expect(title).toBeVisible();
+    await expect(editor).not.toHaveAttribute("aria-modal", "true");
+    await expect(page.getByPlaceholder("Optional description")).toHaveCount(0);
+    const titleBox = await title.boundingBox();
+    const editorBox = await editor.boundingBox();
+    expect(titleBox).not.toBeNull();
+    expect(editorBox).not.toBeNull();
+    expect(editorBox!.y).toBeGreaterThanOrEqual(titleBox!.y + titleBox!.height);
+    expect(editorBox!.y - titleBox!.y - titleBox!.height).toBeLessThanOrEqual(32);
+    expect(Math.abs(editorBox!.x - titleBox!.x)).toBeLessThanOrEqual(1);
+    expect(editorBox!.width).toBeLessThan(480);
+    expect(editorBox!.height).toBeLessThan(200);
+    expect(await header.boundingBox()).toEqual(originalHeader);
+    for (const [index, action] of [tags, favorite, actions].entries()) {
+      await expect(action).toBeVisible();
+      await expect(action).toBeEnabled();
+      expect(await action.boundingBox()).toEqual(originalActions[index]);
+    }
+
+    // An ordinary header action remains usable while the title editor is open.
+    await actions.click();
+    await expect(editor).toHaveCount(0);
+    await expect(page.getByRole("menuitem", { name: /Edit details/ })).toBeVisible();
+  });
+
+  test("keeps missing-name feedback inside the compact title editor", async ({ page }) => {
+    await page.setViewportSize({ width: 1920, height: 1080 });
+    await page.goto("/models/1");
+    const title = page.getByRole("heading", { name: "skadis_kitchen-roll_screw", exact: true });
+    await page.evaluate(() => document.fonts.ready);
+    const originalHeader = await title.locator("xpath=ancestor::header").boundingBox();
+    await title.dblclick();
+    const editor = page.getByRole("dialog", {
+      name: "Rename skadis_kitchen-roll_screw",
+      exact: true,
+    });
+    await editor.getByRole("textbox", { name: "Model name", exact: true }).fill("");
+    await expect(editor.getByRole("alert")).toContainText("Model name is required.");
+    await expect(editor.getByRole("button", { name: "Save", exact: true })).toBeDisabled();
+    await expect(editor.getByRole("button", { name: "Cancel", exact: true })).toBeEnabled();
+    expect(await title.locator("xpath=ancestor::header").boundingBox()).toEqual(originalHeader);
+  });
+
+  for (const width of [320, 390]) {
+    test(`keeps the compact title editor inside a ${width}px viewport`, async ({ page }) => {
+      await page.setViewportSize({ width, height: 844 });
+      await page.goto("/models/1");
+      const rename = page.getByRole("button", { name: "Rename skadis_kitchen-roll_screw" });
+      await rename.click();
+      const editor = page.getByRole("dialog", {
+        name: "Rename skadis_kitchen-roll_screw",
+        exact: true,
+      });
+      const name = editor.getByRole("textbox", { name: "Model name", exact: true });
+      await name.fill("A long model title that still needs reachable editing controls");
+      await page.evaluate(() => document.fonts.ready);
+      for (const control of [
+        editor,
+        name,
+        editor.getByRole("button", { name: "Cancel", exact: true }),
+        editor.getByRole("button", { name: "Save", exact: true }),
+      ]) {
+        await expect(control).toBeInViewport();
+        const bounds = await control.boundingBox();
+        expect(bounds).not.toBeNull();
+        expect(bounds!.x).toBeGreaterThanOrEqual(0);
+        expect(bounds!.x + bounds!.width).toBeLessThanOrEqual(width);
+      }
+      await expect(page.getByRole("button", { name: "Favorite", exact: true })).toBeVisible();
+      expect(
+        await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth),
+      ).toBe(true);
+      await name.press("Escape");
+      await expect(editor).toHaveCount(0);
+      await expect(rename).toBeFocused();
+      await expect(
+        page.getByRole("heading", { name: "skadis_kitchen-roll_screw", exact: true }),
+      ).toBeVisible();
+    });
+  }
+
+  for (const width of [320, 1280]) {
+    test(`wraps the full nested collection path in Overview at ${width}px`, async ({ page }) => {
+      const collectionLabel = "PrintStash/Organization/Gridfinity/" + "NestedCollection".repeat(20);
+      await page.setViewportSize({ width, height: 900 });
+      await page.route("**/api/v1/models/1", (route) =>
+        route.fulfill({ json: aModel({ id: 1, collection_label: collectionLabel }) }),
+      );
+      await page.goto("/models/1");
+      const sidebar = page.getByTestId("model-detail-sidebar");
+      const path = sidebar.getByText(collectionLabel, { exact: true });
+      await expect(path).toBeVisible();
+      await path.scrollIntoViewIfNeeded();
+
+      const bounds = await sidebar.evaluate((element) => ({
+        content: element.scrollWidth,
+        width: element.clientWidth,
+      }));
+      const pathBounds = await path.evaluate((element) => ({
+        content: element.scrollWidth,
+        width: element.clientWidth,
+        height: element.getBoundingClientRect().height,
+        lineHeight: Number.parseFloat(getComputedStyle(element).lineHeight),
+      }));
+      expect(bounds.content).toBeLessThanOrEqual(bounds.width + 1);
+      expect(pathBounds.content).toBeLessThanOrEqual(pathBounds.width + 1);
+      expect(pathBounds.height).toBeGreaterThan(pathBounds.lineHeight * 2);
+    });
+  }
+
   test("recovers a failed Model read without reloading the route", async ({ page }) => {
     let available = false;
     await page.route("**/api/v1/models/1", async (route) => {
@@ -190,6 +322,37 @@ test.describe("model detail route", () => {
     await page.getByRole("button", { name: "Restore" }).click();
     await expect(page.getByText("skadis_kitchen-roll_screw.stl").first()).toBeVisible();
     await expect(page.getByRole("heading", { name: "Trashed source files" })).toHaveCount(0);
+  });
+
+  test("explains failed outputs by their cause instead of the network", async ({ page }) => {
+    await page.setViewportSize({ width: 1920, height: 1080 });
+    // Native workers that could not start (issue #567) fail metadata and the
+    // 3D preview together, with a code the reader should never see.
+    await page.route("**/api/v1/files/1/derivatives", (route) =>
+      route.fulfill({
+        json: ["metadata", "viewer_stl"].map((kind) => ({
+          kind,
+          recipe_version: 1,
+          state: "failed",
+          attempts: 1,
+          failure_reason: "worker_failed",
+          updated_at: new Date().toISOString(),
+          retryable: true,
+        })),
+      }),
+    );
+
+    await page.goto("/models/1");
+    await page.getByRole("tab", { name: /Files/ }).click();
+
+    await expect(page.getByText("Metadata, 3D preview failed")).toBeVisible();
+    await expect(page.getByText(/stopped unexpectedly on the server/)).toHaveCount(1);
+    await expect(page.getByText(/reaching the server/)).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "Retry 3D preview" })).toBeVisible();
+    await page
+      .getByText("Metadata, 3D preview failed")
+      .locator("xpath=ancestor::li")
+      .screenshot({ path: test.info().outputPath("derivative-failures.png") });
   });
 
   test("keeps viewer controls reachable inside the phone preview", async ({ page }) => {

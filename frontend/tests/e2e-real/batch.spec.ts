@@ -7,7 +7,7 @@
  * preflight and the model is **still there** afterwards — a half-applied batch would
  * leave a library in a state nobody asked for and no way to tell which half went.
  */
-import { openLibraryTools } from "./util";
+import { libraryTool, openLibraryTools } from "./util";
 import { test, expect, authBundleFor, authedContext } from "./helpers";
 import { createCollectionViaVault, modelCard, uploadModel } from "./util";
 
@@ -33,7 +33,7 @@ test.describe("batch actions", () => {
 
     // Enter select mode, select both (scoped to this collection), open the toolbar.
     await openLibraryTools(page);
-    await page.getByRole("button", { name: "Select", exact: true }).click();
+    await libraryTool(page, "Select").click();
     await page.getByRole("button", { name: /Select all on screen \(2\)/ }).click();
     // Both the grid header and the floating toolbar say "2 selected" — either proves it.
     await expect(page.getByText("2 selected").first()).toBeVisible();
@@ -53,7 +53,7 @@ test.describe("batch actions", () => {
 
     // Batch delete → both move to trash, collection empties.
     await openLibraryTools(page);
-    await page.getByRole("button", { name: "Select", exact: true }).click();
+    await libraryTool(page, "Select").click();
     await page.getByRole("button", { name: /Select all on screen \(2\)/ }).click();
     // Scope to the floating toolbar — "Delete" otherwise also matches the sidebar's
     // "Delete collection" button (substring match).
@@ -92,7 +92,7 @@ test.describe("batch actions", () => {
     await page.goto(`/?c=${source}`);
     await expect(modelCard(page, model)).toBeVisible();
     await openLibraryTools(page);
-    await page.getByRole("button", { name: "Select", exact: true }).click();
+    await libraryTool(page, "Select").click();
     await page.getByRole("button", { name: /Select all on screen \(1\)/ }).click();
 
     await page.locator("div.fixed.bottom-4").getByRole("button", { name: "Move" }).click();
@@ -192,7 +192,7 @@ test.describe("batch actions", () => {
       await viewerPage.goto(`/?c=${col}`);
       await expect(modelCard(viewerPage, model)).toBeVisible();
       await openLibraryTools(viewerPage);
-      await viewerPage.getByRole("button", { name: "Select", exact: true }).click();
+      await libraryTool(viewerPage, "Select").click();
       await viewerPage.getByRole("button", { name: /Select all on screen \(1\)/ }).click();
       await viewerPage
         .locator("div.fixed.bottom-4")

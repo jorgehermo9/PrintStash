@@ -3,16 +3,20 @@ import { act, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { librarySourceKeys } from "@/lib/queries/settings-library-sources";
-import { SimilaritySettingsPanel } from "@/components/similarity-settings-panel";
+import {
+  SimilaritySettingsPanel,
+  type SimilaritySettingsView,
+} from "@/components/similarity-settings-panel";
 import { aSimilarityRun, similaritySettings, similarityStatus } from "@/test-support/similarity";
 import { aCollection, aModel, anExternalLibrary } from "@/test-support/factories";
 import { collectionTreeRoutes } from "@/test-support/collection-tree";
 import { json, renderApp, type RenderAppOptions } from "@/test-support/render";
 import { listTasks, resetTasksForNewSetup, trackSimilarityRun } from "@/lib/task-center";
 
-function renderSettings(options: RenderAppOptions = {}) {
-  return renderApp(<SimilaritySettingsPanel />, {
-    ...options,
+function renderSettings(options: RenderAppOptions & { view?: SimilaritySettingsView } = {}) {
+  const { view = "scan", ...appOptions } = options;
+  return renderApp(<SimilaritySettingsPanel view={view} />, {
+    ...appOptions,
     routes: {
       "GET /api/v1/similarity/status": json(similarityStatus()),
       "GET /api/v1/similarity/runs": json({ items: [], next_cursor: null }),
@@ -30,9 +34,93 @@ afterEach(() => {
 });
 
 describe("SimilaritySettingsPanel", () => {
+  it("keeps the default scan focused on starting analysis", async () => {
+    renderSettings();
+    expect(await screen.findByRole("button", { name: "Start analysis" })).toBeVisible();
+    expect(screen.getByRole("combobox", { name: "Analysis scope" })).toBeVisible();
+    expect(screen.queryByRole("form", { name: "Similar models" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "Analysis history" })).not.toBeInTheDocument();
+  });
+  it("shows the enable control directly in analysis settings", async () => {
+    renderSettings({ view: "settings" });
+    expect(
+      await screen.findByRole("checkbox", { name: "Enable similarity analysis" }),
+    ).toBeVisible();
+    expect(screen.queryByRole("button", { name: "Start analysis" })).not.toBeInTheDocument();
+  });
+  it("explains disabled analysis beside its start control", async () => {
+    renderSettings({
+      routes: {
+        "GET /api/v1/similarity/status": json(
+          similarityStatus({ enabled: false, settings: similaritySettings({ enabled: false }) }),
+        ),
+      },
+    });
+    expect(
+      await screen.findByText(
+        "Analysis is turned off. Enable it in Analysis settings to find matches.",
+      ),
+    ).toBeVisible();
+    expect(screen.getByRole("button", { name: "Start analysis" })).toBeDisabled();
+  });
+  it.each([false, true])(
+    "blocks analysis after a failed status read with cached data=%s",
+    async (cached) => {
+      const app = renderSettings({
+        routes: {
+          "GET /api/v1/similarity/status": cached
+            ? json(similarityStatus())
+            : json({ detail: "unavailable" }, 503),
+        },
+      });
+      await waitFor(() =>
+        expect(screen.getByRole("button", { name: "Start analysis" })).toHaveProperty(
+          "disabled",
+          !cached,
+        ),
+      );
+      if (cached) {
+        app.route({ "GET /api/v1/similarity/status": json({ detail: "unavailable" }, 503) });
+        await act(async () => {
+          await app.client.invalidateQueries({ queryKey: ["similarity", "status"] });
+        });
+      }
+      expect(await screen.findByText("Could not load similarity results")).toBeVisible();
+      expect(screen.getByRole("button", { name: "Start analysis" })).toBeDisabled();
+      expect(screen.getByRole("button", { name: "Try again" })).toBeVisible();
+    },
+  );
+  it.each([
+    { scope: "library", ids: [], label: "Entire library" },
+    { scope: "models", ids: [1, 2], label: "2 selected Models" },
+    { scope: "collections", ids: [1], label: "1 collection" },
+    { scope: "sources", ids: [1, 2], label: "2 library sources" },
+  ] as const)("identifies a $scope analysis history entry", async ({ scope, ids, label }) => {
+    renderSettings({
+      view: "history",
+      routes: {
+        "GET /api/v1/similarity/runs": json({
+          items: [
+            aSimilarityRun({
+              state: "completed",
+              scope,
+              scope_ids: [...ids],
+              created_at: "2026-01-01T12:00:00Z",
+            }),
+          ],
+          next_cursor: null,
+        }),
+      },
+    });
+    const summary = await screen.findByText(new RegExp(label + " ·"));
+    expect(summary).toBeVisible();
+    expect(summary.querySelector("time")).toHaveAttribute("datetime", "2026-01-01T12:00:00Z");
+    expect(screen.getByText("Completed", { exact: true })).toBeVisible();
+  });
   it("publishes acknowledged cancellation before a failed history refresh", async () => {
     let cancelled = false;
     renderSettings({
+      view: "history",
       routes: {
         "GET /api/v1/similarity/runs": () =>
           cancelled
@@ -44,7 +132,6 @@ describe("SimilaritySettingsPanel", () => {
         },
       },
     });
-    await userEvent.click(screen.getByText("Analysis history"));
     await userEvent.click(await screen.findByRole("button", { name: "Cancel analysis" }));
     await screen.findByRole("alert");
     expect(screen.getByRole("button", { name: "Cancel analysis" })).toBeDisabled();
@@ -106,9 +193,9 @@ describe("SimilaritySettingsPanel", () => {
   });
   it("retries a failed candidate-count preview", async () => {
     const app = renderSettings({
+      view: "settings",
       routes: { "POST /api/v1/similarity/selection-preview": json({ detail: "unavailable" }, 503) },
     });
-    await userEvent.click(screen.getByText("Analysis options"));
     await screen.findByRole("alert");
     app.route({ "POST /api/v1/similarity/selection-preview": json({ total: 3, by_class: {} }) });
     await userEvent.click(screen.getByRole("button", { name: "Try again" }));
@@ -119,8 +206,7 @@ describe("SimilaritySettingsPanel", () => {
     ]);
   });
   it("keeps a dirty budget through failed background reads", async () => {
-    const app = renderSettings();
-    await userEvent.click(screen.getByText("Analysis options"));
+    const app = renderSettings({ view: "settings" });
     await userEvent.click(
       await screen.findByText("Advanced settings", { selector: "form summary" }),
     );
@@ -143,8 +229,10 @@ describe("SimilaritySettingsPanel", () => {
     { resource: "history", endpoint: "GET /api/v1/similarity/runs", open: "Analysis history" },
     { resource: "sources", endpoint: "GET /api/v1/libraries", open: null },
   ])("retries an unavailable $resource projection", async ({ endpoint, open }) => {
-    const app = renderSettings({ routes: { [endpoint]: json({ detail: "unavailable" }, 503) } });
-    if (open) await userEvent.click(screen.getByText(open));
+    const app = renderSettings({
+      view: open ? "history" : "scan",
+      routes: { [endpoint]: json({ detail: "unavailable" }, 503) },
+    });
     expect(await screen.findByRole("alert")).toHaveTextContent("Could not load similarity results");
     const reads = () =>
       app.requestsWithMethod("GET").filter((request) => request.url === endpoint.slice(4));
@@ -158,11 +246,11 @@ describe("SimilaritySettingsPanel", () => {
   });
   it("adopts the acknowledged budget without a second settings write", async () => {
     const app = renderSettings({
+      view: "settings",
       routes: {
         "PATCH /api/v1/similarity/settings": json(similaritySettings({ triangle_cap: 123456 })),
       },
     });
-    await userEvent.click(screen.getByText("Analysis options"));
     await userEvent.click(
       await screen.findByText("Advanced settings", { selector: "form summary" }),
     );
@@ -175,8 +263,7 @@ describe("SimilaritySettingsPanel", () => {
     expect(app.requestsWithMethod("PATCH")).toHaveLength(1);
   });
   it("preserves a dirty budget during status refresh", async () => {
-    const app = renderSettings();
-    await userEvent.click(screen.getByText("Analysis options"));
+    const app = renderSettings({ view: "settings" });
     await userEvent.click(
       await screen.findByText("Advanced settings", { selector: "form summary" }),
     );
@@ -199,8 +286,7 @@ describe("SimilaritySettingsPanel", () => {
   });
   it("saves a complete dense-mesh budget", async () => {
     const user = userEvent.setup();
-    const rendered = renderSettings();
-    await user.click(screen.getByText("Analysis options"));
+    const rendered = renderSettings({ view: "settings" });
     await user.click(await screen.findByText("Advanced settings", { selector: "form summary" }));
     const input = screen.getByRole("spinbutton", { name: "Triangle limit per mesh" });
     await user.clear(input);
@@ -217,8 +303,7 @@ describe("SimilaritySettingsPanel", () => {
 
   it("persists the operator opt-in", async () => {
     const user = userEvent.setup();
-    const rendered = renderSettings();
-    await user.click(screen.getByText("Analysis options"));
+    const rendered = renderSettings({ view: "settings" });
     await user.click(await screen.findByRole("checkbox", { name: "Enable similarity analysis" }));
     await user.click(screen.getByRole("button", { name: "Save settings" }));
     await waitFor(() => expect(rendered.requestsWithMethod("PATCH")).toHaveLength(1));
@@ -231,6 +316,7 @@ describe("SimilaritySettingsPanel", () => {
   it("requests cancellation for a running scan", async () => {
     const user = userEvent.setup();
     const rendered = renderSettings({
+      view: "history",
       routes: {
         "GET /api/v1/similarity/runs": json({
           items: [aSimilarityRun({ state: "running" })],
@@ -239,7 +325,6 @@ describe("SimilaritySettingsPanel", () => {
         "POST /api/v1/similarity/runs/1/cancel": json(aSimilarityRun({ state: "cancelling" })),
       },
     });
-    await user.click(screen.getByText("Analysis history"));
     await user.click(await screen.findByRole("button", { name: "Cancel analysis" }));
     await waitFor(() =>
       expect(
@@ -251,6 +336,7 @@ describe("SimilaritySettingsPanel", () => {
   it("previews thresholds without starting a run", async () => {
     const user = userEvent.setup();
     const app = renderSettings({
+      view: "settings",
       routes: {
         "POST /api/v1/similarity/selection-preview": json({
           total: 8,
@@ -258,7 +344,6 @@ describe("SimilaritySettingsPanel", () => {
         }),
       },
     });
-    await user.click(screen.getByText("Analysis options"));
     expect(await screen.findByText(/8 open candidates meet these thresholds/)).toBeVisible();
     await user.click(screen.getByText("Advanced settings", { selector: "form summary" }));
     await user.click(screen.getByRole("checkbox", { name: "Set confidence per evidence class" }));
@@ -425,11 +510,10 @@ describe("Scoped analysis", () => {
     expect(screen.getByRole("button", { name: "Start analysis" })).toBeDisabled();
   });
   it("explains failed preview counts", async () => {
-    const user = userEvent.setup();
     renderSettings({
+      view: "settings",
       routes: { "POST /api/v1/similarity/selection-preview": json({ detail: "unavailable" }, 503) },
     });
-    await user.click(screen.getByText("Analysis options"));
     expect(await screen.findByRole("alert")).toHaveTextContent(
       "Could not update the candidate count",
     );
@@ -467,6 +551,7 @@ describe("Localized analysis outcomes", () => {
     "renders $locale outcomes for $count",
     async ({ locale, count, partial, unsupported }) => {
       renderSettings({
+        view: "history",
         locale,
         routes: {
           "GET /api/v1/similarity/runs": json({
@@ -480,9 +565,6 @@ describe("Localized analysis outcomes", () => {
           }),
         },
       });
-      await userEvent.click(
-        screen.getByText(locale === "es" ? "Historial de análisis" : "Analysis history"),
-      );
       expect(await screen.findByText(partial)).toBeVisible();
       expect(await screen.findByText(unsupported)).toBeVisible();
     },

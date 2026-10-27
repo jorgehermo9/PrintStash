@@ -154,12 +154,15 @@ def lock_publication_locator(
             )
             .on_conflict_do_nothing(index_elements=["id"])
         )
-        session.execute(
-            update(StoragePublicationLocator)
-            .where(StoragePublicationLocator.id == identifier)
-            .values(id=StoragePublicationLocator.id)
-            .execution_options(synchronize_session=False)
-        )
+        if dialect == "postgresql":
+            # The row lock. On SQLite the INSERT above already holds the one
+            # writer for this transaction, even when it inserted nothing.
+            session.execute(
+                update(StoragePublicationLocator)
+                .where(StoragePublicationLocator.id == identifier)
+                .values(id=StoragePublicationLocator.id)
+                .execution_options(synchronize_session=False)
+            )
         anchor = session.get(
             StoragePublicationLocator, identifier, populate_existing=True
         )

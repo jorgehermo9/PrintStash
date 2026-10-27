@@ -173,6 +173,22 @@ class TestDecryptSecret:
         with pytest.raises(ValueError, match="cannot be decrypted"):
             secrets_mod.decrypt_secret(token)
 
+    def test_a_replaced_key_file_takes_effect_without_a_restart(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path
+    ) -> None:
+        key_file = tmp_path / "secrets-key"
+        key_file.write_bytes(b"first-file-key-material\n")
+        monkeypatch.setitem(_overlay, "secrets_key", "")
+        monkeypatch.setitem(_overlay, "secrets_key_file", key_file)
+        token = secrets_mod.encrypt_secret("hunter2")
+        # A restore puts a different file in place, as a new inode.
+        replacement = tmp_path / "restored-key"
+        replacement.write_bytes(b"restored-file-key-material\n")
+        replacement.replace(key_file)
+
+        with pytest.raises(ValueError, match="cannot be decrypted"):
+            secrets_mod.decrypt_secret(token)
+
     def test_legacy_plaintext_credentials_remain_readable(
         self, db_session: Session
     ) -> None:

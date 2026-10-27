@@ -33,6 +33,7 @@ Lanes
              A separate CI phase; includes slow tests.
   full-resources full-suite container resource tests, serially.
              A separate CI phase; each real service starts once.
+             PRINTSTASH_TEST_RESOURCE_EXPRESSION narrows CI resource shards.
   coverage   `full` under branch coverage, then the coverage gate: aggregate
              regression floor plus a per-module floor (tests/repo/test_coverage_floors.py).
              Writes term-missing, .coverage-html/index.html and coverage.json.
@@ -150,7 +151,8 @@ case "$lane" in
     ;;
   full-resources)
     add_paths tests
-    exec uv run pytest -m "($resource_expression) and not coverage_gate and $not_scale" ${lane_paths[@]+"${lane_paths[@]}"} ${pytest_args[@]+"${pytest_args[@]}"}
+    selection="${PRINTSTASH_TEST_RESOURCE_EXPRESSION:-$resource_expression}"
+    exec uv run pytest -m "($selection) and not coverage_gate and $not_scale" ${lane_paths[@]+"${lane_paths[@]}"} ${pytest_args[@]+"${pytest_args[@]}"}
     ;;
   full)
     add_paths tests

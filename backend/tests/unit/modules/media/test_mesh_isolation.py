@@ -1388,15 +1388,17 @@ def staged_native(tmp_path, monkeypatch):
 
     guarded_command = mesh_isolation.worker_command
 
-    def configure(mode, *, final=False, budget=256 * MB):
-        monkeypatch.setitem(_overlay, "mesh_worker_timeout_seconds", 1.0)
+    def configure(mode, *, final=False, budget=256 * MB, timeout=5.0):
+        # Startup and coverage flushing are not the behavior under test.
+        # Deadline cases explicitly request the short timeout they exercise.
+        monkeypatch.setitem(_overlay, "mesh_worker_timeout_seconds", timeout)
         monkeypatch.setattr(mesh_isolation, "memory_budget_bytes", lambda: budget)
         monkeypatch.setattr(
             mesh_isolation,
             "worker_command",
             lambda _module, _arguments, allowance: guarded_command(
                 "tests.fakes.mesh_staged_output_probe",
-                [mode, str(complete if final else basic), str(pids)],
+                [mode, str(complete if final else basic), str(pids), str(budget)],
                 allowance,
             ),
         )
@@ -1407,7 +1409,7 @@ def staged_native(tmp_path, monkeypatch):
 class TestStagedNativeOutputs:
     def test_preserves_basic_output_before_deadline(self, staged_native):
         request, geometry, pids, configure = staged_native
-        configure("stall")
+        configure("stall", timeout=1.0)
         outputs = []
         observed_live_child = []
 
@@ -1437,7 +1439,7 @@ class TestStagedNativeOutputs:
 
     def test_keeps_deadline_active_after_final_eof(self, staged_native):
         request, geometry, pids, configure = staged_native
-        configure("final_stall", final=True)
+        configure("final_stall", final=True, timeout=1.0)
         outputs = []
 
         with pytest.raises(MeshWorkerError) as error:
@@ -1449,7 +1451,10 @@ class TestStagedNativeOutputs:
 
     def test_keeps_rss_limit_active_after_final_eof(self, staged_native):
         request, geometry, pids, configure = staged_native
-        configure("grow", final=True, budget=64 * MB)
+        # Coverage instruments the bootstrap, sentinel and descendant: their
+        # startup RSS can exceed 64 MiB before any framed output is emitted.
+        # Leave startup headroom; the probe allocates the entire budget after EOF.
+        configure("grow", final=True)
         outputs = []
 
         with pytest.raises(MeshWorkerError) as error:
@@ -1506,7 +1511,7 @@ class TestStagedNativeOutputs:
 def blocked_output_callback(staged_native, mode, budget):
     """A callback remains blocked until the test has observed native termination."""
     request, geometry, pids, configure = staged_native
-    configure(mode, budget=budget)
+    configure(mode, budget=budget, timeout=1.0 if mode == "stall" else 5.0)
     entered = Event()
     release = Event()
     outputs = []
@@ -1545,7 +1550,7 @@ class TestBlockedOutputCallback:
             ),
             pytest.param(
                 "grow",
-                64 * MB,
+                256 * MB,
                 ThumbnailFailureReason.RESOURCE_LIMIT,
                 "memory_limit",
                 id="tree-rss",
@@ -1663,8 +1668,10 @@ class TestWatchdogStartup:
 
 class TestCallbackWatchdog:
     def test_preserves_guardian_when_stopping_guarded_root(self, monkeypatch):
+        from app.modules.media import worker_bootstrap
+
         signals = []
-        monkeypatch.setattr(mesh_isolation.sys, "platform", "linux")
+        monkeypatch.setattr(worker_bootstrap, "pidfd_supported", lambda: True)
         monkeypatch.setattr(
             mesh_isolation.native_process, "process_tree_rss_bytes", lambda _pid: 2
         )
@@ -1682,3 +1689,20 @@ class TestCallbackWatchdog:
 
         assert signals == [(123, mesh_isolation.signal.SIGKILL)]
         assert monitor.failure_cause() is mesh_isolation.WorkerExitCause.MEMORY_LIMIT
+
+    def test_stops_the_whole_group_without_a_guardian(self, monkeypatch):
+        from app.modules.media import worker_bootstrap
+
+        groups = []
+        monkeypatch.setattr(worker_bootstrap, "pidfd_supported", lambda: False)
+        monkeypatch.setattr(
+            mesh_isolation.native_process, "process_tree_rss_bytes", lambda _pid: 2
+        )
+        monkeypatch.setattr(os, "killpg", lambda pid, sig: groups.append((pid, sig)))
+        monitor = mesh_isolation._CallbackWatchdog(
+            123, time.monotonic() + 30, 1, mesh_isolation.WorkerLifecycle.GUARDED
+        )
+
+        monitor._monitor()
+
+        assert groups == [(123, mesh_isolation.signal.SIGKILL)]

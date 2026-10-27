@@ -62,8 +62,13 @@ class TestConfig:
     def test_sqlite_opens_its_own_connections(self) -> None:
         config = _engine()._config()
 
-        assert set(config["db_engine_kwargs"]) == {"creator"}
+        assert callable(config["db_engine_kwargs"]["creator"])
         assert "dbos_system_schema" not in config
+
+    def test_sqlite_skips_the_connection_liveness_probe(self) -> None:
+        config = _engine()._config()
+
+        assert config["db_engine_kwargs"]["pool_pre_ping"] is False
 
     def test_postgres_names_its_schema(self) -> None:
         config = _engine(schema="dbos")._config()

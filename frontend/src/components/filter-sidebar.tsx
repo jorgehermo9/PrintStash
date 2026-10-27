@@ -18,6 +18,7 @@ import { useViewportAdmission } from "@/lib/use-viewport-admission";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "@/lib/navigation";
+import { Link } from "@/lib/link";
 import { useMediaQuery } from "@/lib/use-media-query";
 import { CollectionNodeRead, OutlinerModelRead, PrinterRead, TagRead } from "@/types";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -34,10 +35,20 @@ import type {
   OutlinerFilters,
   OutlinerParams,
 } from "@/types/outliner";
-import { Button } from "@/components/ui/button";
+import { Button, buttonVariants } from "@/components/ui/button";
 import { Localized } from "@/components/ui/localized";
 import { useI18n } from "@/lib/i18n";
-import { Box, Boxes, ChevronRight, Folder, FolderOpen, Search, Trash2, X } from "lucide-react";
+import {
+  Box,
+  Boxes,
+  ChevronRight,
+  Folder,
+  FolderOpen,
+  Printer,
+  Search,
+  Trash2,
+  X,
+} from "lucide-react";
 import {
   DndContext,
   DragEndEvent,
@@ -504,13 +515,17 @@ function CollectionTreeRow({
                 )}
                 {descCount > 0 && node.model_count > 0 && " · "}
                 {node.model_count > 0 && (
-                  <span>
-                    {uiText("counts.models", { count: node.model_count })}
-                    {uiText(" → recycle bin")}
-                  </span>
+                  <span>{uiText("counts.models", { count: node.model_count })}</span>
                 )}
               </p>
             )}
+            <p className="text-3xs text-muted-foreground mb-1.5 leading-snug">
+              {hasContent
+                ? uiText(
+                    "Folders cannot be restored. Their models can be restored from Trash to All Models.",
+                  )
+                : uiText("This folder cannot be restored.")}
+            </p>
             <div className="flex gap-1">
               <button
                 type="button"
@@ -687,6 +702,7 @@ export function FilterSidebarContent({
   tags,
   printers,
   selectedCollection,
+  selectedCollectionId = null,
   selectedTags,
   selectedPrinterId,
   selectedPrinterPresence,
@@ -715,6 +731,17 @@ export function FilterSidebarContent({
   const requestSecondary = startup.request;
   const { ref: filtersRef, admitted: filtersVisible } = useViewportAdmission();
   const contentRef = useRef<HTMLDivElement>(null);
+  const filtersRegionRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    // Canonical URL replacement creates a new startup generation while an
+    // already focused filter remains the reader's explicit priority.
+    if (
+      readinessEnabled &&
+      filtersOpen &&
+      filtersRegionRef.current?.contains(document.activeElement)
+    )
+      requestSecondary("filters");
+  }, [readinessEnabled, filtersOpen, requestSecondary]);
   useEffect(() => {
     if (!readinessEnabled) return;
     settleStartup("tree", "pending");
@@ -726,7 +753,7 @@ export function FilterSidebarContent({
     const timer = setTimeout(() => setSearchText(outlinerQ), 250);
     return () => clearTimeout(timer);
   }, [outlinerQ]);
-  const lookup = useCollectionLookup(selectedCollection);
+  const lookup = useCollectionLookup(selectedCollection, selectedCollectionId);
   const revealNodes =
     lookup.data?.collection.path === selectedCollection
       ? [...lookup.data.ancestors, lookup.data.collection]
@@ -753,6 +780,18 @@ export function FilterSidebarContent({
     !restoring &&
     levels.size > 0 &&
     [...levels.values()].every((state) => state === "ready");
+  const attachFiltersRegion = useCallback(
+    (node: HTMLDivElement | null) => {
+      filtersRegionRef.current = node;
+      const detach = treeLayoutReady ? filtersRef(node) : undefined;
+      return () => {
+        detach?.();
+        filtersRegionRef.current = null;
+      };
+    },
+    [treeLayoutReady, filtersRef],
+  );
+
   useEffect(() => {
     // A short loading placeholder can temporarily expose controls that the
     // restored tree will push below the viewport. Observe the settled layout.
@@ -964,7 +1003,7 @@ export function FilterSidebarContent({
           setDragging(null);
         }}
       >
-        <div ref={contentRef} className="flex-1 overflow-auto py-4 px-3 space-y-6">
+        <div ref={contentRef} className="min-h-0 flex-1 overflow-auto py-4 px-3 space-y-6">
           <section>
             <h3 className="mb-2 pl-2 text-xs font-bold uppercase tracking-wider text-muted-foreground">
               {t("libraryView.title")}
@@ -1055,7 +1094,7 @@ export function FilterSidebarContent({
 
           {filtersOpen && (
             <div
-              ref={treeLayoutReady ? filtersRef : undefined}
+              ref={attachFiltersRegion}
               onFocusCapture={() => requestSecondary("filters")}
               onPointerDownCapture={() => requestSecondary("filters")}
               className="space-y-6"
@@ -1268,6 +1307,7 @@ export interface FilterSidebarProps {
   tags: TagRead[];
   printers: PrinterRead[];
   selectedCollection: string | null;
+  selectedCollectionId?: number | null;
   selectedTags: string[];
   selectedPrinterId: number | null;
   selectedPrinterPresence: "any" | "none" | null;
@@ -1282,6 +1322,9 @@ export interface FilterSidebarProps {
   onMoveCollection?: (collectionId: number, newParentId: number | null) => void;
   onDeleteCollection?: (id: number, recursive: boolean) => void;
   canViewPrinters?: boolean;
+  canManageLibrary?: boolean;
+  /** Library actions kept outside the independently scrolling outliner. */
+  quickAccess?: React.ReactNode;
   loading?: boolean;
   outlinerFilter?: string;
   structuredFilters?: React.ReactNode;
@@ -1334,7 +1377,7 @@ export function FilterSidebar(props: FilterSidebarProps) {
     <Localized>
       <aside
         style={{ width: sidebarWidth }}
-        className="bg-sidebar border-r border-border flex flex-col shrink-0 hidden md:flex relative"
+        className="bg-sidebar border-r border-border flex min-h-0 flex-col shrink-0 hidden md:flex relative"
       >
         <div className="p-2 border-b border-border bg-sidebar">
           <div className="relative">
@@ -1367,6 +1410,43 @@ export function FilterSidebar(props: FilterSidebarProps) {
           outlinerFilter={outlinerFilter}
           onClearOutlinerFilter={() => setOutlinerFilter("")}
         />
+        <nav
+          aria-label={uiText("nav.quickAccess")}
+          className="shrink-0 border-t border-border bg-sidebar p-2"
+        >
+          <h3 className="mb-1 px-2 text-xs font-bold uppercase tracking-wider text-muted-foreground">
+            {uiText("nav.quickAccess")}
+          </h3>
+          <div className="space-y-0.5">
+            {props.quickAccess}
+            {props.canViewPrinters && (
+              <Link
+                href="/printers"
+                className={buttonVariants({
+                  variant: "ghost",
+                  size: "sm",
+                  className: "w-full justify-start",
+                })}
+              >
+                <Printer className="h-4 w-4 shrink-0" />
+                {uiText("nav.printers")}
+              </Link>
+            )}
+            {props.canManageLibrary && (
+              <Link
+                href="/settings?section=trash"
+                className={buttonVariants({
+                  variant: "ghost",
+                  size: "sm",
+                  className: "w-full justify-start",
+                })}
+              >
+                <Trash2 className="h-4 w-4 shrink-0" />
+                {uiText("settings.trash")}
+              </Link>
+            )}
+          </div>
+        </nav>
         {/* Resize handle */}
         <div
           onMouseDown={handleResizeStart}

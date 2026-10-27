@@ -215,6 +215,7 @@ function HistoryProbe() {
   return (
     <>
       <output data-testid="vault-location">{location.pathname + location.search}</output>
+      <button onClick={() => navigate("/?c=missing&cid=9")}>Open missing collection</button>
       <button onClick={() => navigate(-1)}>History back</button>
       <button onClick={() => navigate(1)}>History forward</button>
       <button onClick={() => navigate("/?type=multipart&sort=name-asc")}>
@@ -312,7 +313,7 @@ describe("ModelBrowser", () => {
       await openLibraryTools();
 
       expect(
-        within(screen.getByRole("region", { name: "Library tools" })).getByRole("link", {
+        within(screen.getByRole("menu")).getByRole("menuitem", {
           name: "Similar models",
         }),
       ).toHaveAttribute("href", "/library/similar");
@@ -333,7 +334,27 @@ describe("ModelBrowser", () => {
         "aria-expanded",
         "false",
       );
-      expect(screen.queryByRole("region", { name: "Library tools" })).not.toBeInTheDocument();
+      await waitFor(() => expect(screen.queryByRole("menu")).not.toBeInTheDocument());
+    });
+    it("returns focus to Library tools on Escape", async () => {
+      const user = userEvent.setup();
+      renderVault();
+      await openLibraryTools();
+      await user.tab();
+      await user.keyboard("{Escape}");
+      await waitFor(() => expect(screen.queryByRole("menu")).not.toBeInTheDocument());
+      expect(screen.getByRole("button", { name: "Library tools" })).toHaveFocus();
+    });
+    it("keeps Favorites in quick access before opening Library tools", async () => {
+      const user = userEvent.setup();
+      const { requests } = renderVault();
+      const quickAccess = screen.getByRole("navigation", { name: "Quick access" });
+      await user.click(within(quickAccess).getByRole("button", { name: "Favorites" }));
+      await waitFor(() => expect(lastModelsQuery(requests).get("favorites")).toBe("true"));
+      expect(screen.getByRole("button", { name: "Library tools" })).toHaveAttribute(
+        "aria-expanded",
+        "false",
+      );
     });
     it("renders a card for every model", async () => {
       renderVault({
@@ -346,6 +367,85 @@ describe("ModelBrowser", () => {
       expect(await screen.findByText("Benchy")).toBeInTheDocument();
       expect(screen.getByText("Cube")).toBeInTheDocument();
     });
+
+    it("offers an upload into an empty collection", async () => {
+      const user = userEvent.setup();
+      renderVault({
+        at: "/?c=parts&cid=1",
+        collections: [aCollection({ model_count: 0 })],
+      });
+      expect(await screen.findByText("This collection is empty")).toBeVisible();
+      expect(screen.queryByText("Try clearing some filters.")).not.toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: "Clear all filters" })).not.toBeInTheDocument();
+      await user.click(screen.getByRole("button", { name: "Upload files" }));
+      const dialog = await screen.findByRole("dialog", { name: "Upload model" });
+      expect(await within(dialog).findByRole("button", { name: "Parts" })).toBeVisible();
+    });
+
+    it.each([false, true])(
+      "explains an empty read-only collection (%s)",
+      async (writableElsewhere) => {
+        const user = userEvent.setup();
+        const { requestsWithMethod } = renderVault({
+          at: "/?c=parts&cid=1",
+          auth: memberSession(),
+          historyProbe: true,
+          collections: [
+            aCollection({ model_count: 0, effective_role: "view" }),
+            ...(writableElsewhere
+              ? [
+                  aCollection({
+                    id: 2,
+                    name: "Writable",
+                    path: "writable",
+                    slug: "writable",
+                    model_count: 0,
+                    effective_role: "edit",
+                  }),
+                ]
+              : []),
+          ],
+        });
+        expect(
+          await screen.findByText(
+            "You have view-only access to this collection. Ask an administrator for edit access to add Models.",
+          ),
+        ).toBeVisible();
+        expect(screen.queryByRole("button", { name: "Upload files" })).not.toBeInTheDocument();
+        expect(screen.queryByRole("button", { name: "Import from URL" })).not.toBeInTheDocument();
+        await user.click(screen.getByRole("button", { name: "Back to library" }));
+        await waitFor(() => {
+          const location = new URL(
+            screen.getByTestId("vault-location").textContent!,
+            "http://test",
+          );
+          expect(location.pathname).toBe("/");
+          expect(location.searchParams.has("c")).toBe(false);
+          expect(location.searchParams.has("cid")).toBe(false);
+        });
+        expect(
+          requestsWithMethod("POST").filter(
+            (request) =>
+              request.url.startsWith("/api/v1/artifact-uploads") ||
+              request.url.startsWith("/api/v1/inbox"),
+          ),
+        ).toHaveLength(0);
+      },
+    );
+
+    it.each(["favorites=true", "material_type=PLA"])(
+      "offers filter recovery for an empty filtered collection (%s)",
+      async (filter) => {
+        renderVault({
+          at: `/?c=parts&cid=1&${filter}`,
+          collections: [aCollection({ model_count: 0 })],
+        });
+        expect(await screen.findByText("Try clearing some filters.")).toBeVisible();
+        expect(screen.getByRole("button", { name: "Clear all filters" })).toBeVisible();
+        expect(screen.queryByText("This collection is empty")).not.toBeInTheDocument();
+        expect(screen.queryByRole("button", { name: "Upload files" })).not.toBeInTheDocument();
+      },
+    );
 
     it("offers the empty state when the library has nothing in it", async () => {
       renderVault();
@@ -718,7 +818,7 @@ describe("ModelBrowser", () => {
       });
       await screen.findByText("Benchy");
       await openLibraryTools();
-      await user.click(screen.getByRole("button", { name: "Select" }));
+      await user.click(screen.getByRole("menuitemcheckbox", { name: "Select" }));
       await user.click(screen.getByRole("checkbox", { name: "Select Benchy" }));
       expect(screen.getAllByText("1 selected").length).toBeGreaterThan(0);
 
@@ -953,7 +1053,7 @@ describe("ModelBrowser", () => {
       expect(screen.getByText("Shelf rig")).toBeVisible();
       const sourceLink = screen.getByRole("link", { name: /Shelf rig/ });
       const sourceHref = new URL(sourceLink.getAttribute("href")!, "http://test");
-      expect(sourceHref.searchParams.get("return")).toBe("/?c=parts&type=all&sort=date-desc");
+      expect(sourceHref.searchParams.get("return")).toBe("/?c=parts&type=all&sort=date-desc&cid=1");
       expect(screen.queryByText("Bracket piece")).not.toBeInTheDocument();
       expect(await folderCard("parts/brackets")).toBeVisible();
       pending.resolve(
@@ -1026,7 +1126,7 @@ describe("ModelBrowser", () => {
         screen.getByRole("link", { name: /Displayed shelf/ }).getAttribute("href")!,
         "http://test",
       );
-      expect(href.searchParams.get("return")).toBe("/?c=parts&type=all&sort=date-desc");
+      expect(href.searchParams.get("return")).toBe("/?c=parts&type=all&sort=date-desc&cid=1");
       expect(screen.queryByText("Late root")).not.toBeInTheDocument();
       child.resolve(
         json({
@@ -1201,7 +1301,7 @@ describe("ModelBrowser", () => {
       const { requests } = renderVault({ at: "/?c=parts", collections: PARTS_TREE });
       await screen.findByRole("heading", { name: "Parts" });
       await openLibraryTools();
-      await user.click(screen.getByRole("button", { name: /Select/ }));
+      await user.click(screen.getByRole("menuitemcheckbox", { name: /Select/ }));
 
       await user.hover(await folderCard("parts/brackets"));
 
@@ -1570,7 +1670,7 @@ describe("ModelBrowser", () => {
       renderVault();
 
       await openLibraryTools();
-      await screen.findByRole("button", { name: "Select" });
+      await screen.findByRole("menuitemcheckbox", { name: "Select" });
       expect(uploadButton()).toBeEnabled();
     });
   });
@@ -1582,7 +1682,7 @@ describe("ModelBrowser", () => {
       await screen.findByText("Benchy");
 
       await openLibraryTools();
-      await user.click(screen.getByRole("button", { name: /Select/ }));
+      await user.click(screen.getByRole("menuitemcheckbox", { name: /Select/ }));
 
       expect(screen.getByRole("button", { name: /Done/ })).toBeInTheDocument();
     });
@@ -1597,7 +1697,7 @@ describe("ModelBrowser", () => {
       });
       await screen.findByText("Benchy");
       await openLibraryTools();
-      await user.click(screen.getByRole("button", { name: /Select/ }));
+      await user.click(screen.getByRole("menuitemcheckbox", { name: /Select/ }));
 
       await user.click(screen.getByRole("checkbox", { name: "Select Benchy" }));
 
@@ -1617,8 +1717,8 @@ describe("ModelBrowser", () => {
       });
 
       await waitFor(() =>
-        expect(window.localStorage.getItem("ps-recent-folders-labelled")).toBe(
-          JSON.stringify([["parts/brackets", "Parts/Brackets"]]),
+        expect(window.localStorage.getItem("ps-recent-folders-identified")).toBe(
+          JSON.stringify([[2, "parts/brackets", "Parts/Brackets"]]),
         ),
       );
     });
@@ -1627,12 +1727,12 @@ describe("ModelBrowser", () => {
       // Those were stored as bare paths, before labels were kept (#295).
       const user = userEvent.setup();
       window.localStorage.setItem("ps-recent-folders", JSON.stringify(["parts"]));
-      renderVault({ models: [aModelListItem({ name: "Benchy" })] });
+      renderVault({ models: [aModelListItem({ name: "Benchy" })], collections: [aCollection()] });
       await screen.findByText("Benchy");
 
       await user.click(screen.getAllByRole("button", { name: /Recent/ }).at(-1)!);
 
-      expect(await screen.findByRole("menuitem", { name: "parts" })).toBeInTheDocument();
+      expect(await screen.findByRole("menuitem", { name: "Parts" })).toBeInTheDocument();
     });
 
     it("ignores a stored list that is not an array", async () => {
@@ -1701,7 +1801,7 @@ describe("ModelBrowser", () => {
       await screen.findByText("Benchy");
 
       await openLibraryTools();
-      await user.click(screen.getByRole("button", { name: /New collection/ }));
+      await user.click(screen.getByRole("menuitem", { name: /New collection/ }));
       await user.type(screen.getByPlaceholderText(/New subcollection/), "Bolts");
       await user.click(screen.getByRole("button", { name: "Create" }));
 
@@ -1732,7 +1832,7 @@ describe("ModelBrowser", () => {
       await screen.findByText("Benchy");
 
       await openLibraryTools();
-      await user.click(screen.getByRole("button", { name: /New collection/ }));
+      await user.click(screen.getByRole("menuitem", { name: /New collection/ }));
       await user.type(screen.getByPlaceholderText("Collection name..."), "Bolts");
       await user.click(screen.getByRole("button", { name: "Create" }));
 
@@ -1755,7 +1855,7 @@ describe("ModelBrowser", () => {
       await screen.findByText("Benchy");
 
       await openLibraryTools();
-      await user.click(screen.getByRole("button", { name: /New collection/ }));
+      await user.click(screen.getByRole("menuitem", { name: /New collection/ }));
 
       expect(screen.getByRole("button", { name: "Create" })).toBeDisabled();
     });
@@ -1765,7 +1865,7 @@ describe("ModelBrowser", () => {
       renderVault({ models: [aModelListItem({ name: "Benchy" })] });
       await screen.findByText("Benchy");
       await openLibraryTools();
-      await user.click(screen.getByRole("button", { name: /New collection/ }));
+      await user.click(screen.getByRole("menuitem", { name: /New collection/ }));
 
       await user.click(screen.getByRole("button", { name: "Cancel" }));
 
@@ -1777,7 +1877,7 @@ describe("ModelBrowser", () => {
     async function selectBoth(user: ReturnType<typeof userEvent.setup>) {
       await screen.findByText("Benchy");
       await openLibraryTools();
-      await user.click(screen.getByRole("button", { name: "Select" }));
+      await user.click(screen.getByRole("menuitemcheckbox", { name: "Select" }));
       await user.click(screen.getByRole("button", { name: /Select all on screen/ }));
     }
 
@@ -1850,7 +1950,7 @@ describe("ModelBrowser", () => {
       });
       await screen.findByText("Benchy");
       await openLibraryTools();
-      await user.click(screen.getByRole("button", { name: "Select" }));
+      await user.click(screen.getByRole("menuitemcheckbox", { name: "Select" }));
 
       await user.click(screen.getByRole("button", { name: "Done" }));
 
@@ -1896,7 +1996,7 @@ describe("ModelBrowser", () => {
       });
       await screen.findByText("Benchy");
       await openLibraryTools();
-      await user.click(screen.getByRole("button", { name: "Select" }));
+      await user.click(screen.getByRole("menuitemcheckbox", { name: "Select" }));
       selecting = true;
       await user.click(screen.getByRole("button", { name: /Select all matching models/ }));
 
@@ -1956,12 +2056,393 @@ describe("ModelBrowser", () => {
     });
   });
 
+  describe("renaming the open collection", () => {
+    it("keeps a single heading click in browse mode", async () => {
+      const user = userEvent.setup();
+      renderVault({ at: "/?c=parts", collections: [aCollectionNode()] });
+
+      await user.click(
+        await screen.findByRole("heading", { name: "Parts", level: 1 }, { timeout: 3000 }),
+      );
+
+      expect(screen.queryByRole("dialog")).toBeNull();
+    });
+
+    it("opens the collection name on double-click", async () => {
+      const user = userEvent.setup();
+      renderVault({ at: "/?c=parts", collections: [aCollectionNode()] });
+
+      await user.dblClick(
+        await screen.findByRole("heading", { name: "Parts", level: 1 }, { timeout: 3000 }),
+      );
+
+      const name = await screen.findByRole("textbox", { name: "Collection name" });
+      expect(name).toHaveValue("Parts");
+      expect(name).toHaveFocus();
+      expect(screen.getByRole("dialog", { name: "Rename Parts" })).not.toHaveAttribute(
+        "aria-modal",
+        "true",
+      );
+      expect(screen.getByRole("heading", { name: "Parts", level: 1 })).toBeVisible();
+    });
+
+    it("follows the acknowledged renamed collection path", async () => {
+      const user = userEvent.setup();
+      const collection = aCollectionNode();
+      const app = renderVault({
+        at: "/?c=parts&sort=name-asc",
+        collections: [collection],
+        historyProbe: true,
+        routes: {
+          "PATCH /api/v1/collections/1": () => {
+            Object.assign(collection, {
+              name: "Spare parts",
+              path: "spare-parts",
+              slug: "spare-parts",
+            });
+            return json(collection);
+          },
+        },
+      });
+      const pencil = await screen.findByRole("button", { name: "Rename Parts" }, { timeout: 3000 });
+      pencil.focus();
+      await user.keyboard("{Enter}");
+      const name = await screen.findByRole("textbox", { name: "Collection name" });
+      await user.clear(name);
+      await user.type(name, "  Spare parts  {Enter}");
+
+      expect(await screen.findByRole("heading", { name: "Spare parts", level: 1 })).toBeVisible();
+      expect(screen.getByTestId("vault-location")).toHaveTextContent(
+        "/?c=spare-parts&sort=name-asc",
+      );
+      const writes = app.requestsWithMethod("PATCH");
+      expect(writes).toHaveLength(1);
+      expect(writes[0].url).toContain("/api/v1/collections/1");
+      expect(JSON.parse(writes[0].body ?? "{}")).toEqual({ name: "Spare parts" });
+    });
+
+    it("keeps recent descendants reachable after renaming their parent", async () => {
+      const user = userEvent.setup();
+      const parent = aCollectionNode();
+      const child = aCollectionNode({
+        id: 2,
+        name: "Brackets",
+        slug: "brackets",
+        path: "parts/brackets",
+        parent_id: 1,
+      });
+      window.localStorage.setItem(
+        "ps-recent-folders-identified",
+        JSON.stringify([[2, "parts/brackets", "Parts/Brackets"]]),
+      );
+      renderVault({
+        at: "/?c=parts",
+        collections: [parent, child],
+        routes: {
+          "PATCH /api/v1/collections/1": () => {
+            Object.assign(parent, { name: "Spares", path: "spares", slug: "spares" });
+            child.path = "spares/brackets";
+            return json(parent);
+          },
+        },
+      });
+      await user.click(
+        await screen.findByRole("button", { name: "Rename Parts" }, { timeout: 3000 }),
+      );
+      await user.clear(screen.getByRole("textbox", { name: "Collection name" }));
+      await user.type(screen.getByRole("textbox", { name: "Collection name" }), "Spares{Enter}");
+      await screen.findByRole("heading", { name: "Spares", level: 1 });
+      await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+
+      await user.click(screen.getByRole("button", { name: "Recent" }));
+      await user.click(screen.getByRole("menuitem", { name: "Spares/Brackets" }));
+
+      expect(await screen.findByRole("heading", { name: "Brackets", level: 1 })).toBeVisible();
+      expect(
+        JSON.parse(window.localStorage.getItem("ps-recent-folders-identified") ?? "[]"),
+      ).toContainEqual([2, "spares/brackets", "Spares/Brackets"]);
+    });
+
+    it("retires the rename draft when navigation changes", async () => {
+      const user = userEvent.setup();
+      renderVault({ at: "/?c=parts", collections: [aCollectionNode()], historyProbe: true });
+      await user.click(
+        await screen.findByRole("button", { name: "Rename Parts" }, { timeout: 3000 }),
+      );
+      await user.clear(screen.getByRole("textbox", { name: "Collection name" }));
+      await user.type(screen.getByRole("textbox", { name: "Collection name" }), "Private draft");
+
+      fireEvent.click(screen.getByRole("button", { name: "Open multipart location" }));
+
+      expect(screen.queryByDisplayValue("Private draft")).toBeNull();
+      await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    });
+
+    it("retires the rename draft with its session", async () => {
+      const user = userEvent.setup();
+      renderVault({ at: "/?c=parts", collections: [aCollectionNode()] });
+      await user.click(
+        await screen.findByRole("button", { name: "Rename Parts" }, { timeout: 3000 }),
+      );
+      await user.clear(screen.getByRole("textbox", { name: "Collection name" }));
+      await user.type(screen.getByRole("textbox", { name: "Collection name" }), "Private draft");
+
+      act(() => clearLogin());
+
+      expect(screen.queryByDisplayValue("Private draft")).toBeNull();
+    });
+
+    it("does not navigate after a rename outlives the library", async () => {
+      const user = userEvent.setup();
+      const pending = Promise.withResolvers<Response>();
+      const app = renderVault({
+        at: "/?c=parts",
+        collections: [aCollectionNode()],
+        routes: { "PATCH /api/v1/collections/1": () => pending.promise },
+      });
+      await user.click(
+        await screen.findByRole("button", { name: "Rename Parts" }, { timeout: 3000 }),
+      );
+      await user.clear(screen.getByRole("textbox", { name: "Collection name" }));
+      await user.type(screen.getByRole("textbox", { name: "Collection name" }), "Spares{Enter}");
+      await waitFor(() => expect(app.requestsWithMethod("PATCH")).toHaveLength(1));
+      app.rerender(<HistoryProbe />);
+      await user.click(screen.getByRole("button", { name: "Open multipart location" }));
+
+      await act(async () => {
+        pending.resolve(json(aCollectionNode({ name: "Spares", slug: "spares", path: "spares" })));
+        await pending.promise;
+      });
+
+      expect(screen.getByTestId("vault-location")).toHaveTextContent(
+        "/?type=multipart&sort=name-asc",
+      );
+      expect(screen.queryByText("Renamed 1 folder")).toBeNull();
+    });
+
+    it("can rename after returning from a retired pending save", async () => {
+      const user = userEvent.setup();
+      const pending = Promise.withResolvers<Response>();
+      const app = renderVault({
+        at: "/?c=parts",
+        collections: [aCollectionNode()],
+        historyProbe: true,
+        routes: { "PATCH /api/v1/collections/1": () => pending.promise },
+      });
+      await user.click(
+        await screen.findByRole("button", { name: "Rename Parts" }, { timeout: 3000 }),
+      );
+      await user.clear(screen.getByRole("textbox", { name: "Collection name" }));
+      await user.type(screen.getByRole("textbox", { name: "Collection name" }), "Spares{Enter}");
+      await waitFor(() => expect(app.requestsWithMethod("PATCH")).toHaveLength(1));
+      await user.click(screen.getByRole("button", { name: "Open multipart location" }));
+      await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+
+      await user.click(screen.getByRole("button", { name: "History back" }));
+      await user.click(
+        await screen.findByRole("button", { name: "Rename Parts" }, { timeout: 3000 }),
+      );
+
+      const name = await screen.findByRole("textbox", { name: "Collection name" });
+      expect(name).toBeEnabled();
+      expect(name).toHaveValue("Parts");
+      await act(async () => {
+        pending.resolve(json({ detail: "collection_already_exists" }, 409));
+        await pending.promise;
+      });
+      expect(name).toBeEnabled();
+      expect(name).toHaveValue("Parts");
+    });
+
+    it("retires a pending collection receipt when edit access is lost", async () => {
+      const user = userEvent.setup();
+      const pending = Promise.withResolvers<Response>();
+      const collection = aCollectionNode();
+      const app = renderVault({
+        at: "/?c=parts",
+        collections: [collection],
+        auth: memberSession(),
+        historyProbe: true,
+        routes: { "PATCH /api/v1/collections/1": () => pending.promise },
+      });
+      await user.click(
+        await screen.findByRole("button", { name: "Rename Parts" }, { timeout: 3000 }),
+      );
+      await user.clear(screen.getByRole("textbox", { name: "Collection name" }));
+      await user.type(screen.getByRole("textbox", { name: "Collection name" }), "Spares{Enter}");
+      await waitFor(() => expect(app.requestsWithMethod("PATCH")).toHaveLength(1));
+      collection.effective_role = "view";
+      await act(async () => {
+        await app.client.invalidateQueries({ queryKey: queryKeys.collections });
+      });
+      await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+      collection.effective_role = "admin";
+      await act(async () => {
+        await app.client.invalidateQueries({ queryKey: queryKeys.collections });
+      });
+      await user.click(
+        await screen.findByRole("button", { name: "Rename Parts" }, { timeout: 3000 }),
+      );
+      const name = screen.getByRole("textbox", { name: "Collection name" });
+      await user.clear(name);
+      await user.type(name, "New draft");
+
+      await act(async () => {
+        pending.resolve(json(aCollectionNode({ name: "Spares", slug: "spares", path: "spares" })));
+        await pending.promise;
+      });
+
+      expect(name).toBeEnabled();
+      expect(name).toHaveValue("New draft");
+      expect(screen.getByTestId("vault-location")).not.toHaveTextContent("spares");
+    });
+
+    it("discards a cancelled collection name draft", async () => {
+      const user = userEvent.setup();
+      const app = renderVault({ at: "/?c=parts", collections: [aCollectionNode()] });
+      const pencil = await screen.findByRole("button", { name: "Rename Parts" }, { timeout: 3000 });
+      await user.click(pencil);
+      await user.clear(screen.getByRole("textbox", { name: "Collection name" }));
+      await user.type(screen.getByRole("textbox", { name: "Collection name" }), "Discard me");
+
+      await user.keyboard("{Escape}");
+      await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+      await user.click(pencil);
+
+      expect(screen.getByRole("textbox", { name: "Collection name" })).toHaveValue("Parts");
+      expect(app.requestsWithMethod("PATCH")).toHaveLength(0);
+    });
+
+    it("discards a collection draft through Cancel", async () => {
+      const user = userEvent.setup();
+      const app = renderVault({ at: "/?c=parts", collections: [aCollectionNode()] });
+      const pencil = await screen.findByRole("button", { name: "Rename Parts" }, { timeout: 3000 });
+      await user.click(pencil);
+      await user.clear(screen.getByRole("textbox", { name: "Collection name" }));
+      await user.type(screen.getByRole("textbox", { name: "Collection name" }), "Discard me");
+
+      await user.click(screen.getByRole("button", { name: "Cancel" }));
+      await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+      await user.click(pencil);
+
+      expect(screen.getByRole("textbox", { name: "Collection name" })).toHaveValue("Parts");
+      expect(app.requestsWithMethod("PATCH")).toHaveLength(0);
+    });
+
+    it("discards a collection draft when clicking outside", async () => {
+      const user = userEvent.setup();
+      const app = renderVault({ at: "/?c=parts", collections: [aCollectionNode()] });
+      const pencil = await screen.findByRole("button", { name: "Rename Parts" }, { timeout: 3000 });
+      await user.click(pencil);
+      await user.clear(screen.getByRole("textbox", { name: "Collection name" }));
+      await user.type(screen.getByRole("textbox", { name: "Collection name" }), "Discard me");
+
+      await user.click(document.body);
+      await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+      await user.click(pencil);
+
+      expect(screen.getByRole("textbox", { name: "Collection name" })).toHaveValue("Parts");
+      expect(app.requestsWithMethod("PATCH")).toHaveLength(0);
+    });
+
+    it("refuses a blank collection name", async () => {
+      const user = userEvent.setup();
+      const app = renderVault({ at: "/?c=parts", collections: [aCollectionNode()] });
+      await user.click(
+        await screen.findByRole("button", { name: "Rename Parts" }, { timeout: 3000 }),
+      );
+      const name = screen.getByRole("textbox", { name: "Collection name" });
+      await user.clear(name);
+      await user.type(name, "   {Enter}");
+
+      expect(screen.getByRole("button", { name: "Save" })).toBeDisabled();
+      expect(app.requestsWithMethod("PATCH")).toHaveLength(0);
+    });
+
+    it("keeps a pending collection rename locked on repeated activation", async () => {
+      const user = userEvent.setup();
+      const pending = Promise.withResolvers<Response>();
+      const app = renderVault({
+        at: "/?c=parts",
+        collections: [aCollectionNode()],
+        routes: { "PATCH /api/v1/collections/1": () => pending.promise },
+      });
+      const pencil = await screen.findByRole("button", { name: "Rename Parts" }, { timeout: 3000 });
+      await user.click(pencil);
+      const name = screen.getByRole("textbox", { name: "Collection name" });
+      await user.clear(name);
+      await user.type(name, "Spares{Enter}");
+      await waitFor(() => expect(app.requestsWithMethod("PATCH")).toHaveLength(1));
+
+      await user.click(pencil);
+      await user.dblClick(screen.getByRole("heading", { name: "Parts", level: 1 }));
+      await user.keyboard("{Enter}");
+
+      expect(name).toBeDisabled();
+      expect(name).toHaveValue("Spares");
+      expect(screen.getByRole("button", { name: "Cancel" })).toBeDisabled();
+      expect(app.requestsWithMethod("PATCH")).toHaveLength(1);
+      await act(async () => {
+        pending.resolve(json({ detail: "collection_already_exists" }, 409));
+        await pending.promise;
+      });
+      await waitFor(() => expect(name).toBeEnabled());
+    });
+
+    it("retains the collection name after a rejected rename", async () => {
+      const user = userEvent.setup();
+      const app = renderVault({
+        at: "/?c=parts",
+        collections: [aCollectionNode()],
+        routes: {
+          "PATCH /api/v1/collections/1": json({ detail: "collection_already_exists" }, 409),
+        },
+      });
+      await user.click(
+        await screen.findByRole("button", { name: "Rename Parts" }, { timeout: 3000 }),
+      );
+      const name = screen.getByRole("textbox", { name: "Collection name" });
+      await user.clear(name);
+      await user.type(name, "Duplicate{Enter}");
+
+      await waitFor(() => expect(app.requestsWithMethod("PATCH")).toHaveLength(1));
+      await waitFor(() => expect(screen.getByRole("button", { name: "Save" })).toBeEnabled());
+      expect(name).toHaveValue("Duplicate");
+      expect(screen.getByRole("heading", { name: "Parts", level: 1 })).toBeVisible();
+      expect(screen.getByRole("dialog", { name: "Rename Parts" })).toBeVisible();
+    });
+
+    it.each(["view", "edit"] as const)("hides collection rename from %s members", async (role) => {
+      const user = userEvent.setup();
+      renderVault({
+        at: "/?c=parts",
+        collections: [aCollectionNode({ effective_role: role })],
+        auth: memberSession(),
+      });
+      await user.dblClick(
+        await screen.findByRole("heading", { name: "Parts", level: 1 }, { timeout: 3000 }),
+      );
+
+      expect(screen.queryByRole("button", { name: "Rename Parts" })).toBeNull();
+      expect(screen.queryByRole("dialog")).toBeNull();
+    });
+
+    it("offers no rename for the library root", async () => {
+      const user = userEvent.setup();
+      renderVault();
+      await user.dblClick(await screen.findByRole("heading", { name: "All Models", level: 1 }));
+
+      expect(screen.queryByRole("button", { name: "Rename All Models" })).toBeNull();
+      expect(screen.queryByRole("dialog")).toBeNull();
+    });
+  });
+
   describe("acting on several folders at once", () => {
     /** Turn on select mode and tick the folder card. */
     async function selectFolder(user: ReturnType<typeof userEvent.setup>, name = "Parts") {
       await screen.findAllByText(name);
       await openLibraryTools();
-      await user.click(screen.getByRole("button", { name: "Select" }));
+      await user.click(screen.getByRole("menuitemcheckbox", { name: "Select" }));
       await user.click(screen.getByLabelText(`Select folder ${name}`));
     }
 
@@ -2069,7 +2550,7 @@ describe("ModelBrowser", () => {
     async function selectOneModel(user: ReturnType<typeof userEvent.setup>) {
       await screen.findByText("Benchy");
       await openLibraryTools();
-      await user.click(screen.getByRole("button", { name: "Select" }));
+      await user.click(screen.getByRole("menuitemcheckbox", { name: "Select" }));
       await user.click(screen.getByRole("checkbox", { name: "Select Benchy" }));
     }
 
@@ -2258,6 +2739,23 @@ describe("ModelBrowser", () => {
       expect(
         app.requestsWithMethod("GET").filter((request) => request.url === "/api/v1/saved-views"),
       ).toHaveLength(2);
+    });
+
+    it("focuses the saved-view name when creating a view", async () => {
+      const user = userEvent.setup();
+      renderVault({ models: [aModelListItem({ name: "Benchy" })] });
+      await screen.findByText("Benchy");
+      await openLibraryTools();
+      await user.click(screen.getByRole("button", { name: /Saved views/ }));
+      await user.click(await screen.findByRole("button", { name: /Save current view/ }));
+      const input = screen.getByRole("textbox", { name: "View name" });
+      expect(input).toHaveFocus();
+      await user.keyboard("Keyboard view");
+      expect(input).toHaveValue("Keyboard view");
+      await user.keyboard("{Escape}");
+      await waitFor(() =>
+        expect(screen.queryByRole("dialog", { name: "Save current view" })).toBeNull(),
+      );
     });
 
     it("immediately retires the private create draft with its session", async () => {
@@ -3019,7 +3517,7 @@ describe("ModelBrowser", () => {
       expect(mainHas("Current model")).toBeVisible();
     });
 
-    it("follows the refreshed folder identity", async () => {
+    it("does not switch to a replacement collection reusing the saved path", async () => {
       const app = renderVault({
         at: "/?c=parts",
         models: [aModelListItem({ name: "Original model" })],
@@ -3034,7 +3532,14 @@ describe("ModelBrowser", () => {
         ]),
         "GET /api/v1/models/browse": modelPage("Current model"),
       });
-      expect(await within(screen.getByRole("main")).findByText("Replacement child")).toBeVisible();
+      expect(
+        await within(screen.getByRole("main")).findByRole("heading", {
+          name: "Collection unavailable",
+        }),
+      ).toBeVisible();
+      expect(mainHas("Original model")).not.toBeInTheDocument();
+      expect(mainHas("Current model")).not.toBeInTheDocument();
+      expect(mainHas("Replacement child")).not.toBeInTheDocument();
       expect(
         app
           .requests()
@@ -3043,7 +3548,7 @@ describe("ModelBrowser", () => {
               call.url.includes("/collections/children") &&
               new URL(call.url, "http://test").searchParams.get("parent_id") === "7",
           ),
-      ).toBe(true);
+      ).toBe(false);
     });
 
     it("refreshes active folder search results", async () => {
@@ -3502,7 +4007,7 @@ describe("ModelBrowser", () => {
       await screen.findByText("Benchy");
 
       await openLibraryTools();
-      expect(screen.getByRole("button", { name: /New collection/ })).toBeDisabled();
+      expect(screen.getByRole("menuitem", { name: /New collection/ })).toBeDisabled();
     });
 
     it("says why it is refused", async () => {
@@ -3515,7 +4020,7 @@ describe("ModelBrowser", () => {
       await screen.findByText("Benchy");
 
       await openLibraryTools();
-      expect(screen.getByRole("button", { name: /New collection/ })).toHaveAttribute(
+      expect(screen.getByRole("menuitem", { name: /New collection/ })).toHaveAttribute(
         "title",
         "Admin access required for this collection",
       );
@@ -3532,7 +4037,7 @@ describe("ModelBrowser", () => {
       });
       await screen.findByText("Benchy");
       await openLibraryTools();
-      await user.click(screen.getByRole("button", { name: "Select" }));
+      await user.click(screen.getByRole("menuitemcheckbox", { name: "Select" }));
       await user.click(screen.getByRole("checkbox", { name: "Select Benchy" }));
       await user.click(screen.getByRole("button", { name: "Tag" }));
       const editor = await screen.findByRole("dialog");
@@ -3573,7 +4078,7 @@ describe("ModelBrowser", () => {
       });
       await screen.findByText("Benchy");
       await openLibraryTools();
-      await user.click(screen.getByRole("button", { name: "Select" }));
+      await user.click(screen.getByRole("menuitemcheckbox", { name: "Select" }));
       await user.click(screen.getByRole("checkbox", { name: "Select Benchy" }));
       await user.click(screen.getByRole("button", { name: "Tag" }));
       const dialog = await screen.findByRole("dialog");
@@ -3602,7 +4107,7 @@ describe("ModelBrowser", () => {
       });
       await screen.findByText("Benchy");
       await openLibraryTools();
-      await user.click(screen.getByRole("button", { name: "Select" }));
+      await user.click(screen.getByRole("menuitemcheckbox", { name: "Select" }));
       await user.click(screen.getByRole("checkbox", { name: "Select Benchy" }));
       await user.click(screen.getByRole("button", { name: "Tag" }));
       const dialog = await screen.findByRole("dialog");
@@ -3874,7 +4379,7 @@ describe("ModelBrowser", () => {
     async function selectAndMove(user: ReturnType<typeof userEvent.setup>) {
       await screen.findByText("Benchy");
       await openLibraryTools();
-      await user.click(screen.getByRole("button", { name: "Select" }));
+      await user.click(screen.getByRole("menuitemcheckbox", { name: "Select" }));
       await user.click(screen.getByLabelText("Select Benchy"));
       await user.click(await screen.findByRole("button", { name: /Move/ }));
       const dialog = await screen.findByRole("dialog");
@@ -3969,6 +4474,103 @@ describe("ModelBrowser", () => {
       await selectAndMove(user);
 
       expect(await screen.findByText("1 skipped")).toBeInTheDocument();
+    });
+  });
+  describe("collection navigation identity", () => {
+    it("resolves a renamed collection by its saved identity", async () => {
+      const renamed = aCollectionNode({ id: 9, name: "Current", path: "current" });
+      const app = renderVault({
+        at: "/?c=old&cid=9",
+        historyProbe: true,
+        collections: [renamed, aCollectionNode({ id: 10, name: "Reused old path", path: "old" })],
+        models: [aModelListItem({ name: "Kept Model", collection: "current", collection_id: 9 })],
+      });
+      expect(await screen.findByRole("heading", { name: "Current", level: 1 })).toBeVisible();
+      expect(screen.getByTestId("vault-location")).toHaveTextContent("c=current");
+      expect(screen.getByTestId("vault-location")).toHaveTextContent("cid=9");
+      expect(screen.queryByRole("heading", { name: "Reused old path", level: 1 })).toBeNull();
+      expect(app.requests().some(({ url }) => url.includes("/collections/lookup?id=9"))).toBe(true);
+      expect(app.requests().some(({ url }) => url.includes("/collections/lookup?path=old"))).toBe(
+        false,
+      );
+    });
+
+    it.each([
+      [403, "/?c=missing&cid=9"],
+      [404, "/?c=missing&cid=9"],
+      [404, "/?c=missing"],
+    ] as const)(
+      "shows an unavailable destination for collection lookup %s at %s",
+      async (status, at) => {
+        renderVault({
+          at,
+          routes: {
+            "GET /api/v1/collections/lookup": json({ detail: "collection_not_found" }, status),
+          },
+        });
+        expect(
+          await screen.findByRole("heading", { name: "Collection unavailable", level: 1 }),
+        ).toBeVisible();
+        expect(screen.queryByRole("heading", { name: "All Models", level: 1 })).toBeNull();
+        expect(screen.queryByText("0 items shown")).toBeNull();
+        expect(screen.getByRole("button", { name: "Back to library" })).toBeVisible();
+      },
+    );
+
+    it("resolves a persisted Recent identity after an external rename", async () => {
+      const user = userEvent.setup();
+      localStorage.setItem("ps-recent-folders-identified", JSON.stringify([[9, "old", "Old"]]));
+      renderVault({
+        historyProbe: true,
+        collections: [aCollectionNode({ id: 9, name: "Current", path: "current" })],
+      });
+      await user.click(await screen.findByRole("button", { name: "Recent" }));
+      await user.click(await screen.findByRole("menuitem", { name: "Current" }));
+      expect(await screen.findByRole("heading", { name: "Current", level: 1 })).toBeVisible();
+      expect(screen.getByTestId("vault-location")).toHaveTextContent("cid=9");
+      expect(
+        JSON.parse(localStorage.getItem("ps-recent-folders-identified") ?? "[]"),
+      ).toContainEqual([9, "current", "Current"]);
+    });
+
+    it("opens an explicitly selected Recent identity when the old path is reused", async () => {
+      const user = userEvent.setup();
+      localStorage.setItem(
+        "ps-recent-folders-identified",
+        JSON.stringify([[10, "parts", "Replacement"]]),
+      );
+      renderVault({
+        at: "/?c=parts&cid=9",
+        historyProbe: true,
+        collections: [aCollectionNode({ id: 10, name: "Replacement", path: "parts" })],
+      });
+      await screen.findByRole("heading", { name: "Collection unavailable", level: 1 });
+      await user.click(screen.getByRole("button", { name: "Recent" }));
+      await user.click(await screen.findByRole("menuitem", { name: "Replacement" }));
+      expect(await screen.findByRole("heading", { name: "Replacement", level: 1 })).toBeVisible();
+      expect(screen.getByTestId("vault-location")).toHaveTextContent("cid=10");
+    });
+
+    it("retires an unavailable Recent destination", async () => {
+      const user = userEvent.setup();
+      localStorage.setItem("ps-recent-folders-identified", JSON.stringify([[9, "gone", "Gone"]]));
+      renderVault();
+      await user.click(await screen.findByRole("button", { name: "Recent" }));
+      expect(await screen.findByRole("menuitem", { name: "Gone — Unavailable" })).toBeDisabled();
+      expect(screen.getByRole("menuitem", { name: "Clear recent folders" })).toBeEnabled();
+    });
+
+    it("replaces a failed destination without retaining the departing library results", async () => {
+      const user = userEvent.setup();
+      renderVault({ historyProbe: true, models: [aModelListItem({ name: "Root Model" })] });
+      await screen.findByRole("heading", { name: "All Models", level: 1 });
+      await user.click(screen.getByRole("button", { name: "Open missing collection" }));
+      expect(
+        await screen.findByRole("heading", { name: "Collection unavailable", level: 1 }),
+      ).toBeVisible();
+      expect(screen.queryByText("Root Model")).toBeNull();
+      await user.click(screen.getByRole("button", { name: "Back to library" }));
+      expect(await screen.findByRole("heading", { name: "All Models", level: 1 })).toBeVisible();
     });
   });
 });

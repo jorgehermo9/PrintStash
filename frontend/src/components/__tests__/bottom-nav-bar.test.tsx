@@ -226,6 +226,29 @@ describe("BottomNavBar", () => {
   });
 
   describe("the More sheet", () => {
+    it.each([true, false])(
+      "makes Builds reachable from More for either role (%s)",
+      async (is_superuser) => {
+        const user = userEvent.setup();
+        renderNav({ at: "/builds/1", auth: session({ is_superuser }) });
+        expect(screen.getByRole("button", { name: "More" })).toHaveAttribute(
+          "aria-current",
+          "page",
+        );
+        await user.click(screen.getByRole("button", { name: "More" }));
+        const link = within(screen.getByRole("dialog", { name: "More" })).getByRole("link", {
+          name: "Builds",
+        });
+        expect(link).toHaveAttribute("href", "/builds");
+        expect(link).toHaveAttribute("aria-current", "page");
+        await user.click(link);
+        expect(screen.getByTestId("current-path")).toHaveTextContent("/builds");
+        await waitFor(() =>
+          expect(screen.queryByRole("dialog", { name: "More" })).not.toBeInTheDocument(),
+        );
+      },
+    );
+
     it("opens on tap", async () => {
       const user = userEvent.setup();
       renderNav();
@@ -246,7 +269,7 @@ describe("BottomNavBar", () => {
         within(sheet)
           .getAllByRole("link")
           .map((link) => link.textContent),
-      ).toEqual(["Profiles", "Stats", "Settings", "Wiki"]);
+      ).toEqual(["Profiles", "Builds", "Stats", "Settings", "Wiki"]);
     });
 
     it("sends an external destination to a plain link", async () => {
@@ -258,7 +281,7 @@ describe("BottomNavBar", () => {
 
       expect(screen.getByRole("link", { name: "Wiki" })).toHaveAttribute(
         "href",
-        "https://xiao-villamor.github.io/PrintStash/",
+        "https://www.printstash.org/docs/",
       );
     });
 

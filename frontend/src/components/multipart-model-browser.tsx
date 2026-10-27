@@ -403,10 +403,10 @@ function MultipartMemberCard({ model }: { model: MultipartModelCandidate }) {
   const label = modelLabel(model, t("multipart.unavailable"));
   const content = (
     <>
-      <div className="h-3/5 shrink-0 overflow-hidden border-b border-border bg-muted/40">
+      <div className="min-h-0 flex-1 overflow-hidden border-b border-border bg-muted/40">
         <Cover src={model.thumbnail_url} alt={model.available ? label : ""} />
       </div>
-      <div className="flex min-h-0 flex-1 flex-col p-3">
+      <div className="flex shrink-0 flex-col p-3">
         <h3
           className={cn(
             "line-clamp-2 text-sm font-bold tracking-tight",
@@ -1295,7 +1295,7 @@ function MultipartDetail({ id }: { id: number }) {
         confirmLabel={t("multipart.deleteConfirm")}
       />
       <header className="flex shrink-0 flex-wrap items-center justify-between gap-2 border-b border-outline-variant bg-surface-container-lowest px-4 py-3 md:px-6">
-        <div className="flex min-w-0 flex-1 items-center gap-3 sm:gap-4">
+        <div className="flex w-full min-w-0 items-center gap-3 sm:w-auto sm:flex-1 sm:gap-4">
           <LibraryBackLink
             href={model.collection ? `/?c=${encodeURIComponent(model.collection)}` : "/"}
             aria-label={t("multipart.title")}
@@ -1304,10 +1304,10 @@ function MultipartDetail({ id }: { id: number }) {
             <ArrowLeft className="h-5 w-5" />
           </LibraryBackLink>
           <div className="min-w-0">
-            <h1 className="truncate text-xl font-semibold leading-tight text-on-surface">
+            <h1 className="break-words text-xl font-semibold leading-tight text-on-surface">
               {model.name}
             </h1>
-            <p className="truncate font-mono text-xs text-on-surface-variant">
+            <p className="break-words font-mono text-xs text-on-surface-variant">
               <Count
                 count={model.part_count}
                 one={t("multipart.part")}
@@ -1353,7 +1353,7 @@ function MultipartDetail({ id }: { id: number }) {
             </Button>
           </div>
         ) : canEdit ? (
-          <div className="flex flex-wrap items-center gap-3">
+          <div className="flex w-full flex-wrap items-center gap-3 sm:w-auto">
             <Link className="text-sm text-primary underline" href={`/builds?multipart=${model.id}`}>
               {t("build.create")}
             </Link>

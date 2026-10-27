@@ -99,3 +99,68 @@ test.describe("printer settings conflict recovery", () => {
     }
   });
 });
+
+test.describe("short-screen printer setup", () => {
+  for (const viewport of [
+    { width: 320, height: 568 },
+    { width: 390, height: 600 },
+    { width: 844, height: 390 },
+  ]) {
+    test(`keeps long printer setup usable at ${viewport.width}x${viewport.height}`, async ({
+      page,
+    }) => {
+      await page.setViewportSize(viewport);
+      await page.goto("/printers");
+      const opener = page.getByRole("button", { name: "Add printer", exact: true });
+      await opener.click();
+      const dialog = page.getByRole("dialog", { name: "Add printer" });
+      await dialog.getByLabel("Integration", { exact: true }).selectOption("prusalink");
+      const bounds = await dialog.boundingBox();
+      expect(bounds).not.toBeNull();
+      expect(bounds!.y).toBeGreaterThanOrEqual(0);
+      expect(bounds!.y + bounds!.height).toBeLessThanOrEqual(viewport.height);
+
+      const heading = dialog.getByRole("heading", { name: "Add printer" });
+      await heading.scrollIntoViewIfNeeded();
+      await expect(heading).toBeInViewport();
+      const name = `cancelled-printer-${Date.now()}`;
+      await dialog.getByLabel("Name", { exact: true }).fill(name);
+      await dialog.getByLabel("PrusaLink URL", { exact: true }).fill("http://127.0.0.1:7125");
+      await dialog.getByLabel("Password", { exact: true }).fill("unused-test-password");
+
+      const submit = dialog.getByRole("button", { name: "Add printer", exact: true });
+      await submit.scrollIntoViewIfNeeded();
+      await expect(submit).toBeInViewport();
+      await expect(submit).toBeEnabled();
+      await expect(
+        submit.evaluate((element) => {
+          const rect = element.getBoundingClientRect();
+          const hit = document.elementFromPoint(rect.x + rect.width / 2, rect.y + rect.height / 2);
+          return hit !== null && element.contains(hit);
+        }),
+      ).resolves.toBe(true);
+      await dialog.getByRole("button", { name: "Cancel", exact: true }).click();
+      await expect(dialog).toHaveCount(0);
+      await expect(opener).toBeFocused();
+      await page.reload();
+      await expect(page.getByRole("link", { name: new RegExp(name) })).toHaveCount(0);
+    });
+  }
+
+  test("restores keyboard focus after dismissing short-screen setup", async ({ page }) => {
+    await page.setViewportSize({ width: 390, height: 600 });
+    await page.goto("/printers");
+    const opener = page.getByRole("button", { name: "Add printer", exact: true });
+    await opener.focus();
+    await page.keyboard.press("Enter");
+    const dialog = page.getByRole("dialog", { name: "Add printer" });
+    await dialog.getByLabel("Integration", { exact: true }).selectOption("prusalink");
+    await dialog.getByLabel("Password", { exact: true }).fill("discarded-test-password");
+    await page.keyboard.press("Escape");
+    await expect(dialog).toHaveCount(0);
+    await expect(opener).toBeFocused();
+    await page.keyboard.press("Enter");
+    await expect(page.getByLabel("Integration", { exact: true })).toHaveValue("moonraker");
+    await page.keyboard.press("Escape");
+  });
+});

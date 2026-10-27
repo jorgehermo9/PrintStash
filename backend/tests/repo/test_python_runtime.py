@@ -104,23 +104,23 @@ class TestPythonRuntime:
             CURRENT_PYTHON
         ]
         assert f"uv venv --python {CURRENT_PYTHON}" in normal_source
-        compatibility_steps = deep["jobs"]["backend-python314"]["steps"]
+        backend_steps = deep["jobs"]["backend"]["steps"]
         suites = [
             (index, step)
-            for index, step in enumerate(compatibility_steps)
-            if step.get("name") == "Run backend compatibility suite"
+            for index, step in enumerate(backend_steps)
+            if step.get("name") == "Test backend"
         ]
         cleanups = [
             (index, step)
-            for index, step in enumerate(compatibility_steps)
+            for index, step in enumerate(backend_steps)
             if step.get("name") == "Remove PID namespace qualification"
         ]
         assert len(suites) == len(cleanups) == 1
         suite_index, suite = suites[0]
         cleanup_index, cleanup = cleanups[0]
-        assert (
-            suite["run"]
-            == "./scripts/test.sh ${{ matrix.phase }} ${{ matrix.paths }} -q"
+        assert suite["run"] == (
+            "./scripts/test.sh ${{ matrix.lane }} ${{ matrix.paths }} -q "
+            "--cov --cov-report="
         )
         assert cleanup_index > suite_index
         assert cleanup["if"] == "always()"
@@ -133,14 +133,16 @@ class TestPythonRuntime:
             "backend",
             "printer-core",
             "frontend",
+            "frontend-tests",
             "browser-smoke",
             "browser-extension",
             "gate",
         }
-        assert len(jobs["backend"]["strategy"]["matrix"]["include"]) == 12
-        assert (
-            len(jobs) - 1 + len(jobs["backend"]["strategy"]["matrix"]["include"]) == 17
-        )
+        backend_partitions = jobs["backend"]["strategy"]["matrix"]["include"]
+        frontend_shards = jobs["frontend-tests"]["strategy"]["matrix"]["shard"]
+        assert len(backend_partitions) == 15
+        assert frontend_shards == [1, 2]
+        assert len(jobs) - 2 + len(backend_partitions) + len(frontend_shards) == 22
 
     @pytest.mark.parametrize(
         "dockerfile",

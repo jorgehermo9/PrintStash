@@ -726,35 +726,32 @@ test.describe("settings", () => {
       timeout: 45_000,
     });
     await expect(page.getByRole("link", { name: "Compare" })).toBeVisible({ timeout: 45_000 });
-    for (const width of [1280, 390]) {
-      await page.setViewportSize({ width, height: 900 });
+    for (const width of [1920, 390]) {
+      await page.setViewportSize({ width, height: 1080 });
+      await page.getByRole("tab", { name: "Matches", exact: true }).click();
       await page
         .getByRole("heading", { name: "Similar models", level: 1 })
         .scrollIntoViewIfNeeded();
       await page.screenshot({ path: testInfo.outputPath(`similar-${width}.png`), fullPage: true });
-      await page.getByText("Analysis options", { exact: true }).click();
+      await page.getByRole("tab", { name: "Analysis settings", exact: true }).click();
+      const settings = page.getByRole("form", { name: "Similar models" });
       await expect(
-        page.getByRole("checkbox", { name: "Enable similarity analysis" }),
+        settings.getByRole("checkbox", { name: "Enable similarity analysis" }),
       ).toBeVisible();
-      await page
-        .getByRole("form", { name: "Similar models" })
-        .getByText("Advanced settings")
-        .click();
-      await page.getByText("More filters", { exact: true }).click();
-      await page.getByText("Analysis history", { exact: true }).click();
-      await page
-        .getByRole("heading", { name: "Find matches" })
-        .locator('xpath=ancestor::*[contains(@class,"overflow-hidden")][1]')
-        .screenshot({ path: testInfo.outputPath(`similar-analysis-${width}.png`) });
+      await settings.getByText("Advanced settings", { exact: true }).click();
+      await settings.screenshot({ path: testInfo.outputPath(`similar-settings-${width}.png`) });
+      await settings.getByText("Advanced settings", { exact: true }).click();
+      await page.getByRole("tab", { name: "Analysis history", exact: true }).click();
+      await expect(settings).toBeHidden();
+      await page.screenshot({ path: testInfo.outputPath(`similar-analysis-${width}.png`) });
+      await page.getByRole("tab", { name: "Matches", exact: true }).click();
+      const filters = page.getByRole("button", { name: /^Filters/ });
+      await filters.click();
+      await expect(filters).toHaveAttribute("aria-expanded", "true");
+      await expect(page.getByRole("combobox", { name: "All formats", exact: true })).toBeVisible();
       await page.getByRole("link", { name: "Compare" }).scrollIntoViewIfNeeded();
       await page.screenshot({ path: testInfo.outputPath(`similar-candidate-${width}.png`) });
-      await page.getByText("Analysis history", { exact: true }).click();
-      await page.getByText("More filters", { exact: true }).click();
-      await page
-        .getByRole("form", { name: "Similar models" })
-        .getByText("Advanced settings")
-        .click();
-      await page.getByText("Analysis options", { exact: true }).click();
+      await filters.click();
       expect(
         await page.evaluate(() => document.documentElement.scrollWidth - innerWidth),
       ).toBeLessThanOrEqual(1);

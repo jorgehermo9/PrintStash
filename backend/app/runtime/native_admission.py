@@ -10,6 +10,7 @@ from __future__ import annotations
 import errno
 import json
 import os
+import threading
 import time
 from collections.abc import Callable, Iterator
 from contextlib import ExitStack, contextmanager
@@ -22,6 +23,34 @@ from uuid import uuid4
 from app.core.work_priority import WorkPriority
 
 _POLL_SECONDS = 0.025
+# A claim waiting for capacity is woken at once by a permit this process
+# releases; this bound only covers capacity freed by another process.
+_WAIT_SECONDS = 0.25
+
+
+class _Releases:
+    """Counts permits this process released, so a waiter never misses one."""
+
+    def __init__(self) -> None:
+        self._changed = threading.Condition()
+        self._count = 0
+
+    def seen(self) -> int:
+        with self._changed:
+            return self._count
+
+    def released(self) -> None:
+        with self._changed:
+            self._count += 1
+            self._changed.notify_all()
+
+    def wait(self, seen: int, seconds: float) -> None:
+        with self._changed:
+            if self._count == seen:
+                self._changed.wait(seconds)
+
+
+_releases = _Releases()
 _MAX_RECORD_BYTES = 4096
 _BACKFILL_MAX_WAIT_NS = 30 * 1_000_000_000
 
@@ -338,6 +367,7 @@ class LocalResourcePool:
                 raise
         try:
             while True:
+                seen = _releases.seen()
                 with ExitStack() as recovery:
                     with self._coordinator(checkpoint):
                         live, abandoned = self._live(recovery)
@@ -363,7 +393,7 @@ class LocalResourcePool:
                             ):
                                 raise AdmissionCorrupted("recovery ticket was replaced")
                             path.unlink()
-                time.sleep(_POLL_SECONDS)
+                _releases.wait(seen, _WAIT_SECONDS)
             checkpoint()
             yield NativePermit(
                 handle, request, ticket.name, self.directory / (ticket.name + ".ticket")
@@ -371,3 +401,4 @@ class LocalResourcePool:
         finally:
             # Never unlink here: a child may still hold this exact descriptor.
             handle.close()
+            _releases.released()

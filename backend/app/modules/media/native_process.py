@@ -3,66 +3,21 @@
 This owner imports no mesh loader, renderer or subprocess orchestrator.
 """
 
-from pathlib import Path, PurePosixPath
+import os
+from pathlib import Path
 
 from app.core.native_settings import settings
 from app.runtime.native_admission import Resources
 
+# Only read with /proc, which exists only where sysconf does.
+_PAGE_BYTES = os.sysconf("SC_PAGE_SIZE") if hasattr(os, "sysconf") else 0
+
 
 def memory_limit_bytes() -> int | None:
-    """Best-effort bytes of RAM the process may use before being OOM-killed.
+    """See :func:`app.core.host_memory.memory_limit_bytes`."""
+    from app.core.host_memory import memory_limit_bytes as detected
 
-    Container-aware: a Docker/NAS deployment is usually capped well below host
-    RAM by its cgroup, and that limit — not the host's total — is what the kernel
-    enforces. Takes the smallest of the cgroup limit (v2 then v1) and host
-    ``MemTotal`` so the RAM-aware cap reflects the real ceiling. Returns None when
-    nothing can be read (non-Linux, locked-down /proc), disabling the RAM cap.
-    """
-    limits: list[int] = []
-    try:  # cgroup v2
-        raw = Path("/sys/fs/cgroup/memory.max").read_text().strip()
-        if raw != "max":
-            limits.append(int(raw))
-    except OSError, ValueError:
-        pass
-    # On a host service the cgroup filesystem is mounted above this process's
-    # group. Reading only its root misses MemoryMax on the service or a parent
-    # slice. Containers with a cgroup namespace already expose their group at /.
-    try:
-        root = Path("/sys/fs/cgroup")
-        for line in Path("/proc/self/cgroup").read_text().splitlines():
-            if not line.startswith("0::/"):
-                continue
-            parts = PurePosixPath(line[3:]).parts[1:]
-            if len(parts) > 128 or any(part in (".", "..") for part in parts):
-                continue
-            group = root.joinpath(*parts)
-            while group != root:
-                try:
-                    value = int((group / "memory.max").read_text().strip())
-                    if value > 0:
-                        limits.append(value)
-                except OSError, ValueError:
-                    pass
-                group = group.parent
-    except OSError:
-        pass
-    try:  # cgroup v1
-        v1 = int(
-            Path("/sys/fs/cgroup/memory/memory.limit_in_bytes").read_text().strip()
-        )
-        if 0 < v1 < (1 << 62):  # v1 uses a huge sentinel for "unlimited"
-            limits.append(v1)
-    except OSError, ValueError:
-        pass
-    try:  # host total
-        for line in Path("/proc/meminfo").read_text().splitlines():
-            if line.startswith("MemTotal:"):
-                limits.append(int(line.split()[1]) * 1024)
-                break
-    except OSError, ValueError, IndexError:
-        pass
-    return min(limits) if limits else None
+    return detected()
 
 
 def native_capacity() -> Resources:
@@ -79,13 +34,12 @@ def native_capacity() -> Resources:
 def process_rss_bytes(pid: int) -> int | None:
     """Read one Linux process's resident set; unavailable platforms return None."""
 
+    # statm's second field is the same resident page count status reports as
+    # VmRSS, without formatting the whole status text on every sample.
     try:
-        for line in Path(f"/proc/{pid}/status").read_text().splitlines():
-            if line.startswith("VmRSS:"):
-                return int(line.split()[1]) * 1024
+        return int(Path(f"/proc/{pid}/statm").read_bytes().split()[1]) * _PAGE_BYTES
     except OSError, ValueError, IndexError:
         return None
-    return None
 
 
 def process_tree_rss_bytes(pid: int) -> int | None:

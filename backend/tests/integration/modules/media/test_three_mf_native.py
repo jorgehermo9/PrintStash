@@ -265,6 +265,47 @@ class TestReadScene:
                 max_faces=FACE_BUDGET,
             )
 
+    def test_leaves_a_second_model_element_to_the_xml_reader(self, tmp_path):
+        model = _root(three_mf())
+        payload = opc_package(zip_bytes({"3D/3dmodel.model": model + model}))
+
+        with pytest.raises(NativeUnavailable, match="second model element"):
+            read_scene(_write(tmp_path, payload), max_faces=FACE_BUDGET)
+
+    def test_leaves_a_build_item_before_the_model_to_the_xml_reader(self, tmp_path):
+        payload = opc_package(
+            zip_bytes({"3D/3dmodel.model": b'<item objectid="1"/>' + _root(three_mf())})
+        )
+
+        with pytest.raises(
+            NativeUnavailable, match="structure before the model element"
+        ):
+            read_scene(_write(tmp_path, payload), max_faces=FACE_BUDGET)
+
+    def test_leaves_excess_scene_resources_to_the_xml_reader(self, tmp_path):
+        mesh = tetrahedron()
+        payload = three_mf(
+            meshes={key: mesh for key in range(1, three_mf_native.MAX_RESOURCES + 2)}
+        )
+
+        with pytest.raises(NativeUnavailable, match="scene resource limit"):
+            read_scene(_write(tmp_path, payload), max_faces=FACE_BUDGET)
+
+    def test_leaves_excess_build_items_to_the_xml_reader(self, tmp_path):
+        payload = three_mf(build=((1, None),) * (three_mf_native.MAX_BUILD_ITEMS + 1))
+
+        with pytest.raises(NativeUnavailable, match="scene resource limit"):
+            read_scene(_write(tmp_path, payload), max_faces=FACE_BUDGET)
+
+    def test_leaves_excess_component_references_to_the_xml_reader(self, tmp_path):
+        payload = three_mf(
+            assemblies={2: [(1, None)] * (three_mf_native.MAX_RESOURCES + 1)},
+            build=((2, None),),
+        )
+
+        with pytest.raises(NativeUnavailable, match="scene resource limit"):
+            read_scene(_write(tmp_path, payload), max_faces=FACE_BUDGET)
+
     def test_leaves_every_package_to_the_xml_reader_without_lib3mf(
         self, tmp_path, monkeypatch
     ):

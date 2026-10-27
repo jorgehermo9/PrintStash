@@ -15,10 +15,13 @@
  */
 
 import { act, fireEvent, render, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import { useState } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { DURATION } from "../../lib/overlay";
 import { DropdownMenu } from "../dropdown-menu";
+import { Modal } from "../modal";
 
 const TRIGGER = (
   <button type="button" data-menu-trigger>
@@ -36,6 +39,31 @@ function MenuItems() {
         Duplicate
       </button>
       <button type="button" role="menuitem">
+        Delete
+      </button>
+    </>
+  );
+}
+
+function PermissionLimitedItems() {
+  return (
+    <>
+      <button type="button" role="menuitem" disabled>
+        Rename
+      </button>
+      <button type="button" role="menuitem">
+        Similar models
+      </button>
+      <button type="button" role="menuitem" disabled>
+        New collection
+      </button>
+      <button type="button" role="menuitem" aria-disabled="true">
+        Pending imports
+      </button>
+      <button type="button" role="menuitemcheckbox" aria-checked="false">
+        Select
+      </button>
+      <button type="button" role="menuitem" aria-disabled="true">
         Delete
       </button>
     </>
@@ -93,6 +121,24 @@ describe("DropdownMenu", () => {
 
       expect(screen.getByRole("listbox")).toContainElement(
         screen.getByRole("option", { name: "Only" }),
+      );
+    });
+
+    it("exposes the provided accessible dialog name", () => {
+      openMenu(
+        <DropdownMenu
+          open
+          onOpenChange={vi.fn<(open: boolean) => void>()}
+          trigger={TRIGGER}
+          role="dialog"
+          aria-label="Tags"
+        >
+          <input aria-label="Search tags" />
+        </DropdownMenu>,
+      );
+
+      expect(screen.getByRole("dialog", { name: "Tags" })).toContainElement(
+        screen.getByRole("textbox", { name: "Search tags" }),
       );
     });
 
@@ -252,6 +298,99 @@ describe("DropdownMenu", () => {
       expect(screen.getByRole("menuitem", { name: "Rename" })).toHaveFocus();
     });
 
+    it("focuses the first enabled item when disabled actions precede it", () => {
+      openMenu(
+        <DropdownMenu open={true} onOpenChange={vi.fn<(open: boolean) => void>()} trigger={TRIGGER}>
+          <PermissionLimitedItems />
+        </DropdownMenu>,
+      );
+
+      expect(screen.getByRole("menuitem", { name: "Similar models" })).toHaveFocus();
+    });
+
+    it.each([
+      {
+        label: "ArrowDown",
+        key: "ArrowDown",
+        from: "Similar models",
+        fromRole: "menuitem",
+        to: "Select",
+        toRole: "menuitemcheckbox",
+      },
+      {
+        label: "ArrowUp",
+        key: "ArrowUp",
+        from: "Select",
+        fromRole: "menuitemcheckbox",
+        to: "Similar models",
+        toRole: "menuitem",
+      },
+      {
+        label: "Home",
+        key: "Home",
+        from: "Select",
+        fromRole: "menuitemcheckbox",
+        to: "Similar models",
+        toRole: "menuitem",
+      },
+      {
+        label: "End",
+        key: "End",
+        from: "Similar models",
+        fromRole: "menuitem",
+        to: "Select",
+        toRole: "menuitemcheckbox",
+      },
+      {
+        label: "ArrowDown wrapping",
+        key: "ArrowDown",
+        from: "Select",
+        fromRole: "menuitemcheckbox",
+        to: "Similar models",
+        toRole: "menuitem",
+      },
+      {
+        label: "ArrowUp wrapping",
+        key: "ArrowUp",
+        from: "Similar models",
+        fromRole: "menuitem",
+        to: "Select",
+        toRole: "menuitemcheckbox",
+      },
+    ])("skips disabled actions with $label", ({ key, from, fromRole, to, toRole }) => {
+      openMenu(
+        <DropdownMenu open={true} onOpenChange={vi.fn<(open: boolean) => void>()} trigger={TRIGGER}>
+          <PermissionLimitedItems />
+        </DropdownMenu>,
+      );
+      screen.getByRole(fromRole, { name: from }).focus();
+
+      fireEvent.keyDown(screen.getByRole("menu"), { key });
+
+      expect(screen.getByRole(toRole, { name: to })).toHaveFocus();
+    });
+
+    it("leaves focus on the trigger when every action is disabled", () => {
+      openMenu(
+        <DropdownMenu open={true} onOpenChange={vi.fn<(open: boolean) => void>()} trigger={TRIGGER}>
+          <button type="button" role="menuitem" disabled>
+            Rename
+          </button>
+          <button type="button" role="menuitem" aria-disabled="true">
+            Delete
+          </button>
+        </DropdownMenu>,
+      );
+      screen.getByRole("button", { name: "Actions" }).focus();
+
+      const notCancelled = fireEvent.keyDown(screen.getByRole("button", { name: "Actions" }), {
+        key: "ArrowDown",
+      });
+
+      expect(screen.getByRole("button", { name: "Actions" })).toHaveFocus();
+      expect(notCancelled).toBe(true);
+    });
+
     it("leaves focus alone for a dialog panel", () => {
       openMenu(
         <DropdownMenu
@@ -399,19 +538,19 @@ describe("DropdownMenu", () => {
       expect(onOpenChange).not.toHaveBeenCalled();
     });
   });
-  describe("a checkbox item", () => {
+  describe.each(["menuitemcheckbox", "menuitemradio"] as const)("a %s item", (role) => {
     it("takes focus when the menu opens", () => {
       // A menu whose only items are toggles would otherwise open with focus
       // nowhere, and a keyboard user has nothing to arrow from.
       openMenu(
         <DropdownMenu open={true} onOpenChange={vi.fn<(open: boolean) => void>()} trigger={TRIGGER}>
-          <button type="button" role="menuitemcheckbox" aria-checked="false">
+          <button type="button" role={role} aria-checked="false">
             Favorites
           </button>
         </DropdownMenu>,
       );
 
-      expect(screen.getByRole("menuitemcheckbox", { name: "Favorites" })).toHaveFocus();
+      expect(screen.getByRole(role, { name: "Favorites" })).toHaveFocus();
     });
 
     it("joins the arrow-key rotation", () => {
@@ -420,7 +559,7 @@ describe("DropdownMenu", () => {
           <button type="button" role="menuitem">
             Rename
           </button>
-          <button type="button" role="menuitemcheckbox" aria-checked="false">
+          <button type="button" role={role} aria-checked="false">
             Favorites
           </button>
         </DropdownMenu>,
@@ -428,7 +567,7 @@ describe("DropdownMenu", () => {
 
       fireEvent.keyDown(screen.getByRole("menu"), { key: "ArrowDown" });
 
-      expect(screen.getByRole("menuitemcheckbox", { name: "Favorites" })).toHaveFocus();
+      expect(screen.getByRole(role, { name: "Favorites" })).toHaveFocus();
     });
   });
 
@@ -513,5 +652,212 @@ describe("DropdownMenu", () => {
 
       expect(notCancelled).toBe(true);
     });
+  });
+});
+
+describe("DropdownMenu portals", () => {
+  function Picker() {
+    const [open, setOpen] = useState(true);
+    const [chosen, setChosen] = useState(false);
+    return (
+      <>
+        <DropdownMenu
+          portal
+          open={open}
+          onOpenChange={setOpen}
+          role="dialog"
+          trigger={
+            <button data-menu-trigger aria-expanded={open} onClick={() => setOpen(!open)}>
+              Choose
+            </button>
+          }
+        >
+          <input aria-label="Find choice" />
+          <button onClick={() => setChosen(true)}>
+            {chosen ? "Selected choice" : "Select choice"}
+          </button>
+        </DropdownMenu>
+        <button>Following control</button>
+      </>
+    );
+  }
+
+  it.each([
+    { label: "display none", style: "display: none" },
+    { label: "visibility hidden", style: "visibility: hidden" },
+  ])("dismisses a portaled picker when its ancestor becomes $label on resize", ({ style }) => {
+    const { container } = openMenu(<Picker />);
+    container.setAttribute("style", style);
+
+    fireEvent(window, new Event("resize"));
+    act(() => vi.advanceTimersByTime(DURATION.press));
+
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+  });
+
+  it("keeps a zero-sized visible anchor open on resize", () => {
+    openMenu(<Picker />);
+
+    fireEvent(window, new Event("resize"));
+    act(() => vi.advanceTimersByTime(DURATION.press));
+
+    expect(screen.getByRole("dialog")).toBeVisible();
+    expect(screen.getByRole("button", { name: "Choose" })).toHaveAttribute("aria-expanded", "true");
+  });
+
+  it("keeps a portaled choice open during pointer selection", () => {
+    openMenu(<Picker />);
+    const choice = screen.getByRole("button", { name: "Select choice" });
+    fireEvent.pointerDown(choice);
+    fireEvent.click(choice);
+    expect(screen.getByRole("button", { name: "Selected choice" })).toBeVisible();
+    expect(screen.getByRole("button", { name: "Choose" })).toHaveAttribute("aria-expanded", "true");
+  });
+
+  it("dismisses a portaled picker after an outside pointer", () => {
+    openMenu(<Picker />);
+    fireEvent.pointerDown(screen.getByRole("button", { name: "Following control" }));
+    expect(screen.getByRole("button", { name: "Choose" })).toHaveAttribute(
+      "aria-expanded",
+      "false",
+    );
+  });
+
+  it("restores portaled trigger focus on Escape", () => {
+    openMenu(<Picker />);
+    screen.getByRole("textbox", { name: "Find choice" }).focus();
+    fireEvent.keyDown(screen.getByRole("textbox", { name: "Find choice" }), { key: "Escape" });
+    expect(screen.getByRole("button", { name: "Choose" })).toHaveFocus();
+    expect(screen.getByRole("button", { name: "Choose" })).toHaveAttribute(
+      "aria-expanded",
+      "false",
+    );
+  });
+
+  it("enters portaled fields from the trigger with Tab", async () => {
+    vi.useRealTimers();
+    const user = userEvent.setup();
+    render(<Picker />);
+    screen.getByRole("button", { name: "Choose" }).focus();
+    await user.tab();
+    expect(screen.getByRole("textbox", { name: "Find choice" })).toHaveFocus();
+  });
+
+  it("returns to the trigger with Shift Tab from the first portaled field", async () => {
+    vi.useRealTimers();
+    const user = userEvent.setup();
+    render(<Picker />);
+    screen.getByRole("textbox", { name: "Find choice" }).focus();
+    await user.tab({ shift: true });
+    expect(screen.getByRole("button", { name: "Choose" })).toHaveFocus();
+    expect(screen.getByRole("button", { name: "Choose" })).toHaveAttribute(
+      "aria-expanded",
+      "false",
+    );
+  });
+
+  it("continues to the following control with Tab from the last portaled field", async () => {
+    vi.useRealTimers();
+    const user = userEvent.setup();
+    render(<Picker />);
+    screen.getByRole("button", { name: "Select choice" }).focus();
+    await user.tab();
+    expect(screen.getByRole("button", { name: "Following control" })).toHaveFocus();
+    expect(screen.getByRole("button", { name: "Choose" })).toHaveAttribute(
+      "aria-expanded",
+      "false",
+    );
+  });
+
+  function NestedPickers() {
+    const [open, setOpen] = useState(true);
+    const [child, setChild] = useState(true);
+    return (
+      <DropdownMenu
+        open={open}
+        onOpenChange={setOpen}
+        trigger={
+          <button data-menu-trigger aria-expanded={open}>
+            Parent
+          </button>
+        }
+      >
+        <DropdownMenu
+          portal
+          open={child}
+          onOpenChange={setChild}
+          role="dialog"
+          trigger={
+            <button role="menuitem" data-menu-trigger aria-expanded={child}>
+              Child
+            </button>
+          }
+        >
+          <input aria-label="Nested choice" />
+        </DropdownMenu>
+      </DropdownMenu>
+    );
+  }
+
+  it("keeps the parent open during nested portal interaction", () => {
+    openMenu(<NestedPickers />);
+    fireEvent.pointerDown(screen.getByRole("textbox", { name: "Nested choice" }));
+    expect(screen.getByRole("button", { name: "Parent" })).toHaveAttribute("aria-expanded", "true");
+    expect(screen.getByRole("menuitem", { name: "Child" })).toHaveAttribute(
+      "aria-expanded",
+      "true",
+    );
+  });
+
+  it("dismisses the complete nested menu tree on an outside pointer", () => {
+    openMenu(<NestedPickers />);
+    fireEvent.pointerDown(document.body);
+    expect(screen.getByRole("button", { name: "Parent" })).toHaveAttribute(
+      "aria-expanded",
+      "false",
+    );
+    expect(screen.getByRole("menuitem", { name: "Child" })).toHaveAttribute(
+      "aria-expanded",
+      "false",
+    );
+  });
+
+  it("leaves the parent open when Escape closes a nested portal", () => {
+    openMenu(<NestedPickers />);
+    fireEvent.keyDown(screen.getByRole("textbox", { name: "Nested choice" }), { key: "Escape" });
+    expect(screen.getByRole("menuitem", { name: "Child" })).toHaveFocus();
+    expect(screen.getByRole("menuitem", { name: "Child" })).toHaveAttribute(
+      "aria-expanded",
+      "false",
+    );
+    expect(screen.getByRole("button", { name: "Parent" })).toHaveAttribute("aria-expanded", "true");
+  });
+
+  it("leaves its enclosing modal open when Escape closes the picker", () => {
+    function Form() {
+      const [open, setOpen] = useState(true);
+      return (
+        <Modal open={open} onClose={() => setOpen(false)} title="Form" closeLabel="Close">
+          <Picker />
+        </Modal>
+      );
+    }
+    openMenu(<Form />);
+    fireEvent.keyDown(screen.getByRole("textbox", { name: "Find choice" }), { key: "Escape" });
+    expect(screen.getByRole("dialog", { name: "Form" })).toBeVisible();
+    expect(screen.getByRole("button", { name: "Choose" })).toHaveFocus();
+  });
+
+  it("continues within the enclosing modal after the last portaled field", async () => {
+    vi.useRealTimers();
+    const user = userEvent.setup();
+    render(
+      <Modal open onClose={() => {}} title="Form" closeLabel="Close">
+        <Picker />
+      </Modal>,
+    );
+    screen.getByRole("button", { name: "Select choice" }).focus();
+    await user.tab();
+    expect(screen.getByRole("button", { name: "Following control" })).toHaveFocus();
   });
 });

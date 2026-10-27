@@ -1,5 +1,7 @@
 "use client";
 
+import { uploadedModelForJobs, type UploadedModelResult } from "@/lib/model-upload-result";
+
 import { getErrorMessage } from "./errors";
 import { getUser, isLoggedIn, onAuthChange } from "./auth-store";
 import { getSessionVersion, requireSessionVersion, withSessionRequest } from "./session-transport";
@@ -71,6 +73,7 @@ export interface TaskItem {
   progress: number;
   createdAt: number;
   updatedAt: number;
+  uploadedModel?: UploadedModelResult;
   jobId?: string;
   jobKind?: JobStatus["kind"];
   jobIds?: string[];
@@ -610,7 +613,12 @@ function applyJob(
     if (isTerminal(job)) publishTerminal(job, scope);
     return;
   }
+  // A late, older snapshot must not undo newer progress. A terminal status
+  // always ends an unfinished task, whatever its stamp: the server's clock may
+  // step back between two writes (an NTP or VM resync) and stamp the end of a
+  // Job before its start.
   if (
+    !isTerminal(job) &&
     existing?.serverUpdatedAt &&
     job.updated_at &&
     Date.parse(job.updated_at) < Date.parse(existing.serverUpdatedAt)
@@ -621,6 +629,7 @@ function applyJob(
       ? "completed"
       : taskStatusOf(job.state);
   const patch = {
+    uploadedModel: uploadedModelForJobs([job]),
     jobId: job.job_id,
     jobKind: job.kind,
     status,
@@ -677,6 +686,7 @@ function applyGroupedJobs(task: TaskItem, jobs: JobStatus[], scope: TaskScope): 
   if (allCompleted) {
     const disabled = jobs.some((job) => job.error === "derivative_group_disabled");
     updateTask(task.id, {
+      uploadedModel: uploadedModelForJobs(jobs),
       jobReason: disabled ? "derivative_group_disabled" : null,
       status: "completed",
       progress: 100,

@@ -1,14 +1,23 @@
 /**
  * Building and dismantling the folder tree the whole library is organised by.
  *
- * A collection is a path, and every model under it carries that path, so deleting one is
+ * A collection has a stable identity and a mutable path; Models belong to that identity. Deleting one is
  * never just deleting a row. The recursive delete is here because it is the one action
  * that can take a shelf of somebody's library with it, and the flow that guards it lives
  * in the UI rather than the API. Keyboard focus keeps each action exposed while
- * deferred tree reads move rows away from the pointer.
+ * deferred tree reads move rows away from the pointer. Heading renames must keep the
+ * selected branch reachable after reload and let keyboard users discard an unsaved name.
  */
+import { readFile } from "node:fs/promises";
 import { test, expect } from "./helpers";
-import { createCollectionViaVault, uploadModel } from "./util";
+import {
+  createCollectionViaVault,
+  gcodeFor,
+  modelCard,
+  libraryTool,
+  openLibraryTools,
+  uploadModel,
+} from "./util";
 
 // Real CRUD against the backend DB.
 
@@ -33,6 +42,192 @@ test.describe("collections", () => {
 
     await page.reload();
     await expect(collection).toHaveCount(0);
+  });
+
+  test("quick-renames a populated nested collection from its heading", async ({ page }) => {
+    await page.setViewportSize({ width: 1920, height: 1080 });
+    const stamp = Date.now();
+    const parent = `e2e-rename-parent-${stamp}`;
+    const name = `e2e-rename-child-${stamp}`;
+    const renamed = `${name}-renamed`;
+    const model = `e2e-rename-model-${stamp}`;
+    await createCollectionViaVault(page, parent);
+    await createCollectionViaVault(page, name, parent);
+    await uploadModel(page, model, { collection: `${parent}/${name}` });
+    const modelHref = await modelCard(page, model).getAttribute("href");
+    expect(modelHref).toMatch(/^\/models\/\d+(?:\?|$)/);
+    const modelPath = new URL(modelHref!, page.url()).pathname;
+    const sameModel = new RegExp(`^${modelPath}(?:\\?|$)`);
+
+    // ── Double-click the heading to rename the selected collection ──
+    const heading = page.getByRole("heading", { name, exact: true });
+    await page.evaluate(() => document.fonts.ready);
+    const headingBox = await heading.boundingBox();
+    await heading.dblclick();
+    const dialog = page.getByRole("dialog", { name: `Rename ${name}`, exact: true });
+    const input = dialog.getByRole("textbox", { name: "Collection name", exact: true });
+    await expect(input).toBeFocused();
+    await expect(input).toHaveValue(name);
+    await expect(dialog).not.toHaveAttribute("aria-modal", "true");
+    await expect(page.locator("aside").getByRole("button", { name, exact: true })).toBeVisible();
+    await expect(modelCard(page, model)).toBeVisible();
+    expect(await heading.boundingBox()).toEqual(headingBox);
+    const editorBox = await dialog.boundingBox();
+    expect(headingBox).not.toBeNull();
+    expect(editorBox).not.toBeNull();
+    expect(editorBox!.y).toBeGreaterThanOrEqual(headingBox!.y + headingBox!.height);
+    expect(editorBox!.y - headingBox!.y - headingBox!.height).toBeLessThanOrEqual(32);
+    expect(Math.abs(editorBox!.x - headingBox!.x)).toBeLessThanOrEqual(1);
+    expect(editorBox!.width).toBeLessThan(480);
+    expect(editorBox!.height).toBeLessThan(200);
+    await input.fill(renamed);
+    await input.press("Enter");
+    await expect(dialog).toHaveCount(0);
+    await expect(page.getByRole("heading", { name: renamed, exact: true })).toBeVisible();
+    await expect(page).toHaveURL((url) => url.searchParams.get("c") === `${parent}/${renamed}`);
+    await expect(modelCard(page, model)).toHaveAttribute("href", sameModel);
+    await page.reload();
+    await expect(page.getByRole("heading", { name: renamed, exact: true })).toBeVisible();
+
+    // ── The same Model and its Artifact survive the collection's new path ──
+    await expect(modelCard(page, model)).toHaveAttribute("href", sameModel);
+    await modelCard(page, model).click();
+    await expect(page).toHaveURL((url) => url.pathname === modelPath);
+    await expect(page.getByRole("heading", { name: model, exact: true })).toBeVisible();
+    await page.getByRole("tab", { name: /^Revisions/ }).click();
+    const [download] = await Promise.all([
+      page.waitForEvent("download"),
+      page.getByTitle("Download").first().click(),
+    ]);
+    expect(download.suggestedFilename()).toBe(`${model}.gcode`);
+    const downloadedPath = await download.path();
+    expect(downloadedPath).not.toBeNull();
+    expect(await readFile(downloadedPath!, "utf8")).toBe(gcodeFor(model));
+    await page.getByRole("link", { name: "Back", exact: true }).click();
+    await expect(page).toHaveURL((url) => url.searchParams.get("c") === `${parent}/${renamed}`);
+    await expect(page.getByRole("heading", { name: renamed, exact: true })).toBeVisible();
+
+    // ── The pen is keyboard-accessible; Escape discards an unsaved rename ──
+    const renameButton = page
+      .getByRole("main")
+      .getByRole("button", { name: `Rename ${renamed}`, exact: true });
+    await renameButton.focus();
+    await renameButton.press("Enter");
+    const cancelledDialog = page.getByRole("dialog", {
+      name: `Rename ${renamed}`,
+      exact: true,
+    });
+    const cancelledInput = cancelledDialog.getByRole("textbox", {
+      name: "Collection name",
+      exact: true,
+    });
+    await expect(cancelledInput).toBeFocused();
+    await cancelledInput.fill(`${renamed}-discarded`);
+    await cancelledInput.press("Escape");
+    await expect(cancelledDialog).toHaveCount(0);
+    await expect(renameButton).toBeFocused();
+    await page.reload();
+    await expect(page.getByRole("heading", { name: renamed, exact: true })).toBeVisible();
+
+    // ── Remove this flow's collection branch ──
+    const sidebar = page.locator("aside");
+    const parentRow = sidebar.getByRole("button", { name: parent, exact: true });
+    await parentRow.focus();
+    await parentRow
+      .locator("..")
+      .getByRole("button", { name: "Delete collection", exact: true })
+      .click();
+    await sidebar.getByRole("button", { name: "Delete", exact: true }).click();
+    await expect(parentRow).toHaveCount(0);
+    await page.goto("/settings?section=trash");
+    await page
+      .getByRole("checkbox", { name: `Select deleted model ${model}`, exact: true })
+      .locator("..")
+      .getByRole("button", { name: "Delete", exact: true })
+      .click();
+    await page.getByRole("button", { name: "Delete forever", exact: true }).click();
+    await expect(page.getByText(model, { exact: true })).toHaveCount(0);
+  });
+
+  test("keeps populated descendants reachable through ancestor renames", async ({ page }) => {
+    const stamp = Date.now();
+    const parent = `e2e-history-${stamp}`;
+    const child = `child-${stamp}`;
+    const model = `e2e-history-model-${stamp}`;
+    const headingName = `${parent}-heading`;
+    const bulkName = `${parent}-bulk`;
+    await createCollectionViaVault(page, parent);
+    await createCollectionViaVault(page, child, parent);
+    await uploadModel(page, model, { collection: `${parent}/${child}` });
+    await expect(page).toHaveURL((url) => url.searchParams.has("cid"));
+    const childId = new URL(page.url()).searchParams.get("cid");
+    const modelHref = await modelCard(page, model).getAttribute("href");
+    const modelPath = new URL(modelHref!, page.url()).pathname;
+
+    // ── History retains the descendant identity across a parent heading rename ──
+    await page
+      .getByRole("main")
+      .getByRole("navigation")
+      .getByRole("button", { name: parent, exact: true })
+      .click();
+    await page.getByRole("button", { name: `Rename ${parent}`, exact: true }).click();
+    await page.getByRole("textbox", { name: "Collection name", exact: true }).fill(headingName);
+    await page.getByRole("textbox", { name: "Collection name", exact: true }).press("Enter");
+    await expect(page.getByRole("heading", { name: headingName, exact: true })).toBeVisible();
+    await page.goBack();
+    await expect(page).toHaveURL((url) => url.searchParams.get("c") === `${headingName}/${child}`);
+    await expect(page).toHaveURL((url) => url.searchParams.get("cid") === childId);
+    await expect(modelCard(page, model)).toHaveAttribute(
+      "href",
+      new RegExp(`^${modelPath}(?:\\?|$)`),
+    );
+    await page.reload();
+    await expect(modelCard(page, model)).toBeVisible();
+
+    // ── Bulk rename resolves persisted Recent entries through the same identity ──
+    await page.goto("/");
+    await openLibraryTools(page);
+    await libraryTool(page, "Select").click();
+    await page.getByRole("checkbox", { name: `Select folder ${headingName}`, exact: true }).check();
+    await page.getByRole("button", { name: "Rename", exact: true }).click();
+    const rename = page.getByRole("dialog");
+    await rename.getByRole("textbox").fill(bulkName);
+    await rename.getByRole("button", { name: "Rename", exact: true }).click();
+    await expect(rename).toHaveCount(0);
+    await page.reload();
+    await page.getByRole("button", { name: "Recent", exact: true }).click();
+    await page.getByRole("menuitem", { name: `${bulkName}/${child}`, exact: true }).click();
+    await expect(page).toHaveURL((url) => url.searchParams.get("cid") === childId);
+    await expect(modelCard(page, model)).toHaveAttribute(
+      "href",
+      new RegExp(`^${modelPath}(?:\\?|$)`),
+    );
+    await modelCard(page, model).click();
+    await page.getByRole("tab", { name: /^Revisions/ }).click();
+    const [download] = await Promise.all([
+      page.waitForEvent("download"),
+      page.getByTitle("Download").first().click(),
+    ]);
+    expect(await readFile((await download.path())!, "utf8")).toBe(gcodeFor(model));
+
+    // ── Clean only this flow's Models and collection branch ──
+    await page.goto("/");
+    const parentRow = page.locator("aside").getByRole("button", { name: bulkName, exact: true });
+    await parentRow.focus();
+    await parentRow
+      .locator("..")
+      .getByRole("button", { name: "Delete collection", exact: true })
+      .click();
+    await page.locator("aside").getByRole("button", { name: "Delete", exact: true }).click();
+    await expect(parentRow).toHaveCount(0);
+    await page.goto("/settings?section=trash");
+    await page
+      .getByRole("checkbox", { name: `Select deleted model ${model}`, exact: true })
+      .locator("..")
+      .getByRole("button", { name: "Delete", exact: true })
+      .click();
+    await page.getByRole("button", { name: "Delete forever", exact: true }).click();
+    await expect(page.getByText(model, { exact: true })).toHaveCount(0);
   });
 
   test("deletes an emptied parent collection after its child", async ({ page }) => {

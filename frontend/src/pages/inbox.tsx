@@ -307,7 +307,20 @@ export default function InboxPage({ deps = inboxPageDeps }: { deps?: InboxPageDe
 
   return (
     <PageContainer>
-      <PageHeader title={t("inbox.title")} description={t("inbox.description")} />
+      <PageHeader
+        title={t("inbox.title")}
+        description={
+          <>
+            {t("inbox.description")}
+            <span className="block">{t("inbox.startHelp")}</span>
+          </>
+        }
+        actions={
+          <Button asChild>
+            <Link href="/?upload=1">{t("inbox.openImport")}</Link>
+          </Button>
+        }
+      />
       <Card className="overflow-hidden">
         <div className="flex flex-col gap-3 border-b bg-muted/30 p-3 sm:flex-row sm:items-center sm:justify-between">
           <TabBar

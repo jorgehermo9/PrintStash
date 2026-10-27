@@ -1,6 +1,6 @@
 [project]
 name = "printstash"
-version = "0.14.0"
+version = "0.15.0"
 description = "PrintStash — self-hosted 3D printing asset manager"
 requires-python = ">=3.14"
 dependencies = [
@@ -201,6 +201,8 @@ DEP002 = [
 # ---------------------------------------------------------------------------
 [tool.coverage.run]
 branch = true
+# Shards can be collected in different checkout directories before combining.
+relative_files = true
 source = ["app"]
 # The suite runs under xdist and the app uses worker threads. Without these,
 # coverage loses the lines executed off the main thread — which reads as a gap in

@@ -6,7 +6,7 @@ import { uiMessage } from "@/lib/locale";
 import { uiText } from "@/lib/locale";
 import { useI18n, useUiLocale } from "@/lib/i18n";
 
-import { useMemo, useRef, useState } from "react";
+import { useId, useMemo, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { vaultConfigOptions } from "@/lib/queries/settings-config";
 import { librarySourcesOptions } from "@/lib/queries/settings-library-sources";
@@ -53,6 +53,7 @@ import {
   runBulkModelUpload,
   type ModelUploadFiles,
 } from "@/lib/model-upload-workflow";
+import type { UploadedModelResult } from "@/lib/model-upload-result";
 import { startArchiveTransfer } from "@/lib/archive-upload";
 
 // `webkitdirectory` enables folder selection on a file input but isn't in the
@@ -115,7 +116,7 @@ export function UploadModal({
 }: {
   open: boolean;
   onClose: () => void;
-  onUploaded: () => Promise<void>;
+  onUploaded: (result?: UploadedModelResult) => Promise<void>;
   defaultCollection?: string | null;
   preloadFiles?: File[] | null;
   preloadItems?: BulkItem[] | null;
@@ -123,6 +124,7 @@ export function UploadModal({
   onboarding?: boolean;
   onTaskStarted?: (taskId: string) => void;
 }) {
+  const sourceUrlId = useId();
   useUiLocale();
   const { t } = useI18n();
   const { createTag } = useTaxonomyCommands();
@@ -632,10 +634,16 @@ export function UploadModal({
             />
           ) : mode === "url" ? (
             <div>
-              <label className="block font-mono text-xs text-on-surface-variant tracking-wider uppercase mb-2">
+              <label
+                htmlFor={sourceUrlId}
+                className="block font-mono text-xs text-on-surface-variant tracking-wider uppercase mb-2"
+              >
                 {uiText("Source URL")}
               </label>
               <input
+                id={sourceUrlId}
+                type="url"
+                inputMode="url"
                 value={urlValue}
                 onChange={(e) => setUrlValue(e.target.value)}
                 className="w-full h-10 bg-surface-container-lowest text-on-surface font-mono text-sm border border-outline-variant rounded px-3 focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent"

@@ -85,6 +85,77 @@ const populatedMobileDetail: MultipartModelRead = {
 };
 
 test.describe("multipart models", () => {
+  for (const width of [320, 390]) {
+    test(`keeps the complete multipart heading above actions at ${width}px`, async ({ page }) => {
+      await page.setViewportSize({ width, height: 844 });
+      await page.route("**/api/v1/multipart-models/90", (route) =>
+        route.fulfill({ json: populatedMobileDetail }),
+      );
+      await page.goto("/multipart-models/90");
+      const heading = page.getByRole("heading", {
+        name: populatedMobileDetail.name,
+        level: 1,
+        exact: true,
+      });
+      await expect(heading).toBeVisible();
+      expect(await heading.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(
+        true,
+      );
+      const title = await heading.boundingBox();
+      const edit = await page.getByRole("button", { name: "Edit multipart set" }).boundingBox();
+      const create = await page.getByRole("link", { name: "Create build" }).boundingBox();
+      expect(edit!.y).toBeGreaterThan(title!.y + title!.height);
+      expect(create!.y).toBeGreaterThan(title!.y + title!.height);
+      expect(edit!.x + edit!.width).toBeLessThanOrEqual(width);
+    });
+  }
+
+  for (const width of [1280, 1440]) {
+    for (const { label, name, lines } of [
+      { label: "short", name: "Audit Benchy", lines: 1 },
+      {
+        label: "two-line",
+        name: "An unusually long accessory bracket for the workshop",
+        lines: 2,
+      },
+    ]) {
+      test(`keeps a ${label} member title readable beside wrapped badges at ${width}px`, async ({
+        page,
+      }) => {
+        await page.setViewportSize({ width, height: 1000 });
+        await page.route("**/api/v1/multipart-models/90", (route) =>
+          route.fulfill({
+            json: {
+              ...populatedMobileDetail,
+              part_count: 1,
+              model_count: 1,
+              parts: [
+                {
+                  ...populatedMobileDetail.parts[0],
+                  models: [{ ...candidates[0], name, choice_id: 1 }],
+                },
+              ],
+            },
+          }),
+        );
+        await page.goto("/multipart-models/90");
+        const title = page.getByRole("heading", { name, level: 3, exact: true });
+        await expect(title).toBeVisible();
+        const dimensions = await title.evaluate((element) => ({
+          height: element.clientHeight,
+          lineHeight: Number.parseFloat(getComputedStyle(element).lineHeight),
+        }));
+
+        expect(dimensions.height).toBeGreaterThanOrEqual(dimensions.lineHeight * lines);
+        const card = title.locator("xpath=ancestor::article");
+        const box = await card.boundingBox();
+        const metadata = await card.getByText("1 G-code revision", { exact: true }).boundingBox();
+        expect(metadata!.y + metadata!.height).toBeLessThanOrEqual(box!.y + box!.height);
+        expect(Math.abs(box!.width - box!.height)).toBeLessThanOrEqual(1);
+      });
+    }
+  }
+
   test("reviews a conflicting composition before saving the preserved draft", async ({ page }) => {
     let detail = { ...populatedMobileDetail };
     const versions: (string | undefined)[] = [];

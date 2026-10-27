@@ -11,7 +11,7 @@ from pathlib import Path
 
 
 def main() -> int:
-    mode, frames, pid_path = sys.argv[1:]
+    mode, frames, pid_path, budget = sys.argv[1:]
     descendant = subprocess.Popen(
         [sys.executable, "-c", "import time; time.sleep(60)"],
         stdin=subprocess.DEVNULL,
@@ -33,7 +33,7 @@ def main() -> int:
         sys.stdout.close()
     if mode == "grow":
         time.sleep(0.2)
-        resident = bytearray(96 * 1024 * 1024)
+        resident = bytearray(int(budget))
         resident[0] = 1
     time.sleep(60)
     return 0

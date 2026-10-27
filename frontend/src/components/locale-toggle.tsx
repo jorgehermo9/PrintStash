@@ -1,21 +1,26 @@
-import { Languages } from "lucide-react";
-import { useState } from "react";
+import { Check, Languages } from "lucide-react";
+import { useRef, useState } from "react";
 
 import { Button } from "@/components/ui/button";
 import { useI18n } from "@/lib/i18n";
 import { localeDefinitions, SUPPORTED_LOCALES } from "@/lib/locale";
 import { DropdownMenu } from "@/components/ui/dropdown-menu";
+import { cn } from "@/lib/utils";
 
 export function LocaleToggle() {
   const { locale, setLocale, t } = useI18n();
   const [open, setOpen] = useState(false);
+  const triggerRef = useRef<HTMLButtonElement>(null);
 
   return (
     <DropdownMenu
       open={open}
       onOpenChange={setOpen}
+      aria-label={t("locale.label")}
+      contentClassName="min-w-40 rounded-md border border-border bg-popover p-1 text-popover-foreground shadow-lg"
       trigger={
         <Button
+          ref={triggerRef}
           type="button"
           variant="ghost"
           size="icon"
@@ -38,13 +43,18 @@ export function LocaleToggle() {
           aria-checked={option === locale}
           lang={option}
           dir={localeDefinitions[option].direction}
-          className="block w-full rounded-sm px-3 py-2 text-start text-sm hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          className={cn(
+            "flex w-full items-center justify-between gap-3 rounded-sm px-3 py-2 text-start text-sm transition-[color,background-color,transform] duration-press active:scale-[0.98] hover:bg-popover-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring",
+            option === locale && "bg-accent text-accent-foreground",
+          )}
           onClick={() => {
             setLocale(option);
             setOpen(false);
+            triggerRef.current?.focus();
           }}
         >
-          {localeDefinitions[option].name}
+          <span>{localeDefinitions[option].name}</span>
+          {option === locale && <Check className="h-4 w-4 shrink-0" aria-hidden />}
         </button>
       ))}
     </DropdownMenu>

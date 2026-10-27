@@ -31,6 +31,43 @@ class WorkerLifecycle(Enum):
     GUARDED = "guarded"
 
 
+_pidfd: bool | None = None
+
+
+def pidfd_supported() -> bool:
+    """Whether a guardian can watch processes by pidfd here (Linux 5.3+).
+
+    Older kernels, and container seccomp profiles that predate pidfd, refuse
+    it. Native work then runs without a guardian and its supervisor kills the
+    process group the worker leads, as before guardians existed.
+    """
+    global _pidfd
+    if sys.platform != "linux":
+        return False
+    if _pidfd is None:
+        _pidfd = _probe_pidfd()
+    return _pidfd
+
+
+def _probe_pidfd() -> bool:
+    try:
+        descriptor = os.pidfd_open(os.getpid())
+    except OSError:
+        return False
+    try:
+        signal.pidfd_send_signal(descriptor, 0)
+    except OSError:
+        return False
+    finally:
+        os.close(descriptor)
+    return True
+
+
+def guarded(lifecycle: WorkerLifecycle) -> bool:
+    """Whether a worker launched for ``lifecycle`` has a guardian to drain it."""
+    return lifecycle is WorkerLifecycle.GUARDED and pidfd_supported()
+
+
 @dataclass(frozen=True)
 class LaunchResources:
     descriptors: tuple[int, ...]
@@ -73,7 +110,7 @@ def terminate_worker(
     killed before that point has no native descendants; any forked sentinel
     observes the missing parent before announcing readiness.
     """
-    if lifecycle is WorkerLifecycle.GUARDED and sys.platform == "linux":
+    if guarded(lifecycle):
         process.kill()
     elif lifecycle in (WorkerLifecycle.PROCESS_GROUP, WorkerLifecycle.GUARDED):
         try:
@@ -93,6 +130,8 @@ def command(module: str, arguments: list[str], budget: int) -> list[str]:
         libc = ctypes.CDLL(None, use_errno=True)
         if libc.prctl(36, 1, 0, 0, 0) != 0:  # PR_SET_CHILD_SUBREAPER
             raise OSError(ctypes.get_errno(), "PR_SET_CHILD_SUBREAPER")
+        if not pidfd_supported():
+            _warn_unguarded()
     return [
         sys.executable,
         "-m",
@@ -102,6 +141,21 @@ def command(module: str, arguments: list[str], budget: int) -> list[str]:
         module,
         *arguments,
     ]
+
+
+_warned = False
+
+
+def _warn_unguarded() -> None:
+    global _warned
+    if not _warned:
+        _warned = True
+        import logging
+
+        logging.getLogger(__name__).warning(
+            "native workers run without a guardian: this kernel or container "
+            "refuses pidfd (Linux 5.3+), so they are stopped by process group"
+        )
 
 
 def reap_descendants(group: int) -> None:
@@ -317,7 +371,8 @@ def _run(argv: list[str]) -> int:
             raise OSError(ctypes.get_errno(), "PR_SET_PDEATHSIG")
         if os.getppid() != int(parent):
             return RESOURCE_EXIT
-        guardian = _arm_guardian(libc)
+        if pidfd_supported():
+            guardian = _arm_guardian(libc)
     os.environ[WORKER_MARKER] = str(os.getpid())
     sys.argv = [module, *arguments]
     try:

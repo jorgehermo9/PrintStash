@@ -4,6 +4,9 @@ PrintStash is an early self-hosted release for local 3D printing asset
 management. It is useful today, but it is deliberately not trying to be a full
 manufacturing platform.
 
+This page describes version 0.15.0, the latest published release (22 October
+2026). Anything marked beta here is beta in that release, not future work.
+
 ## Printer Providers
 
 - Moonraker/Klipper is the primary supported provider.
@@ -14,8 +17,8 @@ manufacturing platform.
 - Bambu LAN remote-file inventory, deletion, raw G-code controls, and measured
   filament consumption are not implemented.
 - Multipart Models reference existing Models as named pieces and alternatives.
-  `Unreleased` adds quantities and [manufacturing builds](multipart-builds.md)
-  with selected Revisions and confirmed physical output. Compatibility rules
+  Quantities and [manufacturing builds](multipart-builds.md) track selected
+  Revisions and confirmed physical output. Compatibility rules
   between pieces, mixed-piece plates and automatic physical reprints remain
   outside this workflow. Models and their files remain in the main Models view;
   deleting a Multipart Model removes only the grouping.
@@ -46,6 +49,12 @@ manufacturing platform.
   is unconfirmed entirely.
 
 ## Deployment
+
+- Connection-pool exhaustion reported in [#495](https://github.com/xiao-villamor/PrintStash/issues/495)
+  has not been reproduced. The 0.15.0 import scheduling and SQLite pool changes
+  mitigate likely contention, but do not establish a confirmed fix. Confirmation
+  requires the affected user's workload after upgrading; PostgreSQL keeps its
+  separate pool defaults.
 
 - Docker Compose is the recommended install path.
 - SQLite and local disk are the default path and the best-tested path for home
@@ -141,7 +150,8 @@ manufacturing platform.
 - STEP tessellation runs in a disposable child process. Its resident-memory
   ceiling uses the existing cgroup-aware mesh memory budget and it has a 90 s
   timeout; an over-budget or overly complex file is stored without geometry or
-  a generated preview instead of risking the API process. The generic 200 MiB
+  a generated preview, reported as a resource limit, instead of risking the
+  API process. The generic 200 MiB
   mesh input cap still applies first and is format-blind. Operators can adjust
   the deadline with `VAULT_MESH_STEP_TIMEOUT_SECONDS`; memory continues to use
   `VAULT_MESH_MEMORY_BUDGET_FRACTION` rather than a STEP-only byte guess.
@@ -349,7 +359,7 @@ read-only Library sources and backup replicas; managed Vault use is unavailable.
 Signed browser downloads depend on endpoint and CORS proof independently of the
 active deletion safety tier.
 
-## Similar Models (Unreleased)
+## Similar Models
 
 - Analysis defaults off. Similarity is review evidence, not byte deduplication,
   printable compatibility or automatic grouping. Multipart composition is

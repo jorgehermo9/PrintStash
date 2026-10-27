@@ -61,30 +61,38 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     const titleKey: MessageKey | null =
       pathname === "/"
         ? "nav.vault"
-        : pathname.startsWith("/models/")
-          ? "nav.model"
-          : pathname.startsWith("/library/similar")
-            ? "similarity.title"
-            : pathname.startsWith("/multipart-models/")
-              ? "nav.multipart"
-              : pathname.startsWith("/documents/")
-                ? "nav.document"
-                : pathname.startsWith("/printers/")
-                  ? "nav.printer"
-                  : pathname.startsWith("/printers")
-                    ? "nav.printers"
-                    : pathname.startsWith("/statistics")
-                      ? "nav.statistics"
-                      : pathname.startsWith("/settings")
-                        ? "nav.settings"
-                        : pathname.startsWith("/profiles")
-                          ? "nav.profiles"
-                          : pathname.startsWith("/login")
-                            ? "nav.signIn"
-                            : pathname.startsWith("/setup")
-                              ? "nav.setup"
-                              : null;
-    document.title = `${titleKey ? t(titleKey) : "PrintStash"} · PrintStash`;
+        : pathname.startsWith("/inbox")
+          ? "inbox.title"
+          : pathname.startsWith("/builds")
+            ? "build.title"
+            : pathname.startsWith("/search")
+              ? "Search"
+              : pathname === "/getting-started"
+                ? "nav.gettingStarted"
+                : pathname.startsWith("/models/")
+                  ? "nav.model"
+                  : pathname.startsWith("/library/similar")
+                    ? "similarity.title"
+                    : pathname.startsWith("/multipart-models/")
+                      ? "nav.multipart"
+                      : pathname.startsWith("/documents/")
+                        ? "nav.document"
+                        : pathname.startsWith("/printers/")
+                          ? "nav.printer"
+                          : pathname.startsWith("/printers")
+                            ? "nav.printers"
+                            : pathname.startsWith("/statistics")
+                              ? "nav.statistics"
+                              : pathname.startsWith("/settings")
+                                ? "nav.settings"
+                                : pathname.startsWith("/profiles")
+                                  ? "nav.profiles"
+                                  : pathname.startsWith("/login")
+                                    ? "nav.signIn"
+                                    : pathname.startsWith("/setup")
+                                      ? "nav.setup"
+                                      : null;
+    document.title = titleKey ? `${t(titleKey)} · PrintStash` : "PrintStash";
   }, [pathname, t]);
 
   useEffect(() => {

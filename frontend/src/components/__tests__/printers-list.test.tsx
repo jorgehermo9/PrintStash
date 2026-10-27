@@ -183,6 +183,11 @@ async function openForm() {
 }
 
 describe("PrinterSetupForm", () => {
+  it("names the Add printer dialog", async () => {
+    await openForm();
+    expect(screen.getByRole("dialog", { name: "Add printer" })).toBeVisible();
+  });
+
   it("submits only once when add is triggered twice before request resolves", async () => {
     let resolveCreate!: () => void;
     fetchMock.mockImplementation((input, init) =>

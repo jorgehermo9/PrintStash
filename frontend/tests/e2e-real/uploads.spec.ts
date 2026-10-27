@@ -366,3 +366,70 @@ test.describe("uploads", () => {
     await expect(modelCard(page, name)).toBeVisible();
   });
 });
+
+test.describe("completed upload results", () => {
+  test("reopens the deduplicated Model from a persisted upload result", async ({ page }) => {
+    const name = `e2e-upload-result-${Date.now()}`;
+    const requested = `${name}-different-name`;
+    const file = { name: `${name}.stl`, mimeType: "model/stl", buffer: Buffer.from(stlFor(name)) };
+    await uploadModel(page, name, { mesh: true, gcode: false, meshFile: file });
+    await page.getByRole("button", { name: "Notifications" }).click();
+    const first = page.getByText(`Upload ${name}`, { exact: true }).locator("..").locator("..");
+    await expect(first.getByText("Created a new Model.", { exact: true })).toBeVisible();
+    const href = await first
+      .getByRole("link", { name: "Open Model", exact: true })
+      .getAttribute("href");
+    expect(href).toMatch(/^\/models\/\d+$/);
+    const modelId = Number(href!.split("/").at(-1));
+    await page.getByRole("button", { name: "Notifications" }).click();
+
+    await page.getByRole("button", { name: "Upload", exact: true }).click();
+    const dialog = page.getByRole("dialog", { name: "Upload model" });
+    await dialog.locator('input[accept=".stl,.3mf,.obj,.step,.stp,.dxf"]').setInputFiles(file);
+    await page.getByPlaceholder("e.g. Bracket v2").fill(requested);
+    await page.getByRole("button", { name: /upload to vault/i }).click();
+    await expect(dialog).toHaveCount(0);
+    const completion = page.locator("[data-sonner-toast]").filter({
+      hasText: "Saved to an existing Model. Open it to review files and revisions.",
+    });
+    await expect(completion).toBeVisible({ timeout: 60_000 });
+    await expect(page.getByRole("button", { name: "Notifications" })).toHaveAttribute(
+      "aria-expanded",
+      "false",
+    );
+    await completion.getByRole("button", { name: "Open Model", exact: true }).click();
+    await expect(page).toHaveURL(new RegExp(`/models/${modelId}$`));
+    await expect(page.getByRole("heading", { name, exact: true })).toBeVisible();
+    await page.getByRole("button", { name: "Notifications" }).click();
+    const duplicate = page
+      .getByText(`Upload ${requested}`, { exact: true })
+      .locator("..")
+      .locator("..");
+    await expect(duplicate.getByText("completed", { exact: true })).toBeVisible({
+      timeout: 60_000,
+    });
+    await expect(
+      duplicate.getByText("Saved to an existing Model. Open it to review files and revisions.", {
+        exact: true,
+      }),
+    ).toBeVisible();
+    await expect(duplicate.getByRole("link", { name: "Open Model", exact: true })).toHaveAttribute(
+      "href",
+      href!,
+    );
+    await page.reload();
+    await page.getByRole("button", { name: "Notifications" }).click();
+    await duplicate.getByRole("link", { name: "Open Model", exact: true }).click();
+    await expect(page).toHaveURL(new RegExp(`/models/${modelId}$`));
+    await expect(page.getByRole("heading", { name, exact: true })).toBeVisible();
+    await expect(page.getByText(`Upload ${requested}`, { exact: true })).toHaveCount(0);
+    const detail = await (await page.request.get(`/api/v1/models/${modelId}`)).json();
+    expect(detail.name).toBe(name);
+    for (const artifact of detail.files) {
+      const response = await page.request.get(`/api/v1/files/${artifact.id}/download`);
+      expect(response.ok()).toBe(true);
+      expect(await response.body()).toEqual(file.buffer);
+    }
+    expect((await page.request.delete(`/api/v1/models/${modelId}`)).ok()).toBe(true);
+  });
+});
