@@ -57,18 +57,21 @@ def regenerations(
     session: Session, *, definitions: Sequence[JobKind] = ()
 ) -> dict[DerivativeKind, datetime]:
     # Kind-wide and group requests in one statement: callers ask per claim.
-    requests = select(
+    kind_wide = select(
         col(DerivativeRegeneration.kind), col(DerivativeRegeneration.requested_at)
     )
-    if definitions:
-        requests = requests.union_all(
+    requests = (
+        kind_wide.union_all(
             select(
                 col(DerivativeGroupRegeneration.kind),
                 col(DerivativeGroupRegeneration.requested_at),
             ).where(col(DerivativeGroupRegeneration.definition).in_(definitions))
         )
+        if definitions
+        else kind_wide
+    )
     result: dict[DerivativeKind, datetime] = {}
-    for kind, requested_at in session.exec(requests).all():
+    for kind, requested_at in session.execute(requests).tuples():
         requested = ensure_utc(requested_at)
         if kind not in result or requested > result[kind]:
             result[kind] = requested
