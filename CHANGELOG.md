@@ -4,6 +4,8 @@
 
 ### Fixed
 
+- **Previews, metadata and 3D views work again on hosts whose kernel or container predates pidfd (Linux 5.3+), such as some NAS systems.** Since 0.15.0 every native mesh worker failed there; workers now fall back to process-group supervision and the server logs a warning once.
+- Failed previews, metadata and 3D views explain the cause in plain terms (unreadable file, too large, processing stopped, storage unavailable) instead of a misleading server-connection error, and outputs that failed for the same reason share one explanation.
 - Similar comparisons keep aligned review actions, larger shared-scale previews, measurements and match evidence together without nested information dropdowns. Match rows show their explanation directly beside a clear Compare action, with a side-by-side comparison pictogram in place of the exchange arrows.
 
 - Language choices open in a framed menu with keyboard navigation and return focus to their button. Saved views uses the full quick-access row with a visible open state and compact search focus.

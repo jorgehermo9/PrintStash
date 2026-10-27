@@ -80,34 +80,24 @@ describe("DerivativeStatus", () => {
   it("names why an output failed", async () => {
     renderStatus(stubApi([FAILED]));
 
-    expect(
-      await screen.findByText(/Preview failed: A file needed for the backup is missing/),
-    ).toBeVisible();
-  });
-
-  it("says a model is too large to preview instead of blaming the network", async () => {
-    renderStatus(
-      stubApi([
-        aDerivative({
-          kind: "viewer_stl",
-          state: "failed",
-          failure_reason: "resource_limit",
-          retryable: true,
-        }),
-      ]),
-    );
-
-    expect(await screen.findByText(/too large to preview/)).toBeVisible();
-    expect(screen.queryByText(/reaching the server/)).not.toBeInTheDocument();
+    expect(await screen.findByText("Preview failed")).toBeVisible();
+    expect(screen.getByText(/couldn't read or save this file in storage/)).toBeVisible();
   });
 
   it.each([
-    ["scene_resource_limit", /too large to preview/],
-    ["invalid_3mf", /could not be read as a valid 3D model/],
-    ["tessellation_failed", /could not be converted to a mesh/],
+    ["resource_limit", /too large or complex to process/],
+    ["scene_resource_limit", /too large or complex to process/],
+    ["timeout", /too large or complex to process/],
+    ["invalid_3mf", /couldn't read this file/],
+    ["tessellation_failed", /couldn't read this file/],
+    ["invalid_source", /couldn't read this file/],
+    ["unsupported_capability", /couldn't read this file/],
+    ["no_geometry", /couldn't read this file/],
+    ["worker_failed", /stopped unexpectedly on the server/],
+    ["renderer_no_output", /stopped unexpectedly on the server/],
     ["source_unavailable", /storage is reachable/],
-    ["invalid_source", /may be damaged or incomplete/],
-  ])("explains the %s failure", async (reason, message) => {
+    ["storage", /storage is reachable/],
+  ])("explains the %s failure by its cause", async (reason, message) => {
     renderStatus(
       stubApi([
         aDerivative({
@@ -120,7 +110,44 @@ describe("DerivativeStatus", () => {
     );
 
     expect(await screen.findByText(message)).toBeVisible();
-    expect(screen.queryByText(/reaching the server/)).not.toBeInTheDocument();
+  });
+
+  it("explains an unrecognised failure without blaming the network", async () => {
+    renderStatus(
+      stubApi([
+        aDerivative({
+          kind: "metadata",
+          state: "failed",
+          failure_reason: "a_future_reason",
+          retryable: true,
+        }),
+      ]),
+    );
+
+    expect(await screen.findByText(/This couldn't be produced/)).toBeVisible();
+    expect(screen.queryByText(/reaching the server|request could not be completed/)).toBeNull();
+  });
+
+  it("shares one explanation between outputs that failed for the same cause", async () => {
+    renderStatus(
+      stubApi([
+        aDerivative({
+          kind: "metadata",
+          state: "failed",
+          failure_reason: "worker_failed",
+          retryable: true,
+        }),
+        aDerivative({
+          kind: "viewer_stl",
+          state: "failed",
+          failure_reason: "worker_failed",
+          retryable: true,
+        }),
+      ]),
+    );
+
+    expect(await screen.findByText("Metadata, 3D preview failed")).toBeVisible();
+    expect(screen.getAllByText(/stopped unexpectedly on the server/)).toHaveLength(1);
   });
 
   it("lets an editor retry a failed output", async () => {

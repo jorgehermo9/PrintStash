@@ -3765,7 +3765,6 @@
   "Metadata": "Metadatos",
   "Toolpath": "Trayectoria",
   "Preparing {kinds}…": "Preparando {kinds}…",
-  "{kind} failed: {reason}": "{kind} ha fallado: {reason}",
   "Retry {kind}": "Reintentar {kind}",
   "aiSearch.searchLibrary": "Buscar en la biblioteca",
   "aiSearch.submitAi": "Buscar con IA",
@@ -4538,5 +4537,11 @@
   "similarity.emptyRejected": "No hay coincidencias descartadas",
   "similarity.emptyReviewedHelp": "Las parejas aparecen aquí cuando eliges esta acción al compararlas.",
   "similarity.queueDisabledHelp": "La búsqueda de nuevas coincidencias está en pausa. Un administrador puede activar el análisis en la página Modelos similares.",
-  "Clear filters": "Borrar filtros"
+  "Clear filters": "Borrar filtros",
+  "{kinds} failed": "{kinds} no se pudieron generar",
+  "PrintStash couldn't read this file. It may be damaged, incomplete or use a feature that isn't supported yet. You can still download it.": "PrintStash no ha podido leer este archivo. Puede estar dañado, incompleto o usar una función que aún no es compatible. Aún puedes descargarlo.",
+  "This file is too large or complex to process. You can still download it.": "Este archivo es demasiado grande o complejo para procesarlo. Aún puedes descargarlo.",
+  "Processing stopped unexpectedly on the server. Try again; if it keeps failing, check the PrintStash logs.": "El procesamiento se detuvo de forma inesperada en el servidor. Vuelve a intentarlo; si sigue fallando, revisa los registros de PrintStash.",
+  "PrintStash couldn't read or save this file in storage. Check that the storage is reachable, then try again.": "PrintStash no ha podido leer o guardar este archivo en el almacenamiento. Comprueba que el almacenamiento está accesible y vuelve a intentarlo.",
+  "This couldn't be produced. Try again; if it keeps failing, check the PrintStash logs.": "No se ha podido generar. Vuelve a intentarlo; si sigue fallando, revisa los registros de PrintStash."
 }

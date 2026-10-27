@@ -1,0 +1,61 @@
+/**
+ * Why a preview, metadata or 3D view could not be produced, in the few causes a
+ * reader can act on.
+ *
+ * Producers report precise codes (a worker that died, an unreadable 3MF, a
+ * missing blob). Readers need the cause and the next step, not the code, and an
+ * unrecognised code must never read as a network problem: the page that shows
+ * it was served by the same server that recorded it.
+ */
+import { uiText } from "@/lib/locale";
+
+export type DerivativeFailureCause = "file" | "too_large" | "processing" | "storage" | "unknown";
+
+const CAUSES = {
+  invalid_source: "file",
+  unsupported_format: "file",
+  unsupported_capability: "file",
+  no_geometry: "file",
+  source_changed: "file",
+  invalid_3mf: "file",
+  tessellation_failed: "file",
+  resource_limit: "too_large",
+  scene_resource_limit: "too_large",
+  timeout: "too_large",
+  worker_failed: "processing",
+  renderer_no_output: "processing",
+  storage: "storage",
+  source_unavailable: "storage",
+  backup_blob_missing: "storage",
+} as const satisfies Record<string, DerivativeFailureCause>;
+
+function isKnownReason(reason: string): reason is keyof typeof CAUSES {
+  return Object.hasOwn(CAUSES, reason);
+}
+
+export function derivativeFailureCause(reason: string | null): DerivativeFailureCause {
+  return reason !== null && isKnownReason(reason) ? CAUSES[reason] : "unknown";
+}
+
+export function derivativeFailureMessage(cause: DerivativeFailureCause): string {
+  switch (cause) {
+    case "file":
+      return uiText(
+        "PrintStash couldn't read this file. It may be damaged, incomplete or use a feature that isn't supported yet. You can still download it.",
+      );
+    case "too_large":
+      return uiText("This file is too large or complex to process. You can still download it.");
+    case "processing":
+      return uiText(
+        "Processing stopped unexpectedly on the server. Try again; if it keeps failing, check the PrintStash logs.",
+      );
+    case "storage":
+      return uiText(
+        "PrintStash couldn't read or save this file in storage. Check that the storage is reachable, then try again.",
+      );
+    case "unknown":
+      return uiText(
+        "This couldn't be produced. Try again; if it keeps failing, check the PrintStash logs.",
+      );
+  }
+}

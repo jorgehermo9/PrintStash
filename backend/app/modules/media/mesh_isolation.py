@@ -25,7 +25,6 @@ import shutil
 import signal
 import stat
 import struct
-import sys
 import tempfile
 import time
 from collections.abc import Callable, Iterator
@@ -93,6 +92,7 @@ from app.modules.media.worker_bootstrap import (
     PRIORITY_ENV,
     RESOURCE_EXIT,
     WorkerLifecycle,
+    guarded,
     launch_resources,
     reap_descendants,
     terminate_worker,
@@ -338,10 +338,7 @@ class _CallbackWatchdog:
                 if cause is not None:
                     self.failure = cause
                     try:
-                        if (
-                            self.worker_lifecycle is WorkerLifecycle.GUARDED
-                            and sys.platform == "linux"
-                        ):
+                        if guarded(self.worker_lifecycle):
                             # Leave the sentinel alive to drain escaped descendants.
                             os.kill(self.pid, signal.SIGKILL)
                         else:
